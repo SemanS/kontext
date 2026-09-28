@@ -133,24 +133,33 @@ pub fn connect(app: &App, target: &str, write: bool) -> Result<String> {
             Ok(format!("opencode: {} opencode.json", if changed { "wrote" } else { "already configured in" }))
         }
         "codex" => {
-            let path = util::home_dir().join(".codex").join("config.toml");
+            // Codex (and wrappers that pick an account for it) honour CODEX_HOME
+            let home = std::env::var_os("CODEX_HOME")
+                .filter(|v| !v.is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| util::home_dir().join(".codex"));
+            let path = home.join("config.toml");
+            let shown = path.display().to_string().replace(&util::home_dir().display().to_string(), "~");
             if !write {
-                return Ok(format!(
-                    "Add to ~/.codex/config.toml (user level; run `kontext connect codex --write` to append it):\n{CODEX_SNIPPET}"
-                ));
+                return Ok(format!("Add to {shown} (user level; run `kontext connect codex --write` to append it):\n{CODEX_SNIPPET}"));
             }
             let current = std::fs::read_to_string(&path).unwrap_or_default();
             let Some(next) = codex_config(&current) else {
-                return Ok("codex: ~/.codex/config.toml already has [mcp_servers.kontext]".into());
+                return Ok(format!("codex: {shown} already has [mcp_servers.kontext]"));
             };
-            if path.exists() {
+            let backup = path.exists();
+            if backup {
                 std::fs::copy(&path, path.with_extension(format!("toml.bak-kontext-{}", chrono::Local::now().format("%Y%m%d%H%M%S"))))?;
             }
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
             util::write_atomic(&path, &next)?;
+            let note = if backup { " (backup kept next to it)" } else { "" };
             Ok(if current.contains("[mcp_servers.kontext]") {
-                "codex: added default_tools_approval_mode = \"approve\" to [mcp_servers.kontext] in ~/.codex/config.toml (backup kept next to it)".into()
+                format!("codex: added default_tools_approval_mode = \"approve\" to [mcp_servers.kontext] in {shown}{note}")
             } else {
-                "codex: appended [mcp_servers.kontext] to ~/.codex/config.toml (backup kept next to it)".into()
+                format!("codex: appended [mcp_servers.kontext] to {shown}{note}")
             })
         }
         "agents-md" => {

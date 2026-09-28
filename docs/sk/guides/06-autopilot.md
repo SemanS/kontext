@@ -43,12 +43,16 @@ Každú úlohu tak, ako by ju videl agent, plus **priložené zdroje** (najviac 
 
 Text alebo code fence okolo JSON sa toleruje. Zlyhané úlohy sa nahlásia a zostanú čakať.
 
+Výsledkom je odpoveď: model dostane pokyn nevolať nástroje a presety držia vlastný MCP server kontextu mimo volania (`-c mcp_servers.kontext.enabled=false` pre Codex, `--strict-mcp-config` pre Claude Code) – keď je kontext pripojený k tvojmu klientovi, model by inak úlohu zapísal sám cez `ctx_init_submit` a druhýkrát cez odpoveď. Kým beh trvá, `ctx_init_submit` z akéhokoľvek iného procesu jeho úlohy odmietne a opakovane odovzdaná úloha nahradí vlastné skoršie záznamy namiesto pridávania kópií.
+
 ## Modely
 
 | Preset | Spúšťa | Premenná |
 | --- | --- | --- |
-| `llm-claude` | `claude -p --output-format text --model <model>` | `model` (predvolene `sonnet`; `haiku` je lacnejší a na zhrnutia modulov stačí) |
-| `llm-codex` | `codex exec --sandbox read-only --ephemeral`, poslednú správu číta zo súboru | — |
+| `llm-claude` | `claude -p --strict-mcp-config --output-format text --model <model>` | `model` (predvolene `sonnet`; `haiku` je lacnejší a na zhrnutia modulov stačí) |
+| `llm-codex` | `codex exec --sandbox read-only --ephemeral -c mcp_servers.kontext.enabled=false`, poslednú správu číta zo súboru | — |
+
+Presety sa pri pridaní skopírujú do tvojho configu; po aktualizácii ich obnov cez `kontext adapters add llm-codex --force` (a `llm-claude`).
 | `llm-ollama` | `POST /api/generate` na `$OLLAMA_HOST` | `model` (predvolene `qwen2.5-coder:14b`) |
 
 ```sh

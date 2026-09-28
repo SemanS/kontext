@@ -305,6 +305,11 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
     if id.is_empty() {
         bail!("task_id is required");
     }
+    if let Some(pid) = autopilot_owner(app, &id) {
+        bail!(
+            "`{id}` is being written by `kontext init --deepen` (pid {pid}); give your result as the JSON answer instead of calling ctx_init_submit"
+        );
+    }
     let store = Store::new(&app.repo, app.cfg());
     let (entries, _) = store.load_all();
     let _lock = app.write_lock.lock().unwrap();
@@ -396,8 +401,9 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
                 body,
                 ..Default::default()
             };
-            let rel = store.write_new(&mut e)?;
-            written.push(rel);
+            if let Some(rel) = write_init_entry(app, &store, &entries, &mut e)? {
+                written.push(rel);
+            }
         }
         state.done.insert(id.clone(), util::today());
     } else {
@@ -418,7 +424,9 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
             body: format!("{}\n", clean(&l.body)),
             ..Default::default()
         };
-        written.push(store.write_new(&mut e)?);
+        if let Some(rel) = write_init_entry(app, &store, &entries, &mut e)? {
+            written.push(rel);
+        }
     }
     save_state(app, &state)?;
     let (entries, _) = store.load_all();
@@ -426,6 +434,27 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
     let mut out = format!("Recorded `{id}` → {}.\n", if written.is_empty() { "(no entries)".to_string() } else { written.join(", ") });
     out.push_str(&progress_line(app, &inv, &hist, &state));
     Ok(out)
+}
+
+/// Init records each finding once: a resubmitted task (or the same finding from a neighbouring
+/// module) replaces its own earlier entry instead of adding `…-2`, and an entry people or agents
+/// wrote with that title is left alone (None).
+fn write_init_entry(app: &App, store: &Store, entries: &[Entry], e: &mut Entry) -> Result<Option<String>> {
+    let key = util::slugify(&e.title, 80);
+    let Some(old) = entries.iter().find(|x| x.kind == e.kind && util::slugify(&x.title, 80) == key) else {
+        return store.write_new(e).map(Some);
+    };
+    if old.origin.as_deref() != Some("init") {
+        return Ok(None);
+    }
+    e.id = old.id.clone();
+    e.rel_path = old.rel_path.clone();
+    e.style = old.style;
+    if old.date.is_some() {
+        e.date = old.date.clone();
+    }
+    util::write_atomic(&app.repo.abs(&old.rel_path), &e.markdown())?;
+    Ok(Some(old.rel_path.clone()))
 }
 
 pub fn progress_line(app: &App, inv: &Inventory, hist: &History, state: &InitState) -> String {
@@ -490,7 +519,42 @@ pub fn extract_json_object(text: &str) -> Option<Value> {
 }
 
 const AUTOPILOT_FORMAT: &str = "Answer with ONLY one JSON object (no prose, no code fence) with the fields named in the task: \
-task_id, summary, overview, decisions, learnings — omit the ones that do not apply. Use plain Markdown inside strings.";
+task_id, summary, overview, decisions, learnings — omit the ones that do not apply. Use plain Markdown inside strings. \
+Do not call any tools to record it (no ctx_init_submit, no ctx_capture): kontext records your answer itself.";
+
+/// Tasks an autopilot run is working on, so that an agent handed the same task text (through an
+/// MCP server it can reach) does not record it a second time.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct AutopilotLock {
+    pid: u32,
+    tasks: Vec<String>,
+}
+
+fn lock_path(app: &App) -> std::path::PathBuf {
+    app.repo.state_dir().join("autopilot.json")
+}
+
+struct LockGuard(std::path::PathBuf);
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The pid of another live process running this task through the autopilot.
+fn autopilot_owner(app: &App, task: &str) -> Option<u32> {
+    let lock: AutopilotLock = serde_json::from_str(&std::fs::read_to_string(lock_path(app)).ok()?).ok()?;
+    (lock.pid != std::process::id() && lock.tasks.iter().any(|t| t == task) && pid_alive(lock.pid)).then_some(lock.pid)
+}
 
 /// Run pending tasks through an `llm` adapter, `jobs` at a time. Returns (done, failed).
 pub fn autopilot(app: &App, llm: &str, jobs: usize, max: usize, report: &dyn Fn(&str)) -> Result<(usize, usize)> {
@@ -513,14 +577,18 @@ pub fn autopilot(app: &App, llm: &str, jobs: usize, max: usize, report: &dyn Fn(
     let prompts: Vec<(Task, String)> = tasks
         .into_iter()
         .map(|t| {
+            // the task text is written for connected agents; here the answer is the JSON itself
+            let task = render_task(app, &t, true, budget).replace("Submit with `ctx_init_submit`:", "Your answer has these fields:");
             let prompt = format!(
-                "You are documenting the repository {} for its team. Be concrete and brief.\n\n{}\n\n{AUTOPILOT_FORMAT}",
-                app.repo.id,
-                render_task(app, &t, true, budget)
+                "You are documenting the repository {} for its team. Be concrete and brief.\n\n{task}\n\n{AUTOPILOT_FORMAT}",
+                app.repo.id
             );
             (t, prompt)
         })
         .collect();
+    let lock = AutopilotLock { pid: std::process::id(), tasks: prompts.iter().map(|(t, _)| t.id.clone()).collect() };
+    util::write_atomic(&lock_path(app), &serde_json::to_string(&lock)?)?;
+    let _guard = LockGuard(lock_path(app));
     let total = prompts.len();
     let (mut ok, mut failed) = (0, 0);
     let jobs = jobs.clamp(1, 8);

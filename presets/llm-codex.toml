@@ -1,4 +1,6 @@
 # Codex CLI (codex exec) as the `llm` for `kontext init --deepen --llm llm-codex`.
+# kontext's own MCP server is switched off for these calls: the answer comes back as JSON, and a
+# Codex that could call ctx_init_submit itself would record every task twice.
 [adapters.llm-codex]
 driver = "command"
 description = "Codex (codex exec) for autonomous deepening"
@@ -6,7 +8,7 @@ when = { command = "codex" }
 timeout_ms = 600000
 
 [adapters.llm-codex.ops.llm]
-command = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "--output-last-message", "{{output_file}}", "-"]
+command = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "-c", "mcp_servers.kontext.enabled=false", "--output-last-message", "{{output_file}}", "-"]
 stdin = "{{prompt}}"
 output_file = true
 format = "text"

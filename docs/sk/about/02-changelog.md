@@ -2,6 +2,18 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.1.2 – 2026-09-29
+
+Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.
+
+**Zavádzanie**
+- Volania LLM z autopilota sa už nedostanú k vlastnému MCP serveru kontextu a prompt žiada len JSON odpoveď: keď bol kontext pripojený ku Codexu, model každú úlohu zapísal sám cez `ctx_init_submit` a druhýkrát cez odpoveď, takže poznatky a rozhodnutia vznikali dvakrát (`…-2`). Preset `llm-codex` odovzdáva `-c mcp_servers.kontext.enabled=false`, `llm-claude` `--strict-mcp-config`. Presety žijú v tvojom configu: obnov ich cez `kontext adapters add llm-codex --force` (a `llm-claude`).
+- Kým beží `kontext init --deepen`, `ctx_init_submit` z iného procesu úlohy tohto behu odmietne.
+- Opakovane odovzdaná úloha nahradí vlastné skoršie poznatky a rozhodnutia namiesto pridávania kópií a záznamy, ktoré napísali ľudia, nechá na pokoji.
+
+**Agenti**
+- `kontext connect codex` zapisuje do `$CODEX_HOME/config.toml`, keď je `CODEX_HOME` nastavené (ako to robia obaly prepínajúce účty), v prípade potreby vytvorí adresár a zálohu spomenie, len keď ju naozaj vytvoril.
+
 ## 0.1.1 – 2026-09-28
 
 Opravy z testu v praxi na monorepe s 74 modulmi (moon/Cargo), na ktorom paralelne pracujú agenti Claude Code a Codex.

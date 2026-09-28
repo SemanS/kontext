@@ -2,7 +2,7 @@
 
 ## Connect
 
-Codex reads MCP servers from `~/.codex/config.toml`:
+Codex reads MCP servers from `~/.codex/config.toml` (`$CODEX_HOME/config.toml` when `CODEX_HOME` is set, as account-switching wrappers do):
 
 ```toml
 [mcp_servers.kontext]

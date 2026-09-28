@@ -2,7 +2,7 @@
 
 ## Pripojenie
 
-Codex načítava MCP servery z `~/.codex/config.toml`:
+Codex načítava MCP servery z `~/.codex/config.toml` (z `$CODEX_HOME/config.toml`, keď je `CODEX_HOME` nastavené, ako to robia obaly prepínajúce účty):
 
 ```toml
 [mcp_servers.kontext]

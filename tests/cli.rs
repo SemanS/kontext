@@ -142,6 +142,28 @@ fn end_to_end() {
     let submit = s.kontext(&["call", "ctx_init_submit", r#"{"task_id":"purpose","summary":"A demo shop: storefront + API over one pricing library.","overview":"Two apps share `libs/pricing`."}"#]);
     assert!(submit.contains("Recorded `purpose`"), "{submit}");
 
+    // the same task submitted twice records its learning once
+    let module = r#"{"task_id":"mod:libs-pricing","summary":"Prices in integer cents.","overview":"One place for money math.","learnings":[{"title":"VAT is applied last","body":"Round the net amount first, then add VAT.","paths":["libs/pricing/**"]}]}"#;
+    s.kontext(&["call", "ctx_init_submit", module]);
+    s.kontext(&["call", "ctx_init_submit", module]);
+    let learnings: Vec<_> = std::fs::read_dir(s.repo.join(".ai/learnings")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(learnings.len(), 1, "{learnings:?}");
+
+    // while an autopilot run owns a task, another process cannot record it
+    let mut owner = Command::new("sleep").arg("30").spawn().unwrap();
+    let lock = s.repo.join(".git/kontext/autopilot.json");
+    std::fs::write(&lock, format!(r#"{{"pid":{},"tasks":["mod:apps-api"]}}"#, owner.id())).unwrap();
+    let o = s
+        .cmd(env!("CARGO_BIN_EXE_kontext"))
+        .args(["call", "ctx_init_submit", r#"{"task_id":"mod:apps-api","summary":"The HTTP API."}"#])
+        .output()
+        .unwrap();
+    let refused = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(refused.contains("is being written by `kontext init --deepen`"), "{refused}");
+    owner.kill().unwrap();
+    let _ = owner.wait();
+    std::fs::remove_file(&lock).unwrap();
+
     s.ok_git(&["checkout", "-q", "-b", "kontext/bootstrap"]);
     s.ok_git(&["add", ".ai"]);
     s.ok_git(&["commit", "-q", "-m", "docs: bootstrap team knowledge"]);

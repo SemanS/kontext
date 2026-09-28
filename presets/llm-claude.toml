@@ -1,4 +1,5 @@
 # Claude Code in print mode as the `llm` for `kontext init --deepen --llm llm-claude`.
+# --strict-mcp-config without --mcp-config starts no MCP servers: the answer comes back as JSON.
 [adapters.llm-claude]
 driver = "command"
 description = "Claude Code (claude -p) for autonomous deepening"
@@ -9,6 +10,6 @@ timeout_ms = 300000
 model = "sonnet"
 
 [adapters.llm-claude.ops.llm]
-command = ["claude", "-p", "--output-format", "text", "--model", "{{vars.model}}"]
+command = ["claude", "-p", "--strict-mcp-config", "--output-format", "text", "--model", "{{vars.model}}"]
 stdin = "{{prompt}}"
 format = "text"

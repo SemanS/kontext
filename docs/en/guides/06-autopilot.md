@@ -43,12 +43,16 @@ Each task as an agent would see it, plus **inlined sources** (up to `init.task_i
 
 Prose or code fences around the JSON are tolerated. Failed tasks are reported and stay pending.
 
+The answer is the result: the model is told not to call tools, and the presets keep kontext's own MCP server out of the call (`-c mcp_servers.kontext.enabled=false` for Codex, `--strict-mcp-config` for Claude Code) — with kontext connected to your client, the model could otherwise record the task itself through `ctx_init_submit` and again through its answer. While a run is going, `ctx_init_submit` from any other process refuses the run's tasks, and a resubmitted task replaces its own earlier entries instead of adding copies.
+
 ## Models
 
 | Preset | Runs | Variable |
 | --- | --- | --- |
-| `llm-claude` | `claude -p --output-format text --model <model>` | `model` (default `sonnet`; `haiku` is cheaper and good for module summaries) |
-| `llm-codex` | `codex exec --sandbox read-only --ephemeral`, last message from a file | — |
+| `llm-claude` | `claude -p --strict-mcp-config --output-format text --model <model>` | `model` (default `sonnet`; `haiku` is cheaper and good for module summaries) |
+| `llm-codex` | `codex exec --sandbox read-only --ephemeral -c mcp_servers.kontext.enabled=false`, last message from a file | — |
+
+Presets are copied into your config when added; after an upgrade, refresh them with `kontext adapters add llm-codex --force` (and `llm-claude`).
 | `llm-ollama` | `POST /api/generate` on `$OLLAMA_HOST` | `model` (default `qwen2.5-coder:14b`) |
 
 ```sh

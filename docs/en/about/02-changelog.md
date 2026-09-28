@@ -2,6 +2,18 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.1.2 — 2026-09-29
+
+From deploying kontext into that monorepo with Claude Code and Codex connected.
+
+**Bootstrap**
+- The autopilot's LLM calls no longer reach kontext's own MCP server, and the prompt asks for the JSON answer only: with kontext connected to Codex, a model recorded each task itself through `ctx_init_submit` and again through its answer, so learnings and decisions appeared twice (`…-2`). The `llm-codex` preset passes `-c mcp_servers.kontext.enabled=false`, `llm-claude` passes `--strict-mcp-config`. Presets live in your config: refresh them with `kontext adapters add llm-codex --force` (and `llm-claude`).
+- While `kontext init --deepen` runs, `ctx_init_submit` from another process refuses the run's tasks.
+- A resubmitted task replaces its own earlier learnings and decisions instead of adding copies, and leaves entries people wrote alone.
+
+**Agents**
+- `kontext connect codex` writes to `$CODEX_HOME/config.toml` when `CODEX_HOME` is set (as account-switching wrappers do), creates the directory if needed and mentions a backup only when it made one.
+
 ## 0.1.1 — 2026-09-28
 
 Fixes from a field test on a 74-module moon/Cargo monorepo worked by parallel Claude Code and Codex agents.
