@@ -1094,7 +1094,7 @@ pub fn no_knowledge_hint(app: &App) -> String {
             "Team knowledge exists on `{r}`{} but not on this branch yet — merge or rebase to get it; do not bootstrap it again here.",
             if elsewhere.len() > 1 { format!(" (and {} more branch(es))", elsewhere.len() - 1) } else { String::new() }
         ),
-        None => "No team knowledge yet: run `kontext init` (or the kontext-init prompt) to bootstrap it.".to_string(),
+        None => "kontext is not set up in this repository (no team knowledge yet) — nothing to record here unless the user asks; `kontext init` sets it up.".to_string(),
     }
 }
 

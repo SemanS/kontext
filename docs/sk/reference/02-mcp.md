@@ -84,8 +84,11 @@ Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-re
 | Parameter | Typ | Predvolene | |
 | --- | --- | --- | --- |
 | `count` | integer | 1 | koľko úloh vrátiť (do 5) |
+| `bootstrap` | boolean | false | založí úložisko znalostí, keď ho repozitár nemá – len keď o to požiadal používateľ |
 
-Keď repozitár ešte nemá `.ai/`, `ctx_init` najprv spustí scan, history a render (bez hookov) a potom vráti prvú úlohu.
+Keď repozitár ešte nemá `.ai/` a `bootstrap` je true, `ctx_init` najprv spustí scan, history a render (bez hookov) a potom vráti prvú úlohu; bez neho vysvetlí, ako kontext zaviesť. Vetvu nikdy nezavádza, keď tímové znalosti už má iná vetva.
+
+V repozitári bez úložiska znalostí prijme `ctx_capture` len `visibility: private` a `ctx_inbox` / `ctx_prepare_commit` nepovyšujú.
 
 ### `ctx_init_submit`
 

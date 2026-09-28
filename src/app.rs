@@ -49,6 +49,12 @@ impl App {
         Store::new(&self.repo, &self.loaded.cfg)
     }
 
+    /// Whether the repository has a knowledge store. Without one kontext only reads (docs and
+    /// history); agents do not start a store in a repository nobody set kontext up for.
+    pub fn is_set_up(&self) -> bool {
+        self.repo.abs(self.loaded.cfg.store.dir.trim_end_matches('/')).is_dir()
+    }
+
     pub fn registry(&self) -> &Registry {
         self.registry.get_or_init(|| Registry::build(&self.repo, &self.loaded.cfg))
     }

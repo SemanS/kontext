@@ -118,6 +118,19 @@ fn end_to_end() {
     let s = Sandbox::new("e2e");
     seed(&s);
 
+    // before anyone sets kontext up, agents only read: no team captures, no bootstrap by accident
+    let run = |args: &[&str]| {
+        let o = s.cmd(env!("CARGO_BIN_EXE_kontext")).args(args).output().unwrap();
+        format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))
+    };
+    let refused = run(&["call", "ctx_capture", r#"{"kind":"decision","title":"Use cents","body":"Integer cents everywhere."}"#]);
+    assert!(refused.contains("not set up in this repository"), "{refused}");
+    let asked = run(&["call", "ctx_init", "{}"]);
+    assert!(asked.contains("bootstrap=true") && !s.repo.join(".ai").exists(), "{asked}");
+    let private =
+        run(&["call", "ctx_capture", r#"{"kind":"learning","title":"Note to self","body":"Check VAT rounding.","visibility":"private"}"#]);
+    assert!(private.contains("Saved privately"), "{private}");
+
     let init = s.kontext(&["init"]);
     assert!(init.contains("[1/5] scan"), "{init}");
     assert!(init.contains("[4/5] wire"), "{init}");

@@ -84,8 +84,11 @@ Returns the report described in [Capture and review](../concepts/03-capture-and-
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
 | `count` | integer | 1 | how many tasks to return (up to 5) |
+| `bootstrap` | boolean | false | start the knowledge store when the repository has none — only when the user asked for it |
 
-When the repository has no `.ai/` yet, `ctx_init` first runs scan, history and render (no hooks) and then returns the first task.
+When the repository has no `.ai/` yet and `bootstrap` is true, `ctx_init` first runs scan, history and render (no hooks) and then returns the first task; without it, it explains how to set kontext up. It never bootstraps a branch when another branch already has the team knowledge.
+
+In a repository without a knowledge store `ctx_capture` accepts only `visibility: private`, and `ctx_inbox` / `ctx_prepare_commit` do not promote.
 
 ### `ctx_init_submit`
 

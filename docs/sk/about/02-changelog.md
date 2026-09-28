@@ -14,6 +14,7 @@ Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.
 - Záznamy vyťažené initom nedostanú trailery commitu – pochádzajú zo starších commitov uvedených v ich `commits` a bootstrap commit už nenesie desiatky riadkov `Decision:` / `Learning:`.
 
 **Agenti**
+- Keď je kontext zaregistrovaný pre všetky repozitáre (user scope), tam, kde ho nikto nezaviedol, len číta: v repozitári bez úložiska znalostí to povedia MCP inštrukcie, `ctx_capture` odmietne tímové záznamy (súkromné poznámky fungujú ďalej), povýšenia sa odmietnu a `ctx_init` zavádza len s `bootstrap=true` (odovzdá ho prompt `kontext-init`).
 - `kontext connect codex` zapisuje do `$CODEX_HOME/config.toml`, keď je `CODEX_HOME` nastavené (ako to robia obaly prepínajúce účty), v prípade potreby vytvorí adresár a zálohu spomenie, len keď ju naozaj vytvoril.
 
 ## 0.1.1 – 2026-09-28

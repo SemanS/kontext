@@ -112,7 +112,7 @@ fn handle(st: &State, msg: &Value) -> Option<Value> {
                 "protocolVersion": version,
                 "capabilities": {"tools": {"listChanged": false}, "prompts": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}, "logging": {}},
                 "serverInfo": {"name": "kontext", "title": "kontext — team context bridge", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": tools::INSTRUCTIONS
+                "instructions": if st.app().is_ok_and(|a| a.is_set_up()) { tools::INSTRUCTIONS } else { tools::NOT_SET_UP_INSTRUCTIONS }
             }))
         }
         m if m.starts_with("notifications/") => return None,

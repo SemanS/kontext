@@ -13,6 +13,16 @@ When you and the user settle something durable (a decision, a convention, a non-
 Before committing, run ctx_prepare_commit and promote the candidates that belong to the change so they are reviewed together with it. \
 Shared knowledge changes only through commits and review; supersede a decision instead of rewriting it.";
 
+/// Instructions for a repository without a knowledge store (kontext registered for every
+/// repository of a user, but set up only in some).
+pub const NOT_SET_UP_INSTRUCTIONS: &str = "kontext is not set up in this repository: it has no team knowledge store. \
+ctx_brief, ctx_search, ctx_read and ctx_why still work over its docs and commit history. \
+Do not capture team knowledge or bootstrap it (ctx_capture, ctx_init) unless the user asks for it — that would add files the team has not agreed to. \
+Private notes (ctx_capture with visibility private) stay local and are fine.";
+
+const NOT_SET_UP: &str = "kontext is not set up in this repository (no knowledge store), so nothing is written into it. \
+Ask the user: `kontext init` sets it up (or ctx_init with bootstrap=true when they asked you to). Private notes (visibility: private) still work.";
+
 fn s(desc: &str) -> Value {
     json!({"type": "string", "description": desc})
 }
@@ -139,9 +149,10 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_init",
-            "description": "Step-by-step knowledge bootstrap for this repository. Returns progress and the next task(s): describe the project, summarise a module, or distill decisions from git history. Do the task by reading what it lists, then call ctx_init_submit. Repeat until complete; stopping any time is fine — progress is kept.",
+            "description": "Step-by-step knowledge bootstrap for this repository. Returns progress and the next task(s): describe the project, summarise a module, or distill decisions from git history. Do the task by reading what it lists, then call ctx_init_submit. Repeat until complete; stopping any time is fine — progress is kept. In a repository without a knowledge store it starts one only with bootstrap=true — use that only when the user asked to set kontext up.",
             "inputSchema": {"type": "object", "properties": {
-                "count": {"type": "integer", "description": "How many tasks to return (default 1, max 5)"}
+                "count": {"type": "integer", "description": "How many tasks to return (default 1, max 5)"},
+                "bootstrap": {"type": "boolean", "description": "Start the knowledge store (.ai/) if the repository has none — only when the user asked for it"}
             }}
         }),
         json!({
@@ -211,6 +222,9 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             ops::read(app, &uri, level)
         }
         "ctx_capture" => {
+            if !app.is_set_up() && str_arg(args, "visibility").as_deref() != Some("private") {
+                bail!("{NOT_SET_UP}");
+            }
             let req = CaptureReq {
                 kind: str_arg(args, "kind").ok_or_else(|| anyhow!("kind is required"))?,
                 title: str_arg(args, "title").ok_or_else(|| anyhow!("title is required"))?,
@@ -283,6 +297,9 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                     if ids.is_empty() {
                         bail!("ids is required");
                     }
+                    if !app.is_set_up() {
+                        bail!("{NOT_SET_UP}");
+                    }
                     let done = ops::promote(app, &ids, true)?;
                     Ok(done.iter().map(|(id, rel)| format!("- {id} → {rel} (staged)\n")).collect())
                 }
@@ -296,7 +313,13 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 other => bail!("unknown action '{other}'"),
             }
         }
-        "ctx_prepare_commit" => ops::prepare_commit(app, &PrepareReq { promote: list_arg(args, "promote"), drop: list_arg(args, "drop") }),
+        "ctx_prepare_commit" => {
+            let promote = list_arg(args, "promote");
+            if !promote.is_empty() && !app.is_set_up() {
+                bail!("{NOT_SET_UP}");
+            }
+            ops::prepare_commit(app, &PrepareReq { promote, drop: list_arg(args, "drop") })
+        }
         "ctx_init" => {
             let count = int_arg(args, "count").unwrap_or(1).clamp(1, 5);
             let (inv, hist) = crate::init::load_cached(app)?;
@@ -307,6 +330,10 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 let hint = ops::no_knowledge_hint(app);
                 if hint.starts_with("Team knowledge exists") {
                     return Ok(format!("{hint}\nNothing was bootstrapped."));
+                }
+                // starting a store is the user's call, not a side effect of an agent's task
+                if !app.is_set_up() && !args.get("bootstrap").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    return Ok("kontext is not set up in this repository. Bootstrapping writes `.ai/` into the working tree (uncommitted) for the team to review — do it only when the user asked for it, by calling ctx_init with bootstrap=true.".into());
                 }
                 // deterministic bootstrap first (no hooks, nothing committed), then hand out the first task
                 let log = crate::init::bootstrap(&app.repo.root)?;
@@ -366,7 +393,7 @@ pub fn prompt_text(name: &str, args: &Value) -> Result<(String, String)> {
                 "Bootstrap team knowledge".into(),
                 format!(
                     "Bootstrap this repository's shared knowledge with the kontext tools. Do {n} task(s):\n\
-1. Call ctx_init. It returns progress and the next task (purpose, mod:<module>, dec:<area> or refresh:<module>).\n\
+1. Call ctx_init with bootstrap=true (I am asking you to set it up). It returns progress and the next task (purpose, mod:<module>, dec:<area> or refresh:<module>).\n\
 2. Do exactly what the task asks: read the listed docs and key files (skim — stop when you understand), or inspect the listed commits with `git show`.\n\
 3. Call ctx_init_submit with concise, concrete results: summaries are one line about purpose; overviews 5–15 lines about responsibilities, flows, invariants and pitfalls; decisions only when a commit really encodes a durable choice.\n\
 4. Repeat. Never invent facts — if unsure, say so in the text or skip the task with a reason.\n\
