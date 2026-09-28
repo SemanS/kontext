@@ -46,6 +46,8 @@ git log --grep 'Decision: 0007'
 
 `kontext why` zoradí commity s trailermi kontextu na prvé miesta.
 
+Záznamy vyťažené cez `kontext init` žiadne nedostanú: pochádzajú zo starších commitov uvedených v ich poli `commits`.
+
 Preformulovanie cez `git commit --amend -m …` trailery zachová: hook amend rozpozná (z argumentov alebo z commitujúceho procesu `git`) a to, čo commit pridáva, meria od rodiča `HEAD`. Commit z `git merge --squash` dostane trailery všetkého, čo nesie.
 
 ## Udalosti sync

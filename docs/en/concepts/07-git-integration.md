@@ -46,6 +46,8 @@ git log --grep 'Decision: 0007'
 
 `kontext why` ranks commits with kontext trailers first.
 
+Entries mined by `kontext init` get none: they come from the older commits listed in their `commits` field.
+
 Rewording with `git commit --amend -m …` keeps the trailers: the hook recognizes the amend (from its arguments, or from the committing `git` process) and measures what the commit adds from `HEAD`'s parent. A `git merge --squash` commit gets the trailers of everything it carries.
 
 ## Sync events

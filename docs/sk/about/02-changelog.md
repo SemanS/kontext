@@ -10,6 +10,8 @@ Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.
 - Volania LLM z autopilota sa už nedostanú k vlastnému MCP serveru kontextu a prompt žiada len JSON odpoveď: keď bol kontext pripojený ku Codexu, model každú úlohu zapísal sám cez `ctx_init_submit` a druhýkrát cez odpoveď, takže poznatky a rozhodnutia vznikali dvakrát (`…-2`). Preset `llm-codex` odovzdáva `-c mcp_servers.kontext.enabled=false`, `llm-claude` `--strict-mcp-config`. Presety žijú v tvojom configu: obnov ich cez `kontext adapters add llm-codex --force` (a `llm-claude`).
 - Kým beží `kontext init --deepen`, `ctx_init_submit` z iného procesu úlohy tohto behu odmietne.
 - Opakovane odovzdaná úloha nahradí vlastné skoršie poznatky a rozhodnutia namiesto pridávania kópií a záznamy, ktoré napísali ľudia, nechá na pokoji.
+- Vetva bez tímových znalostí sa dozvie, keď ich má iná vetva (bootstrap čakajúci na review): brief odporučí zlúčenie a `ctx_init` odmietne založiť druhé, konfliktné `.ai/`.
+- Záznamy vyťažené initom nedostanú trailery commitu – pochádzajú zo starších commitov uvedených v ich `commits` a bootstrap commit už nenesie desiatky riadkov `Decision:` / `Learning:`.
 
 **Agenti**
 - `kontext connect codex` zapisuje do `$CODEX_HOME/config.toml`, keď je `CODEX_HOME` nastavené (ako to robia obaly prepínajúce účty), v prípade potreby vytvorí adresár a zálohu spomenie, len keď ju naozaj vytvoril.

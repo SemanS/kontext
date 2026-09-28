@@ -303,6 +303,11 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             let state = crate::init::load_state(app);
             let (entries, _) = app.entries();
             if !entries.iter().any(|e| e.kind == "architecture" && e.id == "overview") {
+                // a bootstrap on another branch (waiting for review) would only conflict with a second one
+                let hint = ops::no_knowledge_hint(app);
+                if hint.starts_with("Team knowledge exists") {
+                    return Ok(format!("{hint}\nNothing was bootstrapped."));
+                }
                 // deterministic bootstrap first (no hooks, nothing committed), then hand out the first task
                 let log = crate::init::bootstrap(&app.repo.root)?;
                 let fresh = App::open(&app.repo.root)?;

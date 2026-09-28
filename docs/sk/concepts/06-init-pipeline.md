@@ -10,7 +10,7 @@
 [5/5] deepen   purpose · mod:<module> · dec:<area> · refresh:<module> tasks
 ```
 
-Opakované spustenie `kontext init` je bezpečné: generované fakty sa obnovia, všetko, čo napísali ľudia alebo agenti, zostane.
+Opakované spustenie `kontext init` je bezpečné: generované fakty sa obnovia, všetko, čo napísali ľudia alebo agenti, zostane. Kým bootstrap čaká na svojej vetve na review, agenti na iných vetvách sa dozvedia, že existuje tam (brief), a `ctx_init` nezaloží druhý.
 
 ## 1 · scan
 

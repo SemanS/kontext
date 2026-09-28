@@ -668,7 +668,7 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     }
     let (done, total) = init_progress(&entries);
     if total == 0 && entries.is_empty() {
-        let _ = writeln!(state, "- No team knowledge yet: run `kontext init` (or the kontext-init prompt) to bootstrap it.");
+        let _ = writeln!(state, "- {}", no_knowledge_hint(app));
     } else if done < total {
         let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
     }
@@ -1084,6 +1084,20 @@ pub struct PrepareReq {
     pub drop: Vec<String>,
 }
 
+/// What to say when this branch has no team knowledge: bootstrap it — unless another branch already
+/// has it (a bootstrap waiting for review), where a second bootstrap would only conflict with it.
+pub fn no_knowledge_hint(app: &App) -> String {
+    let overview = format!("{}/overview.md", app.cfg().kind_path("architecture"));
+    let elsewhere = app.repo.refs_with(&overview);
+    match elsewhere.first() {
+        Some(r) => format!(
+            "Team knowledge exists on `{r}`{} but not on this branch yet — merge or rebase to get it; do not bootstrap it again here.",
+            if elsewhere.len() > 1 { format!(" (and {} more branch(es))", elsewhere.len() - 1) } else { String::new() }
+        ),
+        None => "No team knowledge yet: run `kontext init` (or the kontext-init prompt) to bootstrap it.".to_string(),
+    }
+}
+
 pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     let mut out = String::from("# Prepare commit\n");
     let inbox = Inbox::open(&app.repo);
@@ -1258,6 +1272,10 @@ pub fn staged_trailers_since(app: &App, base: Option<&str>) -> Result<Vec<String
         let Some(bytes) = contents.get(p) else { continue };
         let kind = store.kind_for_path(p).unwrap_or_default();
         let e = Entry::parse(p, &String::from_utf8_lossy(bytes), &kind);
+        // entries mined by init came from older commits (listed in `commits`), not from this one
+        if e.origin.as_deref() == Some("init") {
+            continue;
+        }
         if let Some(key) = app.cfg().trailer_for(&e.kind) {
             out.push(format!("{key}: {}", e.id));
         }

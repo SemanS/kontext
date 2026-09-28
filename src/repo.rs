@@ -164,6 +164,21 @@ impl Repo {
 
     /// Remember which worktree a state dir belongs to, and drop state of worktrees that are gone
     /// (agent orchestrators such as Superset create and delete many of them).
+    /// Branches (local and remote-tracking, most recent first) whose tip has `path`: knowledge that
+    /// exists on another branch but has not reached this one yet. One `for-each-ref`, one `cat-file`.
+    pub fn refs_with(&self, path: &str) -> Vec<String> {
+        let refs = self
+            .git_opt(&["for-each-ref", "--sort=-committerdate", "--count=300", "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+            .unwrap_or_default();
+        let names: Vec<&str> = refs.lines().filter(|r| !r.is_empty() && !r.ends_with("/HEAD") && !r.contains(' ')).collect();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let input: String = names.iter().map(|r| format!("{r}:{path}\n")).collect();
+        let Ok(out) = self.git_with_stdin(&["cat-file", "--batch-check"], &input) else { return Vec::new() };
+        names.iter().zip(out.lines()).filter(|(_, l)| !l.ends_with(" missing")).map(|(r, _)| r.to_string()).collect()
+    }
+
     /// Whether the worktree with this key still exists (its state dir records its root).
     pub fn worktree_alive(&self, key: &str) -> bool {
         key == self.worktree_key

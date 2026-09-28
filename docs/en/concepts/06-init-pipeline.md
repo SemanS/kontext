@@ -10,7 +10,7 @@
 [5/5] deepen   purpose · mod:<module> · dec:<area> · refresh:<module> tasks
 ```
 
-Re-running `kontext init` is safe: generated facts are refreshed, everything people or agents wrote is kept.
+Re-running `kontext init` is safe: generated facts are refreshed, everything people or agents wrote is kept. While the bootstrap waits for review on its branch, agents on other branches are told it exists there (brief) and `ctx_init` does not start a second one.
 
 ## 1 · scan
 

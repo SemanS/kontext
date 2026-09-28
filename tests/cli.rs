@@ -167,6 +167,17 @@ fn end_to_end() {
     s.ok_git(&["checkout", "-q", "-b", "kontext/bootstrap"]);
     s.ok_git(&["add", ".ai"]);
     s.ok_git(&["commit", "-q", "-m", "docs: bootstrap team knowledge"]);
+    let msg = s.ok_git(&["log", "-1", "--format=%B"]);
+    assert!(!msg.contains("Learning:"), "entries mined by init get no trailers: {msg}");
+
+    // a branch without the bootstrap is told where it is instead of bootstrapping again
+    let bare = s.repo.with_file_name("e2e-bare");
+    s.ok_git(&["worktree", "add", "-q", bare.to_str().unwrap(), "main"]);
+    let brief = s.kontext(&["brief", "-C", bare.to_str().unwrap(), "--no-adapters"]);
+    assert!(brief.contains("Team knowledge exists on `kontext/bootstrap`"), "{brief}");
+    let init = s.kontext(&["call", "-C", bare.to_str().unwrap(), "ctx_init", "{}"]);
+    assert!(init.contains("Nothing was bootstrapped") && !bare.join(".ai").exists(), "{init}");
+    s.ok_git(&["worktree", "remove", "--force", bare.to_str().unwrap()]);
 
     // capture → inbox → prepare-commit → promote → commit with trailer
     let cap = s.kontext(&[
