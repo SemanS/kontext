@@ -2,7 +2,7 @@
 use crate::app::App;
 use crate::events::{self, Outbox};
 use crate::glob::{path_matches, path_overlaps};
-use crate::inbox::Inbox;
+use crate::inbox::{Inbox, Origin};
 use crate::index::SearchOpts;
 use crate::model::{self, Hit, HitGroup};
 use crate::secrets::{self, Finding};
@@ -246,7 +246,12 @@ pub struct CaptureOut {
     pub notes: Vec<String>,
 }
 
-pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
+pub fn capture(app: &App, mut req: CaptureReq) -> Result<CaptureOut> {
+    // `--paths a,` or an agent's [""] must not become an entry's paths, tags or supersedes
+    for list in [&mut req.paths, &mut req.tags, &mut req.supersedes] {
+        list.iter_mut().for_each(|v| *v = v.trim().to_string());
+        list.retain(|v| !v.is_empty());
+    }
     let (kind, implied_tag) = normalize_kind(app, &req.kind)
         .ok_or_else(|| anyhow!("unknown kind '{}' (use one of: {})", req.kind, app.cfg().kind_names().join(", ")))?;
     if req.title.trim().is_empty() {
@@ -484,20 +489,29 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
             rules.push(f);
         }
     }
-    let mut nested_rules = Vec::new();
+    // every AGENTS.md / CLAUDE.md between the root and a focused path applies, outermost first
+    let mut nested_rules: Vec<String> = Vec::new();
     for p in &focus.paths {
-        let mut cur = std::path::PathBuf::from(p);
-        loop {
-            let cand = app.repo.abs(&cur.join("AGENTS.md").to_string_lossy());
-            if cand.is_file() && cur.as_os_str() != "" {
-                nested_rules.push(format!("{}/AGENTS.md", cur.display()));
-                break;
-            }
-            if !cur.pop() {
-                break;
+        let p = p.trim_end_matches('/');
+        let mut dirs: Vec<String> = Vec::new();
+        if app.repo.abs(p).is_dir() {
+            dirs.push(p.to_string());
+        }
+        let mut cur = std::path::Path::new(p);
+        while let Some(parent) = cur.parent().filter(|d| !d.as_os_str().is_empty()) {
+            dirs.push(parent.to_string_lossy().to_string());
+            cur = parent;
+        }
+        for d in dirs.iter().rev() {
+            for name in ["AGENTS.md", "CLAUDE.md"] {
+                let rel = format!("{d}/{name}");
+                if app.repo.abs(&rel).is_file() && !nested_rules.contains(&rel) {
+                    nested_rules.push(rel);
+                }
             }
         }
     }
+    nested_rules.truncate(8);
     if !rules.is_empty() || !nested_rules.is_empty() {
         let mut all: Vec<String> = rules.iter().map(|s| s.to_string()).collect();
         all.extend(nested_rules);
@@ -564,6 +578,32 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
             })
         });
         let mut sec = String::from("\n## Modules\n");
+        // a focused module without a doc of its own (outside init.max_module_docs) still gets its facts
+        let documented: Vec<&str> = mods.iter().filter_map(|e| e.paths.first()).map(|p| p.trim_end_matches("/**")).collect();
+        let uncovered: Vec<&String> =
+            focus.paths.iter().filter(|p| !documented.iter().any(|d| p.as_str() == *d || p.starts_with(&format!("{d}/")))).collect();
+        if !uncovered.is_empty()
+            && let Some(inv) = crate::init::cached_inventory(app)
+        {
+            let mut seen = HashSet::new();
+            for p in uncovered {
+                let Some(m) = inv
+                    .modules
+                    .iter()
+                    .filter(|m| p.as_str() == m.path || p.starts_with(&format!("{}/", m.path)))
+                    .max_by_key(|m| m.path.len())
+                else {
+                    continue;
+                };
+                if !seen.insert(m.path.clone()) {
+                    continue;
+                }
+                let what =
+                    m.description.as_deref().map(|d| util::truncate_chars(d, 110)).unwrap_or_else(|| format!("{} {}", m.language, m.kind));
+                let docs = if m.docs.is_empty() { String::new() } else { format!("; read {}", m.docs.join(", ")) };
+                let _ = writeln!(sec, "- {} — {what} ({} files, no module doc yet{docs})", m.path, m.files);
+            }
+        }
         let mut bare: Vec<String> = Vec::new();
         let mut shown = 0;
         for (e, rel) in ranked.iter() {
@@ -616,12 +656,14 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     // local state
     let mut state = String::new();
     let inbox = Inbox::open(&app.repo).list();
-    if !inbox.is_empty() {
-        let team = inbox.iter().filter(|e| e.visibility.as_deref() != Some("private")).count();
+    let (ours, elsewhere): (Vec<&Entry>, Vec<&Entry>) = inbox.iter().partition(|e| Origin::of(&app.repo, e).is_ours());
+    if !ours.is_empty() {
+        let team = ours.iter().filter(|e| e.visibility.as_deref() != Some("private")).count();
         let _ = writeln!(
             state,
-            "- Local inbox: {team} team candidate(s), {} private — not shared until promoted and committed (`ctx_prepare_commit`).",
-            inbox.len() - team
+            "- Local inbox: {team} team candidate(s), {} private — not shared until promoted and committed (`ctx_prepare_commit`).{}",
+            ours.len() - team,
+            if elsewhere.is_empty() { String::new() } else { format!(" ({} more belong to other worktrees.)", elsewhere.len()) }
         );
     }
     let (done, total) = init_progress(&entries);
@@ -921,7 +963,9 @@ pub fn render_log(rows: &[LogRow]) -> String {
     for r in rows {
         let status = if r.superseded_by.is_empty() { r.status.clone() } else { format!("{} → {}", r.status, r.superseded_by.join(", ")) };
         let commit = r.commit.as_deref().map(|c| format!("  {c}")).unwrap_or_default();
-        let _ = writeln!(out, "{:<10}  {:<idw$}  {}  [{}]{commit}", r.date, util::truncate_chars(&r.id, idw), r.title, status, idw = idw);
+        // learnings and conventions have no status
+        let status = if status.is_empty() { String::new() } else { format!("  [{status}]") };
+        let _ = writeln!(out, "{:<10}  {:<idw$}  {}{status}{commit}", r.date, util::truncate_chars(&r.id, idw), r.title, idw = idw);
         let _ = &r.path;
         if !r.summary.is_empty() {
             let _ = writeln!(out, "{:<10}  {:<idw$}  ↳ {}", "", "", util::truncate_chars(&r.summary, 140), idw = idw);
@@ -962,18 +1006,16 @@ pub fn check_staged(app: &App) -> Result<CheckReport> {
     let scan_all = app.cfg().secrets.scan == "staged";
     let scan_off = app.cfg().secrets.scan == "off";
     let mut seen_ids: BTreeMap<String, String> = BTreeMap::new();
-    for (status, path) in staged {
-        if status == 'D' {
-            continue;
-        }
+    let to_read: Vec<String> =
+        staged.into_iter().filter(|(st, p)| *st != 'D' && (scan_all || store.is_store_path(p))).map(|(_, p)| p).collect();
+    let contents = app.repo.staged_contents(&to_read)?;
+    for path in to_read {
         let is_store = store.is_store_path(&path);
-        if !is_store && !scan_all {
+        let Some(bytes) = contents.get(&path) else { continue };
+        if bytes.len() > 2_000_000 || bytes.contains(&0) {
             continue;
         }
-        let Some(text) = app.repo.show_staged(&path) else { continue };
-        if text.len() > 2_000_000 || text.contains('\0') {
-            continue;
-        }
+        let text = String::from_utf8_lossy(bytes);
         rep.checked += 1;
         if !scan_off {
             for f in secrets::scan(&text, &allow) {
@@ -1099,24 +1141,39 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
         }
     }
 
-    // inbox candidates
+    // inbox candidates — the inbox is shared by all worktrees; offer only this worktree's own
     let cands = inbox.list();
     let team: Vec<&Entry> = cands.iter().filter(|e| e.visibility.as_deref() != Some("private")).collect();
-    if !team.is_empty() {
+    let touches = |e: &Entry| code.iter().filter(|(_, p)| e.paths.iter().any(|pat| path_matches(pat, p) || path_overlaps(pat, p))).count();
+    let mut ours: Vec<(&Entry, usize, Origin)> = Vec::new();
+    let mut theirs: Vec<(&Entry, usize, Origin)> = Vec::new();
+    for e in &team {
+        let origin = Origin::of(&app.repo, e);
+        let n = touches(e);
+        if origin.is_ours() { ours.push((*e, n, origin)) } else { theirs.push((*e, n, origin)) }
+    }
+    ours.sort_by_key(|x| std::cmp::Reverse(x.1));
+    if !ours.is_empty() {
         let _ = writeln!(out, "\n## Inbox candidates (local, not shared yet)");
-        let mut scored: Vec<(&Entry, usize)> = team
-            .iter()
-            .map(|e| (*e, code.iter().filter(|(_, p)| e.paths.iter().any(|pat| path_matches(pat, p) || path_overlaps(pat, p))).count()))
-            .collect();
-        scored.sort_by_key(|x| std::cmp::Reverse(x.1));
-        for (e, n) in &scored {
+        for (e, n, origin) in &ours {
             let rel = if *n > 0 { format!(" — touches {n} changed file(s)") } else { String::new() };
-            let _ = writeln!(out, "- `{}` [{}] {}{rel}", e.id, e.kind, e.l0(140));
+            let _ = writeln!(out, "- `{}` [{}] {}{rel}{}", e.id, e.kind, e.l0(140), origin.note());
         }
         let _ = writeln!(
             out,
             "Promote the ones that belong to this change: `ctx_prepare_commit` with promote=[ids] (or `kontext promote <id>`); drop stale ones with drop=[ids]."
         );
+    }
+    let related: Vec<&(&Entry, usize, Origin)> = theirs.iter().filter(|x| x.1 > 0).collect();
+    if !related.is_empty() {
+        let _ = writeln!(out, "\n## Captured in other worktrees — not for this commit");
+        for (e, n, origin) in &related {
+            let _ = writeln!(out, "- `{}` [{}] {} — touches {n} changed file(s){}", e.id, e.kind, e.l0(120), origin.note());
+        }
+        let _ = writeln!(out, "Another session is working on these; leave them to it unless this change really carries one.");
+    }
+    if theirs.len() > related.len() {
+        let _ = writeln!(out, "\n({} more candidate(s) from other worktrees, unrelated to this change.)", theirs.len() - related.len());
     }
     let private = cands.len() - team.len();
     if private > 0 {
@@ -1190,17 +1247,17 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
 
 // ---------------------------------------------------------------------------- misc helpers
 
-pub fn staged_trailers(app: &App) -> Result<Vec<String>> {
+/// Trailers for the knowledge entries the index adds or changes against `base` (default HEAD).
+pub fn staged_trailers_since(app: &App, base: Option<&str>) -> Result<Vec<String>> {
     let store = app.store();
-    let staged = app.repo.staged_paths()?;
+    let paths: Vec<String> =
+        app.repo.staged_paths_since(base)?.into_iter().filter(|(st, p)| *st != 'D' && store.is_entry_path(p)).map(|(_, p)| p).collect();
+    let contents = app.repo.staged_contents(&paths)?;
     let mut out = Vec::new();
-    for (st, p) in staged {
-        if st == 'D' || !store.is_entry_path(&p) {
-            continue;
-        }
-        let Some(text) = app.repo.show_staged(&p) else { continue };
-        let kind = store.kind_for_path(&p).unwrap_or_default();
-        let e = Entry::parse(&p, &text, &kind);
+    for p in &paths {
+        let Some(bytes) = contents.get(p) else { continue };
+        let kind = store.kind_for_path(p).unwrap_or_default();
+        let e = Entry::parse(p, &String::from_utf8_lossy(bytes), &kind);
         if let Some(key) = app.cfg().trailer_for(&e.kind) {
             out.push(format!("{key}: {}", e.id));
         }

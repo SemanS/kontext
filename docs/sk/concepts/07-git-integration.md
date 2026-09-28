@@ -7,7 +7,7 @@ kontext používa ako vrstvu spolupráce samotný git: súbory pre pravdu, commi
 | Hook | Čo kontext robí | Môže zablokovať? |
 | --- | --- | --- |
 | `pre-commit` | zvaliduje stagnuté znalosti a preskenuje ich na tajné údaje; znova vygeneruje `.ai/README.md` zo stagnutého stromu a stagne ho; pripomenie kandidátov z inboxu, ktorí sa týkajú stagnutých ciest | áno, pri chybách |
-| `prepare-commit-msg` | pridá pre stagnuté záznamy trailery `Decision:`, `Convention:`, `Learning:`, `Incident:` (pri merge a squash sa preskočí) | nie |
+| `prepare-commit-msg` | pridá pre stagnuté záznamy trailery `Decision:`, `Convention:`, `Learning:`, `Incident:` (pri merge commitoch sa preskočí; amend sa meria od rodiča `HEAD`) | nie |
 | `post-commit` | zaradí udalosti `sync` pre znalosti, ktoré sa zmenili v `HEAD`, odstráni povýšené položky inboxu, ktoré sú už commitnuté, spustí doručovanie na pozadí | nie |
 | `post-merge`, `post-rewrite` | zaradí udalosti `sync` po pulle, merge a rebase | nie |
 
@@ -46,6 +46,8 @@ git log --grep 'Decision: 0007'
 
 `kontext why` zoradí commity s trailermi kontextu na prvé miesta.
 
+Preformulovanie cez `git commit --amend -m …` trailery zachová: hook amend rozpozná (z argumentov alebo z commitujúceho procesu `git`) a to, čo commit pridáva, meria od rodiča `HEAD`. Commit z `git merge --squash` dostane trailery všetkého, čo nesie.
+
 ## Udalosti sync
 
 Po commite, merge alebo rebase porovná kontext súbory znalostí v `HEAD` so snapshotom poslednej synchronizácie (pre každý worktree) a zaradí udalosť `sync` pre každý pridaný alebo zmenený záznam. Prvé spustenie vo worktree snapshot len zapíše; `kontext sync --all` raz zrkadlí všetky záznamy. Nič sa nedeje, kým udalosť `sync` neodoberá žiadny adaptér.
@@ -62,4 +64,6 @@ Hooky nikdy nekomunikujú so sieťou. Udalosti sa pripisujú do `<git-common-dir
 
 ## Worktree
 
-Všetko lokálne žije v spoločnom git adresári, takže všetky worktree klonu zdieľajú inbox, outbox a postup zavádzania, zatiaľ čo každý worktree má vlastný vyhľadávací index a snapshot synchronizácie (riadia sa checkoutnutou vetvou).
+Všetko lokálne žije v spoločnom git adresári, takže všetky worktree klonu zdieľajú inbox, outbox a postup zavádzania, zatiaľ čo každý worktree má vlastný vyhľadávací index a snapshot synchronizácie (riadia sa checkoutnutou vetvou; commity, ktoré z histórie vypadnú cez amend alebo rebase, sa z indexu odstránia).
+
+Každý kandidát v inboxe si pamätá worktree a vetvu, v ktorých vznikol. Pri paralelných agentoch v samostatných worktree (Superset, Codex, Claude Code) ponúkajú `ctx_prepare_commit`, pripomienka v pre-commit hooku a brief len vlastných kandidátov aktuálneho worktree; kandidáti iného živého worktree sa ukážu zvlášť ako „not for this commit“ a kandidátov zmazaného worktree si môže prevziať ktokoľvek. `kontext inbox` ukáže, odkiaľ ktorý pochádza.

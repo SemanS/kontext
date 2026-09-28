@@ -101,7 +101,7 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | `min_module_files` | `3` | code files for an *inferred* module |
 | `exclude` | `[]` | extra globs to skip |
 | `history_max_commits` | `3000` | commits to mine |
-| `max_decision_tasks` | `10` | `dec:` tasks |
+| `max_decision_tasks` | `20` | `dec:` tasks |
 | `task_max_files` | `12` | key files per module task |
 | `task_inline_chars` | `24000` | attached source per autopilot task |
 | `jobs` | `2` | autopilot parallelism (also `--jobs`) |

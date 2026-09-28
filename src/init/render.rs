@@ -120,6 +120,16 @@ fn overview_facts(inv: &Inventory, hist: &History, modules: &[&Module], summarie
                 .replace('|', "/");
             let _ = writeln!(f, "| `{}` | {} | {} | {} | {} |", m.path, m.kind, m.language, m.files, what);
         }
+        let rest: Vec<&str> = inv.modules.iter().filter(|m| !modules.iter().any(|d| d.path == m.path)).map(|m| m.path.as_str()).collect();
+        if !rest.is_empty() {
+            let more = if rest.len() > 40 { format!(" (+{} more)", rest.len() - 40) } else { String::new() };
+            let _ = writeln!(
+                f,
+                "\nAlso ({} without a module doc; raise `init.max_module_docs` to document them): {}{more}",
+                rest.len(),
+                rest.iter().take(40).map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", ")
+            );
+        }
     }
     let mut work = Vec::new();
     if !inv.scripts.is_empty() {
@@ -127,7 +137,9 @@ fn overview_facts(inv: &Inventory, hist: &History, modules: &[&Module], summarie
         work.push(format!("- Scripts (root package.json): {}", s.join(", ")));
     }
     if !inv.agent_files.is_empty() {
-        work.push(format!("- Agent rules: {}", inv.agent_files.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
+        let more =
+            if inv.agent_files.len() > 8 { format!(" (+{} more in module directories)", inv.agent_files.len() - 8) } else { String::new() };
+        work.push(format!("- Agent rules: {}{more}", inv.agent_files.iter().take(8).cloned().collect::<Vec<_>>().join(", ")));
     }
     if !inv.doc_dirs.is_empty() {
         work.push(format!("- Docs: {}", inv.doc_dirs.iter().take(14).cloned().collect::<Vec<_>>().join(", ")));

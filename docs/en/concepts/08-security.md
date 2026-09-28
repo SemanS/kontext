@@ -31,6 +31,7 @@ Every staged knowledge file is scanned by the pre-commit hook; high-confidence f
 | Anthropic (`sk-ant-…`) and OpenAI (`sk-…`) keys, dotenv-vault keys | high |
 | `Authorization: Bearer …` headers, credentials in URLs | high |
 | Google API keys, JWTs, `*_TOKEN=` / `password:` assignments (placeholders ignored) | medium |
+| secrets in sentences — "the secret is …", "rotate the api key …" — when the value looks random (mixed case, digits, high entropy; paths and placeholders ignored) | medium |
 
 - `secrets.scan = "staged"` extends the scan to every staged text file (not only knowledge).
 - A line containing `kontext:allow-secret`, or matching a regex in `secrets.allow`, is ignored.

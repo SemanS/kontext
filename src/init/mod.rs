@@ -112,6 +112,11 @@ fn save_cache(app: &App, inv: &Inventory, hist: &History) -> Result<()> {
     Ok(())
 }
 
+/// The last scan's inventory as cached, however old (cheap: for the brief, never recomputed).
+pub fn cached_inventory(app: &App) -> Option<Inventory> {
+    std::fs::read_to_string(inv_path(app)).ok().and_then(|t| serde_json::from_str::<Inventory>(&t).ok())
+}
+
 /// Inventory + history from the cache when it matches HEAD, otherwise recomputed (and cached).
 pub fn load_cached(app: &App) -> Result<(Inventory, History)> {
     let st = load_state(app);

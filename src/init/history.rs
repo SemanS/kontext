@@ -6,7 +6,7 @@ use crate::util;
 use anyhow::Result;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct History {
@@ -36,6 +36,11 @@ pub struct Candidate {
     pub reasons: Vec<String>,
     pub module: Option<String>,
 }
+
+/// Fewer decision commits than this and a module's cluster joins its enclosing module's.
+const MIN_CLUSTER: usize = 3;
+/// Commits per decision task.
+const CHUNK: usize = 8;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cluster {
@@ -124,7 +129,18 @@ pub fn mine(repo: &Repo, modules: &[Module], max_commits: usize, knowledge_dirs:
             continue;
         }
         let files: Vec<String> = p[6].lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
-        let (subject, body) = (p[4].to_string(), p[5].trim().to_string());
+        let subject = p[4].to_string();
+        // attribution trailers say nothing about the change
+        let body = p[5]
+            .lines()
+            .filter(|l| {
+                let l = l.trim().to_lowercase();
+                !(l.starts_with("co-authored-by:") || l.starts_with("signed-off-by:") || l.starts_with("🤖 generated with"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim()
+            .to_string();
         h.commits += 1;
         authors.insert(p[2].to_string());
         if CONVENTIONAL.is_match(&subject) {
@@ -157,6 +173,14 @@ pub fn mine(repo: &Repo, modules: &[Module], max_commits: usize, knowledge_dirs:
             reasons: sig.reasons,
             module: None,
         });
+    }
+    // the first commit of a repository often states its architecture
+    if h.commits < max_commits.max(1)
+        && let Some(root) = all.last_mut()
+        && root.body.len() >= 200
+    {
+        root.score += 3.0;
+        root.reasons.push("founding commit".into());
     }
     h.contributors = authors.len();
     if h.commits > 0 {
@@ -195,32 +219,63 @@ pub fn mine(repo: &Repo, modules: &[Module], max_commits: usize, knowledge_dirs:
         c.module = counts.into_iter().max_by_key(|(_, n)| *n).map(|(m, _)| m);
     }
 
+    let order: Vec<String> = all.iter().map(|c| c.short.clone()).collect();
     let threshold = 3.5;
     let is_knowledge = |f: &String| knowledge_dirs.iter().any(|d| f.starts_with(&format!("{}/", d.trim_end_matches('/'))));
-    let mut cands: Vec<Candidate> =
-        all.into_iter().filter(|c| c.score >= threshold).filter(|c| c.files.is_empty() || !c.files.iter().all(is_knowledge)).collect();
-    cands.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    cands.truncate(400);
+    let mut pool: Vec<Candidate> = all.into_iter().filter(|c| c.files.is_empty() || !c.files.iter().all(is_knowledge)).collect();
+    pool.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    // history written in rules rather than in "we decided" words scores lower across the board:
+    // when few commits pass, the next best (still clearly decision-shaped) fill up to a quarter
+    let strong = pool.iter().filter(|c| c.score >= threshold).count();
+    let target = (h.commits / 4).clamp(12, 200);
+    let keep =
+        if strong >= target { strong } else { strong + pool[strong..].iter().take(target - strong).filter(|c| c.score >= 2.5).count() };
+    pool.truncate(keep.min(400));
+    let cands = pool;
 
     let mut by_module: BTreeMap<String, Vec<&Candidate>> = BTreeMap::new();
     for c in &cands {
         by_module.entry(c.module.clone().unwrap_or_else(|| "(repository)".into())).or_default().push(c);
     }
-    let mut clusters: Vec<Cluster> = by_module
-        .into_iter()
-        .map(|(m, list)| {
-            let top: Vec<&&Candidate> = list.iter().take(10).collect();
-            let score: f32 = top.iter().map(|c| c.score).sum();
-            let module = if m == "(repository)" { None } else { Some(m.clone()) };
-            Cluster {
-                id: format!("dec:{}", if module.is_some() { util::slugify(&m, 60) } else { "repository".into() }),
-                title: format!("decisions in {m}"),
-                module,
-                commits: top.iter().map(|c| c.short.clone()).collect(),
-                score,
-            }
-        })
-        .collect();
+    // a module with one or two decision commits joins the nearest enclosing module: the commits of
+    // apps/api/billing read better next to the rest of apps/api than as a task of their own
+    let module_paths: HashSet<&str> = modules.iter().map(|m| m.path.as_str()).collect();
+    let mut keys: Vec<String> = by_module.keys().cloned().collect();
+    keys.sort_by_key(|k| std::cmp::Reverse(k.matches('/').count()));
+    for k in keys {
+        if by_module.get(&k).is_none_or(|v| v.len() >= MIN_CLUSTER) || k == "(repository)" {
+            continue;
+        }
+        let parent = k.match_indices('/').rev().map(|(i, _)| &k[..i]).find(|a| module_paths.contains(a)).map(str::to_string);
+        if let Some(p) = parent {
+            let moved = by_module.remove(&k).unwrap_or_default();
+            by_module.entry(p).or_default().extend(moved);
+        }
+    }
+    // oldest first, in parts of up to CHUNK commits: each task reads as one stretch of the story
+    let position: HashMap<&str, usize> = order.iter().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
+    let mut clusters: Vec<Cluster> = Vec::new();
+    for (m, mut list) in by_module {
+        list.sort_by_key(|c| std::cmp::Reverse(position.get(c.short.as_str()).copied().unwrap_or(0)));
+        let module = if m == "(repository)" { None } else { Some(m.clone()) };
+        let base = format!("dec:{}", if module.is_some() { util::slugify(&m, 60) } else { "repository".into() });
+        let parts = list.len().div_ceil(CHUNK).max(1);
+        let size = list.len().div_ceil(parts);
+        for (i, part) in list.chunks(size.max(1)).enumerate() {
+            let (id, title) = if i == 0 {
+                (base.clone(), format!("decisions in {m}"))
+            } else {
+                (format!("{base}-{}", i + 1), format!("decisions in {m} (part {})", i + 1))
+            };
+            clusters.push(Cluster {
+                id,
+                title,
+                module: module.clone(),
+                commits: part.iter().map(|c| c.short.clone()).collect(),
+                score: part.iter().map(|c| c.score).sum(),
+            });
+        }
+    }
     clusters.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     h.candidates = cands;
     h.clusters = clusters;

@@ -74,7 +74,7 @@ min_module_files = 3
 jobs = 2
 task_max_files = 12
 task_inline_chars = 24000
-max_decision_tasks = 10
+max_decision_tasks = 20
 history_max_commits = 3000
 exclude = []
 "#;

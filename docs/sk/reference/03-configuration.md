@@ -101,7 +101,7 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 | `min_module_files` | `3` | súbory kódu pre *odvodený* modul |
 | `exclude` | `[]` | ďalšie globy na preskočenie |
 | `history_max_commits` | `3000` | commity na vyťaženie |
-| `max_decision_tasks` | `10` | úlohy `dec:` |
+| `max_decision_tasks` | `20` | úlohy `dec:` |
 | `task_max_files` | `12` | kľúčové súbory na úlohu modulu |
 | `task_inline_chars` | `24000` | priložený zdroják na úlohu autopilota |
 | `jobs` | `2` | paralelizmus autopilota (aj `--jobs`) |

@@ -20,10 +20,18 @@ struct Rule {
     name: &'static str,
     re: Regex,
     severity: Severity,
+    /// When set, capture group 1 is the value and must pass this check (placeholders, randomness).
+    value_ok: Option<fn(&str) -> bool>,
 }
 
 static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
-    let r = |name, pat: &str, severity| Rule { name, re: Regex::new(pat).expect("secret rule"), severity };
+    let r = |name, pat: &str, severity| Rule { name, re: Regex::new(pat).expect("secret rule"), severity, value_ok: None };
+    let checked = |name, pat: &str, severity, ok: fn(&str) -> bool| Rule {
+        name,
+        re: Regex::new(pat).expect("secret rule"),
+        severity,
+        value_ok: Some(ok),
+    };
     vec![
         r("private-key", r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----", Severity::High),
         r("gcp-service-account", r#""private_key"\s*:\s*"-----BEGIN"#, Severity::High),
@@ -40,13 +48,47 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
         r("jwt", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", Severity::Medium),
         r("bearer-token", r"(?i)\bauthorization:\s*bearer\s+[A-Za-z0-9._~+/-]{20,}", Severity::High),
         r("url-credentials", r"\b[a-z][a-z0-9+.-]*://[^/\s:@]{1,64}:[^/\s:@]{6,128}@[^\s/]+", Severity::High),
-        r(
+        checked(
             "assigned-secret",
             r#"(?i)\b[A-Z0-9_]*(?:api[_-]?key|secret|token|passw(?:or)?d|client[_-]?secret|access[_-]?key)[A-Z0-9_]*\b\s*[:=]\s*["']?([A-Za-z0-9/+_=.\-]{12,})"#,
             Severity::Medium,
+            |v| !looks_like_placeholder(v),
+        ),
+        // notes put secrets into sentences: "the secret is …", "rotate the token Xy9…"
+        checked(
+            "secret-in-text",
+            r#"(?i)\b(?:secret|token|password|passwd|passphrase|api[ _-]?key|access[ _-]?key|private[ _-]?key|credentials?)\b(?:\s+(?:is|was|of|for|value|key|now)){0,3}\s+["'`]?([A-Za-z0-9/+_=\-]{24,})"#,
+            Severity::Medium,
+            |v| !looks_like_placeholder(v) && looks_random(v),
         ),
     ]
 });
+
+/// Mixed case and digits, high entropy, and not a path like `src/auth/TokenRefresh2`.
+fn looks_random(v: &str) -> bool {
+    let word = |seg: &str| {
+        let mut c = seg.chars();
+        c.next().is_some_and(|f| f.is_ascii_alphabetic())
+            && seg.chars().filter(|c| c.is_ascii_digit()).count() <= 1
+            && seg.chars().zip(seg.chars().skip(1)).filter(|(a, b)| a.is_ascii_uppercase() && b.is_ascii_uppercase()).count() == 0
+    };
+    if v.contains('/') && v.split('/').all(word) {
+        return false;
+    }
+    let (digit, upper, lower) =
+        (v.chars().any(|c| c.is_ascii_digit()), v.chars().any(|c| c.is_ascii_uppercase()), v.chars().any(|c| c.is_ascii_lowercase()));
+    digit && upper && lower && entropy(v) >= 3.5
+}
+
+/// Shannon entropy in bits per character.
+fn entropy(s: &str) -> f64 {
+    let mut counts = std::collections::HashMap::new();
+    for c in s.chars() {
+        *counts.entry(c).or_insert(0usize) += 1;
+    }
+    let n = s.chars().count() as f64;
+    counts.values().map(|&k| k as f64 / n).map(|p| -p * p.log2()).sum()
+}
 
 fn looks_like_placeholder(s: &str) -> bool {
     let l = s.to_lowercase();
@@ -73,7 +115,7 @@ pub fn scan(text: &str, allow: &[Regex]) -> Vec<Finding> {
         for rule in RULES.iter() {
             if let Some(m) = rule.re.captures(line) {
                 let value = m.get(1).map(|g| g.as_str()).unwrap_or_else(|| m.get(0).unwrap().as_str());
-                if rule.name == "assigned-secret" && looks_like_placeholder(value) {
+                if rule.value_ok.is_some_and(|ok| !ok(value)) {
                     continue;
                 }
                 let whole = m.get(0).unwrap().as_str();
@@ -98,15 +140,15 @@ pub fn redact(text: &str) -> (String, usize) {
     let mut out = text.to_string();
     let mut n = 0;
     for rule in RULES.iter() {
-        if rule.name == "assigned-secret" {
+        if let Some(ok) = rule.value_ok {
             let replaced = rule.re.replace_all(&out, |c: &regex::Captures| {
                 let whole = c.get(0).unwrap().as_str();
                 let value = c.get(1).map(|g| g.as_str()).unwrap_or("");
-                if looks_like_placeholder(value) {
-                    whole.to_string()
-                } else {
+                if ok(value) {
                     n += 1;
                     whole.replace(value, "[redacted]")
+                } else {
+                    whole.to_string()
                 }
             });
             out = replaced.into_owned();
@@ -159,6 +201,24 @@ mod tests {
         assert!(!red.contains("ghp_abcdef"));
         assert!(red.contains("your_api_key_here"));
         assert!(!red.contains("hunter2hunter2"));
+    }
+
+    #[test]
+    fn secrets_in_sentences() {
+        let t = "Rotate it: the secret is wJalrXUtnFEMI/K7MDENG/bPxRfiCYzQ8kP2mNq now\nand the api key 3fA9kQ2mZx7LpR4sT8vW1yB6nC0dE5gH.";
+        let f = scan(t, &[]);
+        assert_eq!(f.iter().filter(|x| x.rule == "secret-in-text").count(), 2, "{f:?}");
+        let (red, n) = redact(t);
+        assert!(n >= 2 && !red.contains("wJalrXUtn") && !red.contains("3fA9kQ2m"), "{red}");
+        // prose about secrets, paths and placeholders stay
+        for ok in [
+            "The token budget is 1400 and secret management lives in Vault.",
+            "The token refresher lives in src/auth/TokenRefreshHandler2 now.",
+            "Set the api key to YOUR_API_KEY_GOES_HERE_1234567 first.",
+            "password hashing uses argon2id with a per-user salt",
+        ] {
+            assert!(scan(ok, &[]).is_empty(), "{ok}: {:?}", scan(ok, &[]));
+        }
     }
 
     #[test]

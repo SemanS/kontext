@@ -130,10 +130,17 @@ fn regex_link() -> &'static regex::Regex {
     &RE
 }
 
-/// First meaningful paragraph of Markdown (skipping headings, badges, front matter, HTML), as one line.
-pub fn first_paragraph(md: &str, max: usize) -> String {
-    let mut para = Vec::new();
+/// Paragraphs of Markdown prose (headings, badges, front matter, HTML, tables and code skipped), each as one line.
+pub fn paragraphs(md: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut para: Vec<String> = Vec::new();
     let mut in_code = false;
+    let flush = |para: &mut Vec<String>, out: &mut Vec<String>| {
+        if !para.is_empty() {
+            out.push(strip_md(&para.join(" ")));
+            para.clear();
+        }
+    };
     for line in md.lines() {
         let t = line.trim();
         if t.starts_with("```") {
@@ -152,21 +159,19 @@ pub fn first_paragraph(md: &str, max: usize) -> String {
             || t.starts_with("---")
             || t.starts_with("**Status")
             || t.starts_with("**Date");
-        if t.is_empty() {
-            if !para.is_empty() {
-                break;
-            }
-            continue;
-        }
-        if skip {
-            if !para.is_empty() {
-                break;
-            }
+        if t.is_empty() || skip {
+            flush(&mut para, &mut out);
             continue;
         }
         para.push(t.to_string());
     }
-    truncate_chars(&strip_md(&para.join(" ")), max)
+    flush(&mut para, &mut out);
+    out
+}
+
+/// First meaningful paragraph of Markdown (skipping headings, badges, front matter, HTML), as one line.
+pub fn first_paragraph(md: &str, max: usize) -> String {
+    paragraphs(md).into_iter().next().map(|p| truncate_chars(&p, max)).unwrap_or_default()
 }
 
 /// Text that generators put into READMEs — useless as a description.
@@ -273,22 +278,24 @@ pub fn readme_intro(md: &str) -> String {
 
 /// First paragraph that says something (skips generator boilerplate and lead-ins).
 pub fn meaningful_paragraph(md: &str, max: usize) -> String {
-    let mut rest = md.to_string();
-    for _ in 0..8 {
-        let p = first_paragraph(&rest, max);
-        if p.is_empty() {
-            return String::new();
-        }
+    for p in paragraphs(md).into_iter().take(8) {
         if !is_boilerplate(&p) {
-            return p;
+            return truncate_chars(&p, max);
         }
-        // drop everything up to and including this paragraph's first line and try again
-        let probe: String = p.chars().take(20).collect();
-        let cut = rest.find(&probe).map(|i| i + probe.len()).unwrap_or(rest.len());
-        let after = &rest[cut..];
-        rest = after.split_once("\n\n").map(|(_, r)| r.to_string()).unwrap_or_default();
+        // "X is the one client of a process. Its users are:" — the sentences before the lead-in say it
+        if let Some(lead) = before_lead_in(&p) {
+            return truncate_chars(&lead, max);
+        }
     }
     String::new()
+}
+
+/// The sentences of a paragraph that ends in a lead-in (`…:`), when they say something on their own.
+fn before_lead_in(p: &str) -> Option<String> {
+    let body = p.trim().strip_suffix(':')?;
+    let cut = body.rfind(". ")?;
+    let lead = body[..=cut].trim();
+    (!is_boilerplate(lead)).then(|| lead.to_string())
 }
 
 pub fn first_sentence(s: &str, max: usize) -> String {
@@ -326,6 +333,18 @@ mod tests {
         assert_eq!(slugify("  --Hello__World--  ", 60), "hello-world");
         assert_eq!(slugify("a very long title that keeps going and going", 20), "a-very-long-title");
         assert_eq!(slugify("The team's source of truth", 60), "the-teams-source-of-truth");
+    }
+
+    #[test]
+    fn descriptions_survive_lead_ins() {
+        let readme = "# Cache\n\n`Cache` is the only client of the key-value store in a process. Jobs, sessions and uploads share\nits connection but own separate key prefixes:\n\n| Domain | Crate |\n|---|---|\n| jobs | `libs/jobs` |\n";
+        assert_eq!(meaningful_paragraph(readme, 200), "Cache is the only client of the key-value store in a process.");
+        // a lead-in alone says nothing (nor does a stub list); the next paragraph does
+        assert_eq!(
+            meaningful_paragraph("# X\n\nIt provides:\n\n- a\n\nThe store of record for stays.", 200),
+            "The store of record for stays."
+        );
+        assert_eq!(first_paragraph("```\ncode\n```\n\nProse here.", 100), "Prose here.");
     }
 
     #[test]

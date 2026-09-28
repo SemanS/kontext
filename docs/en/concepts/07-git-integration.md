@@ -7,7 +7,7 @@ kontext uses git itself as the collaboration layer: files for truth, commits for
 | Hook | What kontext does | Can block? |
 | --- | --- | --- |
 | `pre-commit` | validates staged knowledge and scans it for secrets; re-renders `.ai/README.md` from the staged tree and stages it; reminds you of inbox candidates that touch staged paths | yes, on errors |
-| `prepare-commit-msg` | adds `Decision:`, `Convention:`, `Learning:`, `Incident:` trailers for staged entries (skipped for merges and squashes) | no |
+| `prepare-commit-msg` | adds `Decision:`, `Convention:`, `Learning:`, `Incident:` trailers for staged entries (skipped for merge commits; an amend is measured from the parent of `HEAD`) | no |
 | `post-commit` | queues `sync` events for knowledge that changed at `HEAD`, removes promoted inbox items that are now committed, starts a background delivery | no |
 | `post-merge`, `post-rewrite` | queues `sync` events after pulls, merges and rebases | no |
 
@@ -46,6 +46,8 @@ git log --grep 'Decision: 0007'
 
 `kontext why` ranks commits with kontext trailers first.
 
+Rewording with `git commit --amend -m …` keeps the trailers: the hook recognizes the amend (from its arguments, or from the committing `git` process) and measures what the commit adds from `HEAD`'s parent. A `git merge --squash` commit gets the trailers of everything it carries.
+
 ## Sync events
 
 After a commit, merge or rebase, kontext compares the knowledge files at `HEAD` with the snapshot of the last sync (per worktree) and queues a `sync` event for every added or changed entry. The first run in a worktree only records the snapshot; `kontext sync --all` mirrors every entry once. Nothing happens unless an adapter subscribes to `sync`.
@@ -62,4 +64,6 @@ Hooks never talk to the network. Events are appended to `<git-common-dir>/kontex
 
 ## Worktrees
 
-Everything local lives under the git common directory, so all worktrees of a clone share the inbox, the outbox and bootstrap progress, while each worktree keeps its own search index and sync snapshot (they follow the checked-out branch).
+Everything local lives under the git common directory, so all worktrees of a clone share the inbox, the outbox and bootstrap progress, while each worktree keeps its own search index and sync snapshot (they follow the checked-out branch; commits that leave the history through an amend or rebase are dropped from the index).
+
+Each inbox candidate records the worktree and branch it was captured in. With parallel agents in separate worktrees (Superset, Codex, Claude Code), `ctx_prepare_commit`, the pre-commit reminder and the brief offer only the current worktree's own candidates; another live worktree's appear apart as "not for this commit", and a removed worktree's may be adopted by anyone. `kontext inbox` shows where each one came from.

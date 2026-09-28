@@ -8,12 +8,24 @@ Codex načítava MCP servery z `~/.codex/config.toml`:
 [mcp_servers.kontext]
 command = "kontext"
 args = ["mcp"]
+# kontext's tools read the repository and write only the local inbox and the working tree;
+# without this, approval_policy = "never" refuses every call
+default_tools_approval_mode = "approve"
 ```
 
 ```sh
 kontext connect codex            # prints the snippet
-kontext connect codex --write    # appends it (a timestamped backup of the file is kept)
+kontext connect codex --write    # appends it, or adds the approval mode to an existing entry (a timestamped backup is kept)
 ```
+
+## Schvaľovanie
+
+Codex sa pred volaním MCP nástroja pýta, pokiaľ nevie, že je neškodný, a pri `approval_policy = "never"` namiesto otázky volanie odmietne: `MCP tool call requires approval, but approval policy is never`. V takom nastavení kontext fungujú dve veci:
+
+- každý nástroj kontextu nesie MCP anotácie – `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` a `ctx_log` majú `readOnlyHint: true`, ostatné sú označené ako nedeštruktívne (zapisujú len do lokálneho inboxu, pracovného stromu a git indexu), takže ich Codex spustí bez pýtania;
+- `default_tools_approval_mode = "approve"` v zázname servera schváli nástroje kontextu výslovne, nezávisle od toho, ako konkrétna verzia Codexu anotácie číta.
+
+Pri `sandbox_mode = "workspace-write"` drží Codex `.git` pre vlastné shell príkazy agenta len na čítanie, takže `git add` / `git commit` tam zlyhajú; servera kontextu sa to netýka (`ctx_prepare_commit` stále povyšuje a stagne). Commituj zo sandboxu, ktorý to dovolí, alebo sám.
 
 Spusti `codex` v repozitári; server zistí repozitár zo svojho pracovného adresára. Ak tvoje nastavenie spúšťa MCP servery inde, zafixuj repozitár cez `args = ["-C", "/path/to/repo", "mcp"]` alebo `env = { KONTEXT_DIR = "/path/to/repo" }`.
 

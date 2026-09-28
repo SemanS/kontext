@@ -4,6 +4,8 @@ Server: `kontext mcp` — JSON-RPC 2.0 over stdio, newline-delimited. Protocol v
 
 ## Tools
 
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` and `ctx_log` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. All are `openWorldHint: false`.
+
 ### `ctx_brief`
 
 | Parameter | Type | Default | |

@@ -110,6 +110,10 @@ impl Repo {
     }
 
     pub fn git_with_stdin(&self, args: &[&str], input: &str) -> Result<String> {
+        self.git_with_stdin_bytes(args, input).map(|b| String::from_utf8_lossy(&b).to_string())
+    }
+
+    pub fn git_with_stdin_bytes(&self, args: &[&str], input: &str) -> Result<Vec<u8>> {
         use std::io::Write;
         let mut child = self
             .cmd()
@@ -129,7 +133,7 @@ impl Repo {
         if !out.status.success() {
             bail!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
         }
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+        Ok(out.stdout)
     }
 
     pub fn git_opt(&self, args: &[&str]) -> Option<String> {
@@ -160,6 +164,13 @@ impl Repo {
 
     /// Remember which worktree a state dir belongs to, and drop state of worktrees that are gone
     /// (agent orchestrators such as Superset create and delete many of them).
+    /// Whether the worktree with this key still exists (its state dir records its root).
+    pub fn worktree_alive(&self, key: &str) -> bool {
+        key == self.worktree_key
+            || std::fs::read_to_string(self.state_dir().join("worktrees").join(key).join("path"))
+                .is_ok_and(|root| std::path::Path::new(root.trim()).exists())
+    }
+
     pub fn prune_worktree_state(&self) -> usize {
         let mine = self.worktree_state_dir();
         let _ = std::fs::create_dir_all(&mine);
@@ -236,7 +247,14 @@ impl Repo {
 
     /// Paths staged for commit (added, copied, modified, renamed).
     pub fn staged_paths(&self) -> Result<Vec<(char, String)>> {
-        let out = self.git_bytes(&["diff", "--cached", "--name-status", "-z", "--no-renames"])?;
+        self.staged_paths_since(None)
+    }
+
+    /// What the index changes against `base` (default HEAD); an amend compares with HEAD's parent.
+    pub fn staged_paths_since(&self, base: Option<&str>) -> Result<Vec<(char, String)>> {
+        let mut args = vec!["diff", "--cached", "--name-status", "-z", "--no-renames"];
+        args.extend(base);
+        let out = self.git_bytes(&args)?;
         let mut res = Vec::new();
         let mut it = out.split(|b| *b == 0).filter(|s| !s.is_empty());
         while let Some(status) = it.next() {
@@ -246,6 +264,51 @@ impl Repo {
             }
         }
         Ok(res)
+    }
+
+    /// Staged (index) contents of `paths`, read with one `ls-files` and one `cat-file --batch`
+    /// instead of a `git show :path` per file. Paths that are not in the index are left out.
+    pub fn staged_contents(&self, paths: &[String]) -> Result<std::collections::HashMap<String, Vec<u8>>> {
+        let mut out = std::collections::HashMap::new();
+        if paths.is_empty() {
+            return Ok(out);
+        }
+        let wanted: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+        let literal: Vec<String> = paths.iter().map(|p| format!(":(literal){p}")).collect();
+        let mut args = vec!["ls-files", "-s", "-z"];
+        // a long list goes through the whole index instead of the command line
+        if literal.len() <= 200 {
+            args.push("--");
+            args.extend(literal.iter().map(String::as_str));
+        }
+        let listing = self.git_bytes(&args)?;
+        let mut blobs: Vec<(String, String)> = Vec::new();
+        for rec in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let rec = String::from_utf8_lossy(rec);
+            let Some((meta, path)) = rec.split_once('\t') else { continue };
+            let mut meta = meta.split_whitespace();
+            let (Some(mode), Some(sha)) = (meta.next(), meta.next()) else { continue };
+            // regular files only (no submodules or symlinks), first stage only
+            if wanted.contains(path) && mode.starts_with("100") && !blobs.iter().any(|(p, _)| p == path) {
+                blobs.push((path.to_string(), sha.to_string()));
+            }
+        }
+        if blobs.is_empty() {
+            return Ok(out);
+        }
+        let input: String = blobs.iter().map(|(_, s)| format!("{s}\n")).collect();
+        let data = self.git_with_stdin_bytes(&["cat-file", "--batch"], &input)?;
+        let mut rest: &[u8] = &data;
+        for (path, _) in blobs {
+            let Some(nl) = rest.iter().position(|b| *b == b'\n') else { break };
+            let header = String::from_utf8_lossy(&rest[..nl]).to_string();
+            rest = &rest[nl + 1..];
+            let Some(size) = header.split_whitespace().nth(2).and_then(|s| s.parse::<usize>().ok()) else { continue };
+            let size = size.min(rest.len());
+            out.insert(path, rest[..size].to_vec());
+            rest = rest.get(size + 1..).unwrap_or(&[]);
+        }
+        Ok(out)
     }
 
     /// Working tree changes (staged or not) — used when nothing is staged yet.
@@ -269,10 +332,6 @@ impl Repo {
             res.push((st, rec[3..].to_string()));
         }
         Ok(res)
-    }
-
-    pub fn show_staged(&self, path: &str) -> Option<String> {
-        self.git_bytes(&["show", &format!(":{path}")]).ok().map(|b| String::from_utf8_lossy(&b).to_string())
     }
 
     pub fn template_ctx(&self) -> Value {

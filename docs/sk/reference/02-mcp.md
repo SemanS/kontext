@@ -4,6 +4,8 @@ Server: `kontext mcp` – JSON-RPC 2.0 cez stdio, správy oddelené novým riadk
 
 ## Nástroje
 
+Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` a `ctx_log` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Všetky majú `openWorldHint: false`.
+
 ### `ctx_brief`
 
 | Parameter | Typ | Predvolene | |

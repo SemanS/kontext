@@ -5,7 +5,7 @@
 //! `kontext` lookup, so teammates without kontext are unaffected when hooks are shared.
 use crate::app::App;
 use crate::events::{self, Outbox};
-use crate::inbox::Inbox;
+use crate::inbox::{Inbox, Origin};
 use crate::ops;
 use crate::store::Entry;
 use crate::util;
@@ -22,7 +22,8 @@ fn block(hook: &str) -> String {
     let find = r#"k=$(command -v kontext 2>/dev/null || true); [ -z "$k" ] && [ -x "$HOME/.local/bin/kontext" ] && k="$HOME/.local/bin/kontext"; [ -z "$k" ] && [ -x "$HOME/.cargo/bin/kontext" ] && k="$HOME/.cargo/bin/kontext""#;
     let call = match hook {
         "pre-commit" => r#"if [ -n "$k" ]; then "$k" hook pre-commit || exit $?; fi"#.to_string(),
-        "prepare-commit-msg" => r#"if [ -n "$k" ]; then "$k" hook prepare-commit-msg "$@" || true; fi"#.to_string(),
+        // $PPID is the committing git process: it tells an amend apart when the hook arguments do not
+        "prepare-commit-msg" => r#"if [ -n "$k" ]; then KONTEXT_GIT_PID=$PPID "$k" hook prepare-commit-msg "$@" || true; fi"#.to_string(),
         other => format!(r#"if [ -n "$k" ]; then "$k" hook {other} "$@" >/dev/null 2>&1 || true; fi"#),
     };
     format!("{START}\n{find}\n{call}\n{END}\n")
@@ -254,6 +255,7 @@ fn pre_commit(app: &App) -> Result<i32> {
             .list()
             .into_iter()
             .filter(|e| e.visibility.as_deref() != Some("private"))
+            .filter(|e| Origin::of(&app.repo, e).is_ours())
             .filter(|e| {
                 code.iter().any(|p| e.paths.iter().any(|pat| crate::glob::path_matches(pat, p) || crate::glob::path_overlaps(pat, p)))
             })
@@ -326,13 +328,82 @@ fn prepare_commit_msg(app: &App, args: &[String]) -> Result<()> {
     }
     let Some(file) = args.first() else { return Ok(()) };
     let source = args.get(1).map(String::as_str).unwrap_or("");
-    if matches!(source, "merge" | "squash") {
+    // a merge commit only joins histories; a squash (`git merge --squash`) does carry the entries
+    if source == "merge" {
         return Ok(());
     }
-    for t in ops::staged_trailers(app)? {
-        app.repo.git(&["interpret-trailers", "--in-place", "--if-exists", "addIfDifferent", "--trailer", &t, file])?;
+    // an amended commit replaces HEAD, so what it adds is measured from HEAD's parent
+    let base = if is_amend(args) { Some(amend_base(app)?) } else { None };
+    let trailers = ops::staged_trailers_since(app, base.as_deref())?;
+    if trailers.is_empty() {
+        return Ok(());
     }
+    let mut cmd = vec!["interpret-trailers", "--in-place", "--if-exists", "addIfDifferent"];
+    for t in &trailers {
+        cmd.extend(["--trailer", t.as_str()]);
+    }
+    cmd.push(file);
+    app.repo.git(&cmd)?;
     Ok(())
+}
+
+/// `git commit --amend` reusing the message passes `commit HEAD`; with `-m`/`-F` the arguments do
+/// not tell, so the committing git process's command line is consulted.
+fn is_amend(args: &[String]) -> bool {
+    match args.get(1).map(String::as_str).unwrap_or("") {
+        "commit" => args.get(2).is_some_and(|c| c == "HEAD"),
+        "" | "message" | "template" => git_commit_args().is_some_and(|a| a.iter().skip(1).any(|x| x.starts_with("--amen"))),
+        _ => false,
+    }
+}
+
+fn amend_base(app: &App) -> Result<String> {
+    if let Some(parent) = app.repo.git_opt(&["rev-parse", "-q", "--verify", "HEAD^"]).filter(|s| !s.is_empty()) {
+        return Ok(parent);
+    }
+    // amending the root commit: everything in the index is new
+    Ok(app.repo.git_with_stdin(&["mktree"], "")?.trim().to_string())
+}
+
+/// The command line of the `git` process running this hook: the nearest git ancestor, starting
+/// at `KONTEXT_GIT_PID` (set by the hook) or at our parent (hooks installed by older versions).
+fn git_commit_args() -> Option<Vec<String>> {
+    #[cfg(unix)]
+    {
+        let mut pid: u32 =
+            std::env::var("KONTEXT_GIT_PID").ok().and_then(|p| p.trim().parse().ok()).unwrap_or_else(std::os::unix::process::parent_id);
+        for _ in 0..6 {
+            let (ppid, argv) = process_info(pid)?;
+            if argv.first().is_some_and(|a| a.rsplit('/').next() == Some("git")) {
+                return Some(argv);
+            }
+            if ppid <= 1 {
+                return None;
+            }
+            pid = ppid;
+        }
+    }
+    None
+}
+
+/// Parent pid and argv of a process.
+#[cfg(unix)]
+fn process_info(pid: u32) -> Option<(u32, Vec<String>)> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let ppid = stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()?;
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let argv = cmdline.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).to_string()).collect();
+        Some((ppid, argv))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let out = std::process::Command::new("ps").args(["-o", "ppid=", "-o", "args=", "-p", &pid.to_string()]).output().ok()?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (ppid, args) = line.split_once(char::is_whitespace)?;
+        Some((ppid.trim().parse().ok()?, args.split_whitespace().map(str::to_string).collect()))
+    }
 }
 
 /// Compare knowledge at HEAD with the last synced snapshot and queue `sync` events for changes.

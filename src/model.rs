@@ -28,27 +28,34 @@ fn norm_key(s: &str) -> String {
     util::one_line(s).to_lowercase().chars().filter(|c| c.is_alphanumeric()).take(90).collect()
 }
 
-/// Normalize scores per source (max = 1), apply weights, interleave, dedupe by URI and near-identical text.
+/// Merge ranked lists from several sources with weighted reciprocal rank fusion: every source
+/// contributes by rank, so no source's score scale (BM25 here, cosine similarity there) crowds the
+/// others out, and a single source keeps its own order. Dedupes by URI, near-identical text and
+/// adapter copies of local entries (a `sync`ed entry comes back as `…/<id>.md`).
 pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
+    // small k: the top of each list matters most
+    const K: f32 = 8.0;
     let mut all = Vec::new();
     for g in groups {
-        let max = g.hits.iter().map(|h| h.score).fold(0.0f32, f32::max);
-        let n = g.hits.len().max(1) as f32;
         for (i, mut h) in g.hits.into_iter().enumerate() {
             if h.source.is_empty() {
                 h.source = g.source.clone();
             }
-            let norm = if max > 0.0 { h.score / max } else { 1.0 - (i as f32 / n) * 0.5 };
-            h.score = norm * g.weight;
+            h.score = g.weight / (K + 1.0 + i as f32);
             all.push(h);
         }
     }
+    // stable: on equal scores the earlier group (local) stays first
     all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    let local_ids: HashSet<String> = all.iter().filter_map(|h| h.uri.strip_prefix("kx:")).map(str::to_string).collect();
     let mut seen_uri = HashSet::new();
     let mut seen_text = HashSet::new();
     let mut out = Vec::new();
     for h in all {
         if !h.uri.is_empty() && !seen_uri.insert(h.uri.clone()) {
+            continue;
+        }
+        if mirrored_id(&h.uri).is_some_and(|id| local_ids.contains(id)) {
             continue;
         }
         let key = norm_key(&format!("{} {}", h.title, h.snippet));
@@ -61,6 +68,15 @@ pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
         }
     }
     out
+}
+
+/// The entry id an adapter URI names by its last segment (`viking://…/decision/<id>.md` → `<id>`).
+fn mirrored_id(uri: &str) -> Option<&str> {
+    if !uri.contains("://") {
+        return None;
+    }
+    let last = uri.trim_end_matches('/').rsplit('/').next()?;
+    Some(last.strip_suffix(".md").unwrap_or(last)).filter(|s| !s.is_empty())
 }
 
 pub fn render(hits: &[Hit], budget_tokens: usize) -> String {
@@ -122,5 +138,39 @@ mod tests {
         let uris: Vec<_> = m.iter().map(|h| h.uri.as_str()).collect();
         assert_eq!(uris, vec!["kx:a", "kx:b"], "same-text and same-uri hits collapse");
         assert!(render(&m, 1000).contains("1. Alpha"));
+    }
+
+    #[test]
+    fn fusion_interleaves_sources() {
+        // BM25 falls off steeply, semantic scores sit close together: neither may crowd out the other
+        let local = HitGroup {
+            source: "local".into(),
+            weight: 1.0,
+            hits: (0..6).map(|i| hit("local", &format!("kx:l{i}"), &format!("local {i}"), 12.0 / (i as f32 + 1.0))).collect(),
+        };
+        let ov = HitGroup {
+            source: "ov".into(),
+            weight: 0.9,
+            hits: (0..6).map(|i| hit("ov", &format!("viking://p/r/v{i}.md"), &format!("remote {i}"), 0.62 - i as f32 * 0.01)).collect(),
+        };
+        let m = merge(vec![local, ov], 8);
+        let local_n = m.iter().filter(|h| h.source == "local").count();
+        assert!((3..=5).contains(&local_n), "{:?}", m.iter().map(|h| &h.uri).collect::<Vec<_>>());
+        assert_eq!(m[0].uri, "kx:l0");
+    }
+
+    #[test]
+    fn adapter_copies_of_local_entries_collapse() {
+        let local = HitGroup { source: "local".into(), weight: 1.0, hits: vec![hit("local", "kx:use-postgres", "Use Postgres", 3.0)] };
+        let ov = HitGroup {
+            source: "ov".into(),
+            weight: 0.9,
+            hits: vec![
+                hit("ov", "viking://user/u/peers/p/resources/kontext/decision/use-postgres.md", "viking copy", 0.9),
+                hit("ov", "viking://user/u/peers/p/memories/other.md", "other memory", 0.8),
+            ],
+        };
+        let uris: Vec<String> = merge(vec![local, ov], 10).into_iter().map(|h| h.uri).collect();
+        assert_eq!(uris, vec!["kx:use-postgres".to_string(), "viking://user/u/peers/p/memories/other.md".to_string()]);
     }
 }

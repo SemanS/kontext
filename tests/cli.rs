@@ -95,6 +95,10 @@ fn seed(s: &Sandbox) {
     s.write("libs/pricing/src/index.ts", "export function price(n: number) { return n * 100; }\n");
     s.write("libs/pricing/src/tax.ts", "export const VAT = 0.2;\n");
     s.write("libs/pricing/src/round.ts", "export function round(n: number) { return Math.round(n); }\n");
+    // a package without README or manifest description: its docstring describes it
+    s.write("worker/__init__.py", "\"\"\"Background jobs that recompute prices overnight.\"\"\"\n");
+    s.write("worker/jobs.py", "def nightly():\n    return 0\n");
+    s.write("worker/queue.py", "class Queue:\n    pass\n");
     s.ok_git(&["add", "-A"]);
     s.ok_git(&["commit", "-q", "-m", "feat: storefront and api"]);
     s.write("libs/pricing/src/money.ts", "export type Cents = number;\n");
@@ -124,6 +128,9 @@ fn end_to_end() {
     assert!(pricing.contains("Price calculation shared by API and storefront"), "{pricing}");
     let api = std::fs::read_to_string(s.repo.join(".ai/architecture/modules/apps-api.md")).unwrap();
     assert!(api.contains("`libs/pricing`"), "dependency edge from the workspace dep/import: {api}");
+
+    let overview = std::fs::read_to_string(s.repo.join(".ai/architecture/overview.md")).unwrap();
+    assert!(overview.contains("Background jobs that recompute prices overnight."), "{overview}");
 
     let brief = s.kontext(&["brief", "--no-adapters"]);
     assert!(brief.contains("# shop — team context"), "{brief}");
@@ -166,6 +173,38 @@ fn end_to_end() {
     let files = s.ok_git(&["show", "--name-only", "--format=", "HEAD"]);
     assert!(files.contains(".ai/decisions/"), "{files}");
     assert!(files.contains(".ai/README.md"), "index refreshed and staged by pre-commit: {files}");
+    // rewording keeps the trailer: an amend measures from HEAD's parent
+    s.ok_git(&["commit", "-q", "--amend", "-m", "fix(pricing): round in cents, reworded"]);
+    let msg = s.ok_git(&["log", "-1", "--format=%B"]);
+    assert_eq!(msg.matches("Decision: ").count(), 1, "trailer kept once on amend -m: {msg}");
+    // …and the index forgets the commit the amend replaced
+    let search = s.kontext(&["search", "round", "in", "cents"]);
+    assert!(search.contains("reworded") && !search.contains("round in cents —"), "{search}");
+
+    // a candidate captured in another worktree is not offered for this commit
+    let wt = s.repo.with_file_name("e2e-worktree");
+    s.ok_git(&["worktree", "add", "-q", "-b", "other", wt.to_str().unwrap()]);
+    let other = s.kontext(&[
+        "capture",
+        "-C",
+        wt.to_str().unwrap(),
+        "--kind",
+        "learning",
+        "--title",
+        "Tax tables load lazily",
+        "--paths",
+        "libs/pricing/**",
+        "--body",
+        "The VAT table is read on first use.",
+    ]);
+    assert!(other.contains("captured inbox:"), "{other}");
+    s.write("libs/pricing/src/tax.ts", "export const VAT = 0.2; // standard rate\n");
+    s.ok_git(&["add", "libs/pricing/src/tax.ts"]);
+    let report = s.kontext(&["prepare-commit"]);
+    assert!(report.contains("Captured in other worktrees") && !report.contains("## Inbox candidates"), "{report}");
+    s.ok_git(&["restore", "-q", "--staged", "libs/pricing/src/tax.ts"]);
+    s.ok_git(&["checkout", "-q", "--", "libs/pricing/src/tax.ts"]);
+    s.ok_git(&["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
     let log = s.kontext(&["log"]);
     assert!(log.contains("Prices are integer cents"), "{log}");
@@ -227,6 +266,13 @@ fn mcp_session(repo: &Path, config: &Path) {
     for t in ["ctx_brief", "ctx_search", "ctx_capture", "ctx_prepare_commit", "ctx_init", "ctx_init_submit"] {
         assert!(tools.contains(&t), "{t} missing from {tools:?}");
     }
+    // clients such as Codex decide approval by these hints
+    for t in replies[&2]["result"]["tools"].as_array().unwrap() {
+        let a = &t["annotations"];
+        assert!(a["readOnlyHint"].is_boolean() && a["destructiveHint"] != true, "{t}");
+    }
+    let brief_tool = replies[&2]["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "ctx_brief").unwrap();
+    assert_eq!(brief_tool["annotations"]["readOnlyHint"], true);
     let brief = replies[&3]["result"]["content"][0]["text"].as_str().unwrap();
     assert!(brief.contains("Prices are integer cents"), "{brief}");
     assert_eq!(replies[&4]["result"]["prompts"][0]["name"], "kontext-init");

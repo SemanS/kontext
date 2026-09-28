@@ -1041,6 +1041,10 @@ fn detect_modules(
                 docs.push(p);
             }
         }
+        // no manifest description and no README: the package's own doc comment
+        if description.is_none() {
+            description = code_doc(repo, dir).filter(|d| !util::is_boilerplate(d)).map(|d| util::truncate_chars(&d, 220));
+        }
         // key files + symbols + imports
         let mut scored: Vec<(f32, &String, usize, FileSym)> = Vec::new();
         let mut imports_all: Vec<(String, String)> = Vec::new(); // (importing file, spec)
@@ -1260,6 +1264,48 @@ pub fn rank_modules(modules: &mut [Module]) {
     for (rank, (_, i)) in scored.into_iter().enumerate() {
         modules[i].rank = rank + 1;
     }
+}
+
+/// A package's doc comment: a Python `__init__.py` docstring, Rust `//!` crate docs, Go's `doc.go`.
+fn code_doc(repo: &Repo, dir: &str) -> Option<String> {
+    let read = |rel: &str| read_small(repo, &format!("{dir}/{rel}"), 200_000);
+    if let Some(t) = read("__init__.py") {
+        let t = t.trim_start_matches('\u{feff}');
+        let body: String = t.lines().skip_while(|l| l.trim().is_empty() || l.trim_start().starts_with('#')).collect::<Vec<_>>().join("\n");
+        for q in ["\"\"\"", "\'\'\'"] {
+            if let Some(rest) = body.strip_prefix(q)
+                && let Some(end) = rest.find(q)
+            {
+                let p = util::first_paragraph(&rest[..end], 400);
+                if !p.is_empty() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    for rel in ["src/lib.rs", "src/main.rs", "lib.rs"] {
+        if let Some(t) = read(rel) {
+            let doc: Vec<&str> = t
+                .lines()
+                .skip_while(|l| l.trim().is_empty() || l.trim_start().starts_with("#!["))
+                .take_while(|l| l.trim_start().starts_with("//!"))
+                .map(|l| l.trim_start().trim_start_matches("//!").trim())
+                .collect();
+            let p = util::first_paragraph(&doc.join("\n"), 400);
+            if !p.is_empty() {
+                return Some(p);
+            }
+        }
+    }
+    if let Some(t) = read("doc.go") {
+        let doc: Vec<&str> =
+            t.lines().take_while(|l| l.trim_start().starts_with("//")).map(|l| l.trim_start().trim_start_matches("//").trim()).collect();
+        let p = util::first_paragraph(&doc.join("\n"), 400);
+        if !p.is_empty() {
+            return Some(p);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

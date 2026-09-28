@@ -8,12 +8,24 @@ Codex reads MCP servers from `~/.codex/config.toml`:
 [mcp_servers.kontext]
 command = "kontext"
 args = ["mcp"]
+# kontext's tools read the repository and write only the local inbox and the working tree;
+# without this, approval_policy = "never" refuses every call
+default_tools_approval_mode = "approve"
 ```
 
 ```sh
 kontext connect codex            # prints the snippet
-kontext connect codex --write    # appends it (a timestamped backup of the file is kept)
+kontext connect codex --write    # appends it, or adds the approval mode to an existing entry (a timestamped backup is kept)
 ```
+
+## Approvals
+
+Codex asks before calling an MCP tool unless it can tell the tool is harmless, and with `approval_policy = "never"` it refuses instead of asking: `MCP tool call requires approval, but approval policy is never`. Two things keep kontext working in that setup:
+
+- every kontext tool carries MCP annotations — `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` and `ctx_log` are `readOnlyHint: true`, the rest are marked non-destructive (they write only the local inbox, the working tree and the git index), which Codex runs without asking;
+- `default_tools_approval_mode = "approve"` in the server entry approves kontext's tools explicitly, independent of how a Codex version reads the hints.
+
+With `sandbox_mode = "workspace-write"` Codex keeps `.git` read-only for the agent's own shell commands, so `git add` / `git commit` fail there; kontext's server is not affected (`ctx_prepare_commit` still promotes and stages). Commit from a sandbox that allows it, or yourself.
 
 Run `codex` inside the repository; the server discovers the repository from its working directory. If your setup starts MCP servers elsewhere, pin the repository with `args = ["-C", "/path/to/repo", "mcp"]` or `env = { KONTEXT_DIR = "/path/to/repo" }`.
 

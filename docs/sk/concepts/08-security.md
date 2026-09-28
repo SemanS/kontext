@@ -31,6 +31,7 @@ Pre-commit hook skenuje každý stagnutý súbor znalostí; nálezy s vysokou is
 | kľúče Anthropic (`sk-ant-…`) a OpenAI (`sk-…`), kľúče dotenv-vault | vysoká |
 | hlavičky `Authorization: Bearer …`, prihlasovacie údaje v URL | vysoká |
 | API kľúče Google, JWT, priradenia `*_TOKEN=` / `password:` (zástupné hodnoty sa ignorujú) | stredná |
+| tajné údaje vo vetách – „the secret is …“, „rotate the api key …“ – keď hodnota vyzerá náhodne (zmiešané veľké a malé písmená, číslice, vysoká entropia; cesty a zástupné hodnoty sa ignorujú) | stredná |
 
 - `secrets.scan = "staged"` rozšíri skenovanie na každý stagnutý textový súbor (nielen znalosti).
 - Riadok, ktorý obsahuje `kontext:allow-secret` alebo zodpovedá regexu v `secrets.allow`, sa ignoruje.

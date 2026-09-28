@@ -13,6 +13,46 @@ pub struct Inbox {
     pub dir: PathBuf,
 }
 
+/// Where a candidate was captured, seen from the current worktree. The inbox is shared by all
+/// worktrees, so parallel agents see each other's candidates — only their own belong in their commits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// this worktree (or an entry that does not say)
+    Here,
+    /// another worktree that still exists: its session owns the candidate
+    Elsewhere { worktree: String, branch: Option<String> },
+    /// a worktree that is gone: anyone may adopt or drop it
+    Orphan,
+}
+
+impl Origin {
+    pub fn of(repo: &Repo, e: &Entry) -> Origin {
+        match e.get_extra("worktree").filter(|w| !w.is_empty()) {
+            None => Origin::Here,
+            Some(w) if w == repo.worktree_key => Origin::Here,
+            Some(w) if repo.worktree_alive(&w) => Origin::Elsewhere { worktree: w, branch: e.get_extra("branch") },
+            Some(_) => Origin::Orphan,
+        }
+    }
+
+    /// Candidates this worktree may put into its commits.
+    pub fn is_ours(&self) -> bool {
+        !matches!(self, Origin::Elsewhere { .. })
+    }
+
+    /// A short note for listings, empty for this worktree.
+    pub fn note(&self) -> String {
+        match self {
+            Origin::Here => String::new(),
+            Origin::Elsewhere { worktree, branch } => match branch {
+                Some(b) => format!(" (captured in worktree {worktree}, branch {b})"),
+                None => format!(" (captured in worktree {worktree})"),
+            },
+            Origin::Orphan => " (captured in a worktree that no longer exists)".into(),
+        }
+    }
+}
+
 impl Inbox {
     pub fn open(repo: &Repo) -> Inbox {
         Inbox { dir: repo.state_dir().join("inbox") }

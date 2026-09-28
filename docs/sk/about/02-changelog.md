@@ -2,6 +2,32 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.1.1 – 2026-09-28
+
+Opravy z testu v praxi na monorepe s 74 modulmi (moon/Cargo), na ktorom paralelne pracujú agenti Claude Code a Codex.
+
+**Agenti**
+- Codex už pri `approval_policy = "never"` neodmieta nástroje kontextu: každý nástroj nesie MCP anotácie (`readOnlyHint`, `destructiveHint`, `title`) a `kontext connect codex --write` pridá `default_tools_approval_mode = "approve"` (aj do existujúceho záznamu).
+- Paralelné worktree: `ctx_prepare_commit`, pripomienka v pre-commit hooku a brief ponúkajú len kandidátov z inboxu zachytených v aktuálnom worktree; kandidáti iného živého worktree sa vypíšu zvlášť („not for this commit“), kandidátov zmazaného worktree si môže prevziať ktokoľvek.
+- Brief vypíše každý `AGENTS.md` / `CLAUDE.md` medzi koreňom a zameranou cestou a zameranému modulu bez dokumentu modulu dá fakty zo skenu.
+- Prázdne hodnoty v zoznamových argumentoch (`--paths a,`, agentove `[""]`) sa zahodia, namiesto toho aby sa stali cestami, tagmi alebo nahradeniami záznamu.
+
+**Git**
+- `git commit --amend -m …` zachová trailery `Decision:` / `Convention:` … (amend sa meria od rodiča `HEAD`); dostanú ich aj commity z `git merge --squash`.
+- Hooky čítajú stagnuté znalosti jedným `git cat-file --batch` a cesty záznamov porovnávajú bez opakovanej kompilácie globov: commit 44 súborov znalostí sa skrátil zo 4,2 s na 0,4 s.
+- Vyhľadávací index zabudne commity, ktoré z histórie vypadli (amend, rebase).
+
+**Zavádzanie**
+- Hľadanie rozhodnutí rozpozná voľby formulované ako pravidlá („X, not Y“, „never“, „no longer“, „is gone“), viac slov zdôvodnenia a dlhé vysvetľujúce telá aj zakladajúci commit; keď prah prejde málo commitov, doplnia sa ďalšie najlepšie až do štvrtiny histórie. Malé zhluky sa pridajú k nadradenému modulu, veľké sa rozdelia na chronologické časti po najviac 8 commitoch; `init.max_decision_tasks` je predvolene 20. Z vyťažených správ sa odstránia trailery s autorstvom.
+- Popisy modulov sa v núdzi vezmú z dokumentačného komentára balíka (docstring v `__init__.py`, `//!` dokumentácia crate, `doc.go`); úvody README, ktoré končia uvádzacou vetou (`…:`), si zachovajú prvé vety.
+- Prehľad vymenuje moduly bez dokumentu a spočíta súbory s pravidlami pre agentov, ktoré nevypisuje.
+
+**Vyhľadávanie**
+- Federované vyhľadávanie spája zdroje váženým recipročným poradím, takže stlačené skóre podobnosti adaptéra už nevytláča lokálne znalosti; kópie lokálnych záznamov z adaptéra (synchronizované `…/<id>.md`) splynú s lokálnym výsledkom.
+
+**Bezpečnosť**
+- Tajné údaje zapísané vo vetách („the secret is …“, „rotate the token …“) sa zachytia, keď hodnota vyzerá náhodne; cesty a zástupné hodnoty zostanú nedotknuté.
+
 ## 0.1.0 – 2026-09-28
 
 Prvé verejné vydanie.

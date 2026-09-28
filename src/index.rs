@@ -18,7 +18,7 @@ use tantivy::schema::{Field, IndexRecordOption, STORED, STRING, Schema, TEXT, Va
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Copy)]
 struct Fields {
@@ -161,11 +161,15 @@ impl LocalIndex {
 
         let known: HashSet<String> = manifest.commits.iter().cloned().collect();
         let mut missing: Vec<String> = Vec::new();
+        let mut in_history: HashSet<String> = HashSet::new();
         if cfg.index.commits && repo.head().is_some() {
             let revs = repo.git(&["rev-list", &format!("--max-count={}", cfg.index.max_commits.max(1)), "HEAD"]).unwrap_or_default();
+            in_history = revs.lines().filter(|s| !s.is_empty()).map(str::to_string).collect();
             missing = revs.lines().map(str::to_string).filter(|s| !s.is_empty() && !known.contains(s)).collect();
         }
-        if changed.is_empty() && removed.is_empty() && missing.is_empty() {
+        // commits that left HEAD's history: rewritten by an amend or rebase, or on a branch left behind
+        let stale: Vec<String> = manifest.commits.iter().filter(|s| !in_history.contains(*s)).cloned().collect();
+        if changed.is_empty() && removed.is_empty() && missing.is_empty() && stale.is_empty() {
             return Ok(stats);
         }
 
@@ -199,6 +203,14 @@ impl LocalIndex {
             for d in docs {
                 writer.add_document(self.to_doc(&d))?;
             }
+        }
+        for sha in &stale {
+            writer.delete_term(Term::from_field_text(self.f.file, &format!("commit:{sha}")));
+        }
+        stats.removed += stale.len();
+        if !stale.is_empty() {
+            let gone: HashSet<&String> = stale.iter().collect();
+            manifest.commits.retain(|s| !gone.contains(s));
         }
         if !missing.is_empty() {
             let commits = read_commits(repo, &missing)?;
@@ -503,7 +515,8 @@ fn read_commits(repo: &Repo, shas: &[String]) -> Result<Vec<DocIn>> {
                 files.iter().take(120).map(|f| format!("{f} {}", f.replace(['/', '.', '-', '_'], " "))).collect::<Vec<_>>().join(" ");
             docs.push(DocIn {
                 uri: format!("git:{short}"),
-                file: String::new(),
+                // the full sha is the key that deletes the commit once it leaves the history
+                file: format!("commit:{sha}"),
                 source: "commit",
                 kind: "commit".into(),
                 title: subject.to_string(),

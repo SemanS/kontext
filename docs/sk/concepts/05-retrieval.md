@@ -26,7 +26,7 @@ BM25 nad titulkom (váha 2,5), pomocným textom s rozloženými identifikátormi
 
 ## Federované vyhľadávanie
 
-`ctx_search` pošle dopyt paralelne každému adaptéru s operáciou `search`, s limitom 12 sekúnd. Výsledky sa normalizujú pre každý zdroj (najlepší výsledok každého zdroja má skóre 1,0), zvážia, zlúčia a zbavia duplicít podľa URI a takmer rovnakého titulku/úryvku. Pomalý alebo zlyhávajúci adaptér nikdy nezablokuje odpoveď: objaví sa v poznámke a na 30 sekúnd si dá pauzu.
+`ctx_search` pošle dopyt paralelne každému adaptéru s operáciou `search`, s limitom 12 sekúnd. Zdroje sa spájajú váženým recipročným poradím (každý výsledok má skóre `weight / (8 + rank)`), takže škála skóre žiadneho zdroja – tu BM25, tam kosínusová podobnosť – nevytlačí ostatné a jediný zdroj si zachová vlastné poradie. Duplicity sa odstránia podľa URI, podľa takmer rovnakého titulku/úryvku a vtedy, keď adaptér vráti svoju kópiu lokálneho záznamu (synchronizované `…/<id>.md`). Pomalý alebo zlyhávajúci adaptér nikdy nezablokuje odpoveď: objaví sa v poznámke a na 30 sekúnd si dá pauzu.
 
 Vyhľadávanie zúžiš cez `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) a `sources` (`local` a/alebo názvy adaptérov).
 

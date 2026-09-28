@@ -20,7 +20,45 @@ fn arr(desc: &str) -> Value {
     json!({"type": "array", "items": {"type": "string"}, "description": desc})
 }
 
+/// MCP tool annotations. Clients use them to decide what needs approval: Codex, for one, runs
+/// read-only tools without asking and asks (or, with `approval_policy = "never"`, refuses) the rest.
+fn annotations(name: &str) -> Value {
+    let (title, read_only, destructive) = match name {
+        "ctx_brief" => ("Team brief", true, false),
+        "ctx_search" => ("Search team context", true, false),
+        "ctx_read" => ("Read a context URI", true, false),
+        "ctx_why" => ("Why is this code the way it is", true, false),
+        "ctx_log" => ("Decision timeline", true, false),
+        "ctx_capture" => ("Capture knowledge", false, false),
+        // `drop` discards only local, never-shared inbox drafts — not destructive in the MCP sense,
+        // and Codex refuses destructive tools outright under `approval_policy = "never"`
+        "ctx_inbox" => ("Knowledge inbox", false, false),
+        "ctx_prepare_commit" => ("Prepare the commit", false, false),
+        "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
+        "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
+        _ => ("", false, false),
+    };
+    let mut a = json!({"readOnlyHint": read_only, "openWorldHint": false});
+    if !title.is_empty() {
+        a["title"] = json!(title);
+    }
+    if !read_only {
+        a["destructiveHint"] = json!(destructive);
+        a["idempotentHint"] = json!(false);
+    }
+    a
+}
+
 pub fn definitions() -> Vec<Value> {
+    let mut defs = tool_list();
+    for d in &mut defs {
+        let name = d["name"].as_str().unwrap_or("").to_string();
+        d["annotations"] = annotations(&name);
+    }
+    defs
+}
+
+fn tool_list() -> Vec<Value> {
     vec![
         json!({
             "name": "ctx_brief",
@@ -227,11 +265,12 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                         .iter()
                         .map(|e| {
                             format!(
-                                "- `{}` [{}{}] {}\n",
+                                "- `{}` [{}{}] {}{}\n",
                                 e.id,
                                 e.kind,
                                 if e.visibility.as_deref() == Some("private") { ", private" } else { "" },
-                                e.l0(150)
+                                e.l0(150),
+                                crate::inbox::Origin::of(&app.repo, e).note()
                             )
                         })
                         .collect())

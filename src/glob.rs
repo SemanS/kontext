@@ -45,7 +45,24 @@ pub fn path_matches(pattern: &str, path: &str) -> bool {
         let pat = pat.trim_end_matches('/');
         return path == pat || path.starts_with(&format!("{pat}/"));
     }
-    Glob::new(pat).is_some_and(|g| g.matches(path))
+    // `dir/**` (the shape of most entry paths) is a plain prefix test
+    if let Some(dir) = pat.strip_suffix("/**")
+        && !has_glob_chars(dir)
+    {
+        return path == dir || path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'));
+    }
+    compiled(pat).is_some_and(|re| re.is_match(path))
+}
+
+/// Compiled globs, kept for the process: callers test one pattern against hundreds of paths.
+fn compiled(pat: &str) -> Option<Regex> {
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Option<Regex>>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if cache.len() > 4096 {
+        cache.clear();
+    }
+    cache.entry(pat.to_string()).or_insert_with(|| Regex::new(&glob_to_regex(pat)).ok()).clone()
 }
 
 /// Does `path` (a file or directory being asked about) overlap the pattern in either direction?
@@ -168,6 +185,11 @@ mod tests {
         assert!(path_matches("apps/billing-jobs/", "apps/billing-jobs/src/main.ts"));
         assert!(!path_matches("apps/billing-jobs", "apps/billing-jobs-2/x.ts"));
         assert!(path_matches("apps/*/src/**", "apps/web/src/x.ts"));
+        // the `dir/**` shortcut agrees with the compiled glob
+        for path in ["libs/cache", "libs/cache/src/lib.rs", "libs/cachex/a.rs", "libs", "x/libs/cache/a.rs", "libs/cache/"] {
+            assert_eq!(path_matches("libs/cache/**", path), Glob::new("libs/cache/**").unwrap().matches(path), "{path}");
+        }
+        assert!(path_matches("libs/cache/**", "libs/cache/src/lib.rs") && !path_matches("libs/cache/**", "libs/cachex/a.rs"));
         assert!(path_overlaps("apps/web/src/**", "apps/web"));
         assert!(!path_overlaps("apps/web/src/**", "apps/api"));
     }

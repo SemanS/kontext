@@ -520,11 +520,12 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                     for e in items {
                         println!(
-                            "{}  [{}{}]  {}",
+                            "{}  [{}{}]  {}{}",
                             e.id,
                             e.kind,
                             if e.visibility.as_deref() == Some("private") { ", private" } else { "" },
-                            e.l0(120)
+                            e.l0(120),
+                            inbox::Origin::of(&app.repo, &e).note()
                         );
                     }
                 }

@@ -21,6 +21,33 @@ pub fn agents_block() -> String {
     )
 }
 
+/// Codex asks before every MCP call of a tool it cannot tell is read-only, and with
+/// `approval_policy = "never"` it refuses them — so kontext's own tools are approved up front.
+const CODEX_SNIPPET: &str = "[mcp_servers.kontext]\ncommand = \"kontext\"\nargs = [\"mcp\"]\n# kontext's tools read the repository and write only the local inbox and the working tree;\n# without this, approval_policy = \"never\" refuses every call\ndefault_tools_approval_mode = \"approve\"\n";
+
+/// `~/.codex/config.toml` with kontext wired in, or None when it already is.
+fn codex_config(current: &str) -> Option<String> {
+    let lines: Vec<&str> = current.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.trim() == "[mcp_servers.kontext]") else {
+        let sep = if current.is_empty() || current.ends_with("\n\n") {
+            ""
+        } else if current.ends_with('\n') {
+            "\n"
+        } else {
+            "\n\n"
+        };
+        return Some(format!("{current}{sep}{CODEX_SNIPPET}"));
+    };
+    let end = lines[start + 1..].iter().position(|l| l.trim_start().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
+    if lines[start + 1..end].iter().any(|l| l.trim_start().starts_with("default_tools_approval_mode")) {
+        return None;
+    }
+    let mut out: Vec<&str> = lines[..=start].to_vec();
+    out.push("default_tools_approval_mode = \"approve\"");
+    out.extend_from_slice(&lines[start + 1..]);
+    Some(out.join("\n") + if current.ends_with('\n') { "\n" } else { "" })
+}
+
 fn merge_json_file(path: &Path, patch: impl FnOnce(&mut Value)) -> Result<bool> {
     let mut v: Value = match std::fs::read_to_string(path) {
         Ok(t) if !t.trim().is_empty() => {
@@ -106,29 +133,25 @@ pub fn connect(app: &App, target: &str, write: bool) -> Result<String> {
             Ok(format!("opencode: {} opencode.json", if changed { "wrote" } else { "already configured in" }))
         }
         "codex" => {
-            let snippet = "[mcp_servers.kontext]\ncommand = \"kontext\"\nargs = [\"mcp\"]\n";
             let path = util::home_dir().join(".codex").join("config.toml");
             if !write {
                 return Ok(format!(
-                    "Add to ~/.codex/config.toml (user level; run `kontext connect codex --write` to append it):\n{snippet}"
+                    "Add to ~/.codex/config.toml (user level; run `kontext connect codex --write` to append it):\n{CODEX_SNIPPET}"
                 ));
             }
             let current = std::fs::read_to_string(&path).unwrap_or_default();
-            if current.contains("[mcp_servers.kontext]") {
+            let Some(next) = codex_config(&current) else {
                 return Ok("codex: ~/.codex/config.toml already has [mcp_servers.kontext]".into());
-            }
+            };
             if path.exists() {
                 std::fs::copy(&path, path.with_extension(format!("toml.bak-kontext-{}", chrono::Local::now().format("%Y%m%d%H%M%S"))))?;
             }
-            let sep = if current.is_empty() || current.ends_with("\n\n") {
-                ""
-            } else if current.ends_with('\n') {
-                "\n"
+            util::write_atomic(&path, &next)?;
+            Ok(if current.contains("[mcp_servers.kontext]") {
+                "codex: added default_tools_approval_mode = \"approve\" to [mcp_servers.kontext] in ~/.codex/config.toml (backup kept next to it)".into()
             } else {
-                "\n\n"
-            };
-            util::write_atomic(&path, &format!("{current}{sep}{snippet}"))?;
-            Ok("codex: appended [mcp_servers.kontext] to ~/.codex/config.toml (backup kept next to it)".into())
+                "codex: appended [mcp_servers.kontext] to ~/.codex/config.toml (backup kept next to it)".into()
+            })
         }
         "agents-md" => {
             let candidates = ["AGENTS.md", "CLAUDE.md", "Claude.md"];
@@ -160,5 +183,28 @@ pub fn connect(app: &App, target: &str, write: bool) -> Result<String> {
             Ok(format!("agents-md: wrote the kontext block into {file}"))
         }
         other => bail!("unknown target '{other}' (use one of: {})", TARGETS.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_config_is_added_once() {
+        let fresh = codex_config("model = \"o3\"\n").unwrap();
+        assert!(fresh.starts_with("model = \"o3\"\n\n[mcp_servers.kontext]\n"));
+        assert!(fresh.contains("default_tools_approval_mode = \"approve\""));
+        assert_eq!(codex_config(&fresh), None);
+        // an entry written by an older kontext gets the approval mode, the rest stays as it was
+        let old = "[mcp_servers.kontext]\ncommand = \"kontext\"\nargs = [\"mcp\"]\n\n[mcp_servers.other]\nurl = \"x\"\n";
+        let upgraded = codex_config(old).unwrap();
+        assert_eq!(
+            upgraded,
+            "[mcp_servers.kontext]\ndefault_tools_approval_mode = \"approve\"\ncommand = \"kontext\"\nargs = [\"mcp\"]\n\n[mcp_servers.other]\nurl = \"x\"\n"
+        );
+        assert_eq!(codex_config(&upgraded), None);
+        let custom = "[mcp_servers.kontext]\ncommand = \"kontext\"\ndefault_tools_approval_mode = \"prompt\"\n";
+        assert_eq!(codex_config(custom), None, "an explicit choice is kept");
     }
 }

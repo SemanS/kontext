@@ -26,7 +26,7 @@ BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5) and body. 
 
 ## Federated search
 
-`ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. Results are normalized per source (the best hit of each source scores 1.0), weighted, merged, and de-duplicated by URI and by near-identical title/snippet. A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
+`ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. Sources are fused by weighted reciprocal rank (each hit scores `weight / (8 + rank)`), so no source's score scale — BM25 here, cosine similarity there — crowds the others out, and a single source keeps its own order. Hits are de-duplicated by URI, by near-identical title/snippet, and when an adapter returns its copy of a local entry (a `sync`ed `…/<id>.md`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
 
 Restrict a search with `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) and `sources` (`local` and/or adapter names).
 
