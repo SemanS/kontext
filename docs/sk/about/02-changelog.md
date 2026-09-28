@@ -15,6 +15,7 @@ Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.
 
 **Agenti**
 - Keď je kontext zaregistrovaný pre všetky repozitáre (user scope), tam, kde ho nikto nezaviedol, len číta: v repozitári bez úložiska znalostí to povedia MCP inštrukcie, `ctx_capture` odmietne tímové záznamy (súkromné poznámky fungujú ďalej), povýšenia sa odmietnu a `ctx_init` zavádza len s `bootstrap=true` (odovzdá ho prompt `kontext-init`).
+- Rozhodnutie alebo poznatok zachytený bez `paths` a povýšený so zmenou sa vzťahuje na súbory tej zmeny (konvencie zostávajú pre celý repozitár), takže ho `ctx_why` nájde pri kóde, ktorý vysvetľuje.
 - `kontext connect codex` zapisuje do `$CODEX_HOME/config.toml`, keď je `CODEX_HOME` nastavené (ako to robia obaly prepínajúce účty), v prípade potreby vytvorí adresár a zálohu spomenie, len keď ju naozaj vytvoril.
 
 ## 0.1.1 – 2026-09-28

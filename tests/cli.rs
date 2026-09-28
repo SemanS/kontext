@@ -252,6 +252,29 @@ fn end_to_end() {
     s.ok_git(&["checkout", "-q", "--", "libs/pricing/src/tax.ts"]);
     s.ok_git(&["worktree", "remove", "--force", wt.to_str().unwrap()]);
 
+    // a decision captured without paths governs the change it is promoted with
+    let cap = s.kontext(&[
+        "capture",
+        "--kind",
+        "decision",
+        "--title",
+        "Carts expire after a day",
+        "--body",
+        "Abandoned carts are dropped after 24 hours to keep the store small.",
+    ]);
+    let pathless = cap.trim().rsplit(':').next().unwrap().trim().to_string();
+    s.write("apps/api/src/cart.ts", "export class Cart { total() { return 0; } expires = 86400; }\n");
+    s.kontext(&["prepare-commit", "--promote", &pathless]);
+    let promoted = std::fs::read_dir(s.repo.join(".ai/decisions"))
+        .unwrap()
+        .flatten()
+        .find(|f| f.file_name().to_string_lossy().contains("carts-expire"))
+        .unwrap();
+    let text = std::fs::read_to_string(promoted.path()).unwrap();
+    assert!(text.contains("paths: [apps/api/src/cart.ts]"), "{text}");
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "feat(cart): carts expire after a day"]);
+
     let log = s.kontext(&["log"]);
     assert!(log.contains("Prices are integer cents"), "{log}");
     let why = s.kontext(&["why", "libs/pricing/src/round.ts"]);

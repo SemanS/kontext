@@ -387,6 +387,11 @@ pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, St
         e.visibility = None;
         e.id.clear();
         e.rel_path.clear();
+        // a decision captured without paths governs the change it ships with (conventions are
+        // usually repository-wide and keep none)
+        if stage && e.paths.is_empty() && e.kind != "convention" {
+            e.paths = change_paths(app);
+        }
         let rel = store.write_new(&mut e)?;
         let superseded = apply_supersedes(app, &e, stage)?;
         inbox.mark_promoted(&cand.id, &rel)?;
@@ -399,6 +404,18 @@ pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, St
     }
     kick_outbox(app);
     Ok(done)
+}
+
+/// The code a commit in progress changes: what is staged, else the working tree (up to 8 paths).
+fn change_paths(app: &App) -> Vec<String> {
+    let store = app.store();
+    let code = |list: Vec<(char, String)>| -> Vec<String> {
+        list.into_iter().filter(|(st, p)| *st != 'D' && !store.is_store_path(p)).map(|(_, p)| p).collect()
+    };
+    let staged = code(app.repo.staged_paths().unwrap_or_default());
+    let mut paths = if staged.is_empty() { code(app.repo.changed_paths().unwrap_or_default()) } else { staged };
+    paths.truncate(8);
+    paths
 }
 
 // ------------------------------------------------------------------------------------- brief
