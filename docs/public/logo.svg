@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="kontext">
+  <defs>
+    <linearGradient id="kx-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4338ca"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#kx-bg)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M90 62 V194"/>
+    <path d="M90 140 C120 140 138 104 166 78"/>
+    <path d="M118 132 C140 150 152 170 166 190"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="90" cy="62" r="17"/>
+    <circle cx="90" cy="194" r="17"/>
+    <circle cx="170" cy="74" r="17"/>
+    <circle cx="170" cy="194" r="17"/>
+  </g>
+  <circle cx="90" cy="140" r="11" fill="#ffffff" stroke="#0d9488" stroke-width="6"/>
+</svg>

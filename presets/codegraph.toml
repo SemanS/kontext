@@ -1,0 +1,16 @@
+# CodeGraph — local code knowledge graph, through its stdio MCP server.
+#   code : symbol lookup for `ctx_why <symbol>` and module summaries
+# Set expose = "all" to re-publish CodeGraph's tools through kontext (one MCP server for agents
+# that do not have CodeGraph configured directly).
+[adapters.codegraph]
+driver = "mcp"
+description = "CodeGraph code intelligence (symbols, callers, impact)"
+command = ["codegraph", "serve", "--mcp"]
+when = { command = "codegraph", file = ".codegraph" }
+timeout_ms = 20000
+expose = "none"
+
+[adapters.codegraph.ops.code]
+tool = "codegraph_search"
+split = "### "
+map = { uri = 're:([\w./@-]+\.\w+:\d+)' }

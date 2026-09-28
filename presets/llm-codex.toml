@@ -1,0 +1,12 @@
+# Codex CLI (codex exec) as the `llm` for `kontext init --deepen --llm llm-codex`.
+[adapters.llm-codex]
+driver = "command"
+description = "Codex (codex exec) for autonomous deepening"
+when = { command = "codex" }
+timeout_ms = 600000
+
+[adapters.llm-codex.ops.llm]
+command = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral", "--output-last-message", "{{output_file}}", "-"]
+stdin = "{{prompt}}"
+output_file = true
+format = "text"

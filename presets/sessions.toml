@@ -1,0 +1,18 @@
+# sessions — unified index of agent session transcripts (https://github.com/nicknisi/sessions).
+# Not verified on this machine; arguments are bound from each tool's schema.
+[adapters.sessions]
+driver = "mcp"
+description = "sessions: agent transcripts, why_did_this_change"
+command = ["sessions", "--mcp"]
+when = { command = "sessions" }
+timeout_ms = 20000
+weight = 0.7
+
+[adapters.sessions.ops.history]
+tool = "why_did_this_change"
+
+[adapters.sessions.ops.search]
+tool = "search_sessions"
+
+[adapters.sessions.ops.brief]
+tool = "get_context_primer"

@@ -1,0 +1,15 @@
+# Post newly merged decisions to a Slack channel (incoming webhook). Export KONTEXT_SLACK_WEBHOOK.
+[adapters.slack-decisions]
+driver = "http"
+description = "Announce merged decisions in Slack"
+url = "{{env.KONTEXT_SLACK_WEBHOOK}}"
+when = { env = "KONTEXT_SLACK_WEBHOOK" }
+
+[adapters.slack-decisions.ops.store]
+method = "POST"
+body = { text = "New {{kind}} in {{source.repo}}: *{{title}}* — {{summary}}" }
+
+[[adapters.slack-decisions.on]]
+event = "sync"
+op = "store"
+kinds = ["decision"]

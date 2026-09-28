@@ -1,0 +1,14 @@
+# Claude Code in print mode as the `llm` for `kontext init --deepen --llm llm-claude`.
+[adapters.llm-claude]
+driver = "command"
+description = "Claude Code (claude -p) for autonomous deepening"
+when = { command = "claude" }
+timeout_ms = 300000
+
+[adapters.llm-claude.vars]
+model = "sonnet"
+
+[adapters.llm-claude.ops.llm]
+command = ["claude", "-p", "--output-format", "text", "--model", "{{vars.model}}"]
+stdin = "{{prompt}}"
+format = "text"

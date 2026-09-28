@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/SemanS/kontext/discussions
+    about: Ask and discuss in GitHub Discussions.
+  - name: Documentation
+    url: https://semans.github.io/kontext/
+    about: Guides, concepts and reference.
+  - name: Security vulnerability
+    url: https://github.com/SemanS/kontext/security/advisories/new
+    about: Report privately, please.

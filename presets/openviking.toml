@@ -1,0 +1,67 @@
+# OpenViking — context database for agents (https://github.com/volcengine/OpenViking), via its HTTP API.
+#   search : semantic recall inside this repository's peer space
+#   read   : viking:// URIs returned by search
+#   store  : mirrors team knowledge that reached HEAD (`sync`) into the peer's resources/
+#   remember: private captures become the peer's memories/
+# Set `vars.user` to your OpenViking user (or export OPENVIKING_USER); the peer defaults to the
+# project name — override it per repository in ~/.config/kontext/repos/<slug>.toml.
+# To use OpenViking only for some repositories, uncomment one of the `when` lines below.
+[adapters.openviking]
+driver = "http"
+description = "OpenViking semantic memory (personal/project peer space)"
+base_url = "{{env.OPENVIKING_URL|default:http://127.0.0.1:1933}}"
+timeout_ms = 15000
+weight = 0.9
+# when = { repo = "github.com/acme/(shop|billing)" }
+# when = { exists = "{{env.HOME}}/.openviking/workspaces/{{vars.peer}}-*.json" }   # a per-repo opt-in file
+
+[adapters.openviking.vars]
+account = "default"
+user = "{{env.OPENVIKING_USER|default:default}}"
+peer = "{{project.name}}"
+
+[adapters.openviking.headers]
+"X-OpenViking-Account" = "{{vars.account}}"
+"X-OpenViking-User" = "{{vars.user}}"
+
+[adapters.openviking.ops.search]
+method = "POST"
+path = "/api/v1/search/find"
+body = { query = "{{query}}", target_uri = "viking://user/{{vars.user}}/peers/{{vars.peer}}/", limit = "{{limit}}" }
+items = "result.*[*]"
+map = { title = "uri", snippet = "abstract", kind = "context_type" }
+
+[adapters.openviking.ops.read]
+method = "GET"
+path = "/api/v1/content/read"
+query = { uri = "{{uri}}" }
+text = "result"
+owns = ["viking://"]
+
+[adapters.openviking.ops.store]
+method = "POST"
+path = "/api/v1/content/write"
+body = { uri = "viking://user/{{vars.user}}/peers/{{vars.peer}}/resources/kontext/{{kind}}/{{id}}.md", content = "{{markdown}}", mode = "replace", wait = false }
+text = "status"
+
+# private captures are personal memories of this project (team knowledge goes to resources/ above)
+[adapters.openviking.ops.remember]
+method = "POST"
+path = "/api/v1/content/write"
+body = { uri = "viking://user/{{vars.user}}/peers/{{vars.peer}}/memories/kontext/{{kind}}/{{id}}.md", content = "{{markdown}}", mode = "replace", wait = false }
+text = "status"
+
+[adapters.openviking.ops.health]
+method = "GET"
+path = "/health"
+
+# team knowledge that reached HEAD (after commit / merge / rebase); add "architecture" to mirror module docs too
+[[adapters.openviking.on]]
+event = "sync"
+op = "store"
+kinds = ["decision", "convention", "learning", "incident"]
+
+[[adapters.openviking.on]]
+event = "capture"
+op = "remember"
+visibility = "private"

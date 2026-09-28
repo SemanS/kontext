@@ -1,0 +1,15 @@
+# A local Ollama model as the `llm` for `kontext init --deepen --llm llm-ollama`.
+[adapters.llm-ollama]
+driver = "http"
+description = "Ollama (local model) for autonomous deepening"
+base_url = "{{env.OLLAMA_HOST|default:http://127.0.0.1:11434}}"
+timeout_ms = 900000
+
+[adapters.llm-ollama.vars]
+model = "qwen2.5-coder:14b"
+
+[adapters.llm-ollama.ops.llm]
+method = "POST"
+path = "/api/generate"
+body = { model = "{{vars.model}}", prompt = "{{prompt}}", stream = false }
+text = "response"

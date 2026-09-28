@@ -1,0 +1,18 @@
+# Agent LCM — lossless, cross-harness session archive (https://github.com/Team-Volt/agent-lcm).
+# Not verified on this machine; arguments are bound from each tool's schema.
+[adapters.agent-lcm]
+driver = "mcp"
+description = "Agent LCM session history (Claude Code, Codex, Cursor, OpenCode, …)"
+command = ["agent-lcm", "mcp"]
+when = { command = "agent-lcm" }
+timeout_ms = 20000
+weight = 0.7
+
+[adapters.agent-lcm.ops.search]
+tool = "lcm_grep"
+
+[adapters.agent-lcm.ops.history]
+tool = "lcm_grep"
+
+[adapters.agent-lcm.ops.brief]
+tool = "lcm_pack_context"

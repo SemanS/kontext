@@ -1,0 +1,14 @@
+# Serena — language-server (LSP) code navigation (https://github.com/oraios/serena).
+# Not verified on this machine. Without a `serena` binary use:
+#   command = ["uvx", "--from", "git+https://github.com/oraios/serena", "serena", "start-mcp-server", "--context", "ide", "--project", "{{repo.root}}"]
+[adapters.serena]
+driver = "mcp"
+description = "Serena LSP code navigation"
+command = ["serena", "start-mcp-server", "--context", "ide", "--project", "{{repo.root}}"]
+when = { command = "serena" }
+timeout_ms = 60000
+expose = "none"
+
+# Arguments are bound from the tool's schema (name_path / name_path_pattern ← query).
+[adapters.serena.ops.code]
+tool = "find_symbol"

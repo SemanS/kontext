@@ -1,0 +1,37 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report! Please check existing issues first. Security problems go to a private advisory instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. kontext init in a repository with …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Relevant command output. Remove secrets and private paths.
+      render: text
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Output of `kontext --version` and `kontext status`, your OS, git version, and the agent client (Claude Code, Codex, …) if relevant.
+      render: text
+    validations:
+      required: true

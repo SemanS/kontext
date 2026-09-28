@@ -1,0 +1,35 @@
+name: Adapter preset
+description: Ask for (or offer) a preset for a memory, history, code or LLM system
+labels: ["preset"]
+body:
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Name and link of the tool or service.
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface
+      options: [MCP server (stdio), MCP server (HTTP), HTTP API, CLI, other]
+    validations:
+      required: true
+  - type: checkboxes
+    id: ops
+    attributes:
+      label: Capabilities it could provide
+      options:
+        - label: search
+        - label: read
+        - label: history
+        - label: code
+        - label: brief
+        - label: store (receives events)
+        - label: llm
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Tool names or endpoints, example responses (`kontext adapters inspect <name>` output helps), authentication.

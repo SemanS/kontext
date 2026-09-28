@@ -1,0 +1,30 @@
+[package]
+name = "kontext"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Team context bridge for coding agents: git-native decision memory, one MCP server, pluggable adapters"
+repository = "https://github.com/SemanS/kontext"
+readme = "README.md"
+keywords = ["mcp", "agents", "adr", "git", "knowledge"]
+categories = ["command-line-utilities", "development-tools"]
+license = "MIT OR Apache-2.0"
+homepage = "https://semans.github.io/kontext/"
+documentation = "https://semans.github.io/kontext/"
+exclude = ["docs/", ".github/", ".ai/"]
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tantivy = "0.26.2"
+toml = "1.1.6"
+ureq = { version = "3.4.2", features = ["json"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
