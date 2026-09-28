@@ -24,7 +24,7 @@ jobs:
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - run: tar -czf kontext-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release kontext
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: kontext-${{ matrix.target }}.tar.gz
           generate_release_notes: true
