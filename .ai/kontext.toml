@@ -1,0 +1,17 @@
+# kontext — shared configuration for this repository (committed, reviewed like code).
+# Personal adapters (OpenViking, codegraph, Serena, …) belong in ~/.config/kontext/config.toml;
+# adapters declared here only run after each teammate reviews them with `kontext trust`.
+
+[project]
+name = "kontext"
+
+[store]
+dir = ".ai"
+
+[hooks]
+# prepare-commit-msg adds trailers such as `Decision: <id>` for knowledge committed with code
+trailers = true
+
+[secrets]
+# "store": scan knowledge files only · "staged": every staged text file · "off"
+scan = "store"

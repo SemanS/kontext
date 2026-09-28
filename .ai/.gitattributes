@@ -1,0 +1,2 @@
+# the generated index is re-rendered on every commit; union-merge keeps parallel branches conflict-free
+README.md merge=union
