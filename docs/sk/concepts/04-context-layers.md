@@ -4,7 +4,7 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 
 ## Brief
 
-`ctx_brief` (alebo `kontext brief`) je vstupný bod – jeden blok s približne 1–2k tokenmi (`brief.budget_tokens`, predvolene 1400):
+`ctx_brief` (alebo `kontext brief`) je vstupný bod, jeden blok s približne 1–2k tokenmi (`brief.budget_tokens`, predvolene 1400):
 
 | Sekcia | Obsah |
 | --- | --- |
@@ -18,7 +18,7 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami.
 
-Claude Code môže dostať brief automaticky na začiatku session – pozri [Claude Code](../agent-integrations/02-claude-code.md).
+Claude Code môže dostať brief automaticky na začiatku session. Pozri [Claude Code](../agent-integrations/02-claude-code.md).
 
 ## Úrovne: L0 · L1 · L2
 
@@ -48,4 +48,4 @@ Každý výsledok nesie URI. `ctx_read` ho vráti v úrovni, o ktorú agent pož
 - `ctx_why` drží každú sekciu krátku: najviac `limit` položiek na sekciu.
 - Sekcie adaptérov v briefe dostanú každá najviac tretinu zvyšného rozpočtu.
 
-Počty tokenov sa odhadujú na štyri znaky na token – zámerne jednoducho a konzervatívne.
+Počty tokenov sa odhadujú na štyri znaky na token, zámerne jednoducho a konzervatívne.

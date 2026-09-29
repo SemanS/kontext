@@ -27,9 +27,9 @@ English / [Slovenčina](README_SK.md)
 
 ## What is kontext
 
-kontext gives every coding agent you run — Claude Code, Codex, Cursor, OpenCode, anything that speaks MCP — the same short, **reviewed** memory of *why the code is the way it is*, and turns "the agent figured something out" into "the team knows it" through ordinary commits.
+kontext gives every coding agent you run (Claude Code, Codex, Cursor, OpenCode, anything that speaks MCP) the same short, **reviewed** memory of *why the code is the way it is*, and turns "the agent figured something out" into "the team knows it" through ordinary commits.
 
-It is one fast Rust binary with three faces: an **MCP server** (`kontext mcp`), a **CLI**, and a set of **git hooks**. Team knowledge lives in the repository as short Markdown files. Everything else — semantic memory, session archives, code intelligence, LLMs — plugs in as a **configured adapter**; kontext's code never names a product.
+It is one fast Rust binary with three faces: an **MCP server** (`kontext mcp`), a **CLI**, and a set of **git hooks**. Team knowledge lives in the repository as short Markdown files. Everything else (semantic memory, session archives, code intelligence, LLMs) plugs in as a **configured adapter**; kontext's code never names a product.
 
 ```text
                  Claude Code · Codex · Cursor · OpenCode · any MCP client
@@ -57,7 +57,7 @@ It is one fast Rust binary with three faces: an **MCP server** (`kontext mcp`), 
 - **One brief, budgeted.** `ctx_brief` returns the active decisions, conventions, pitfalls and module map in ~1–2k tokens, ranked for the paths the agent is about to touch; details come on demand at L0/L1/L2. → [Context layers](https://semans.github.io/kontext/concepts/04-context-layers)
 - **"Why is this like this?" from git itself.** `ctx_why path[:line]` combines the decisions that cover the path, its module summary, decision-shaped commits, `git blame` and your session-history adapters; commits carry `Decision: <id>` trailers. → [Retrieval](https://semans.github.io/kontext/concepts/05-retrieval)
 - **Step-by-step bootstrap.** `kontext init` scans the repository, mines history for decision-shaped commits and dependency swaps, and writes the facts in seconds; your agent then deepens it one small, resumable task at a time. → [Init pipeline](https://semans.github.io/kontext/concepts/06-init-pipeline)
-- **Adapters, not integrations.** OpenViking, CodeGraph, Serena, Agent LCM, sessions and LLM CLIs are a few lines of TOML each, over generic MCP, HTTP and command drivers — with schema-based argument binding, result mapping and events. → [Adapters](https://semans.github.io/kontext/adapters/01-overview)
+- **Adapters, not integrations.** OpenViking, CodeGraph, Serena, Agent LCM, sessions and LLM CLIs are a few lines of TOML each, over generic MCP, HTTP and command drivers, with schema-based argument binding, result mapping and events. → [Adapters](https://semans.github.io/kontext/adapters/01-overview)
 - **Fast, local, safe.** Embedded Tantivy index, briefs in ~50 ms, hooks in ~0.1 s, secret scanning on every commit, trust pinning for repository-declared adapters. → [Security](https://semans.github.io/kontext/concepts/08-security)
 
 ## Quick start
@@ -95,10 +95,10 @@ Full walkthrough: [Quick start](https://semans.github.io/kontext/getting-started
 | **Codex** | `kontext connect codex --write` | [Codex](https://semans.github.io/kontext/agent-integrations/03-codex) |
 | **Cursor** | `kontext connect cursor --write` | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients) |
 | **OpenCode** | `kontext connect opencode --write` | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients) |
-| **Superset & orchestrators** | nothing extra — worktrees share inbox and progress | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients#superset-and-other-orchestrators) |
+| **Superset & orchestrators** | nothing extra: worktrees share inbox and progress | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients#superset-and-other-orchestrators) |
 | **Any MCP client** | command `kontext`, args `["mcp"]` | [MCP reference](https://semans.github.io/kontext/reference/02-mcp) |
 
-Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` — plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
+Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
 
 ## Adapters
 
@@ -126,30 +126,30 @@ Release build on an Apple Silicon laptop (init with a warm file cache; the first
 
 | Repository | init (scan + history + render) | first search (builds the index) | warm search | brief | pre-commit hook |
 | --- | --- | --- | --- | --- | --- |
-| TypeScript Nx monorepo — 3.2k files, 1.5k commits | 1.1 s | 0.47 s | 0.14 s | 0.04 s | 0.13 s |
-| Rust/Python/TS moon workspace — 640 files | 1.1 s | 0.25 s | 0.11 s | 0.04 s | 0.11 s |
+| TypeScript Nx monorepo (3.2k files, 1.5k commits) | 1.1 s | 0.47 s | 0.14 s | 0.04 s | 0.13 s |
+| Rust/Python/TS moon workspace (640 files) | 1.1 s | 0.25 s | 0.11 s | 0.04 s | 0.11 s |
 
 ## Documentation
 
-**[semans.github.io/kontext](https://semans.github.io/kontext/)** — in English and [Slovak](https://semans.github.io/kontext/sk/).
+**[semans.github.io/kontext](https://semans.github.io/kontext/)**, in English and [Slovak](https://semans.github.io/kontext/sk/).
 
 - Getting started: [Introduction](https://semans.github.io/kontext/getting-started/01-introduction) · [Installation](https://semans.github.io/kontext/getting-started/02-installation) · [Quick start](https://semans.github.io/kontext/getting-started/03-quickstart) · [Set up your agents](https://semans.github.io/kontext/getting-started/04-setup-for-agents)
 - Concepts: [Architecture](https://semans.github.io/kontext/concepts/01-architecture) · [Knowledge store](https://semans.github.io/kontext/concepts/02-knowledge-store) · [Git integration](https://semans.github.io/kontext/concepts/07-git-integration)
 - Guides: [Bootstrap an existing repository](https://semans.github.io/kontext/guides/01-bootstrap-an-existing-repository) · [Team workflow](https://semans.github.io/kontext/guides/02-team-workflow) · [OpenViking](https://semans.github.io/kontext/guides/03-openviking)
 - Reference: [CLI](https://semans.github.io/kontext/reference/01-cli) · [MCP](https://semans.github.io/kontext/reference/02-mcp) · [Configuration](https://semans.github.io/kontext/reference/03-configuration)
 
-The docs sources are in [`docs/`](docs/). This repository records its own design decisions with kontext — see [`.ai/`](.ai/README.md).
+The docs sources are in [`docs/`](docs/). This repository records its own design decisions with kontext. See [`.ai/`](.ai/README.md).
 
 ## Community & Contributing
 
 - **Questions and ideas**: [Discussions](https://github.com/SemanS/kontext/discussions)
 - **Bugs and feature requests**: [Issues](https://github.com/SemanS/kontext/issues)
-- **Contributing**: bug fixes, presets, docs and translations are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) ([SK](CONTRIBUTING_SK.md)) and the [Code of Conduct](CODE_OF_CONDUCT.md)
+- **Contributing**: bug fixes, presets, docs and translations are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) ([SK](CONTRIBUTING_SK.md)) and the [Code of Conduct](CODE_OF_CONDUCT.md)
 - **Changelog**: [docs](https://semans.github.io/kontext/about/02-changelog) · **Roadmap**: [docs](https://semans.github.io/kontext/about/03-roadmap)
 
 ## Security
 
-Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 
 ## License
 

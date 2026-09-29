@@ -116,9 +116,9 @@ owns = ["wiki://"]
 
 Pravidlá pre operácie s príkazmi:
 
-- vektor argumentov sa odovzdá tak, ako je – žiadny shell, žiadny globbing; pred hodnoty od používateľa daj `--`, ak to program podporuje,
+- vektor argumentov sa odovzdá tak, ako je (žiadny shell, žiadny globbing); pred hodnoty od používateľa daj `--`, ak to program podporuje,
 - `stdin = "{{prompt}}"` pošle dlhý vstup bez narazenia na limity argumentov,
-- `output_file = true` dá programu dočasný súbor (`{{output_file}}`) na odpoveď – pre nástroje, ktoré logujú na stdout,
+- `output_file = true` dá programu dočasný súbor (`{{output_file}}`) na odpoveď, čo sa hodí pre nástroje, ktoré logujú na stdout,
 - nenulové návratové kódy sú chyby; časový limit proces ukončí.
 
 ## LLM pre autopilota

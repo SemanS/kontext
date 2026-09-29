@@ -2,7 +2,7 @@
 
 ## Je kontext systém pamäte ako OpenViking alebo Mem0?
 
-Nie. Vlastní len malú, posúdenú časť – rozhodnutia, konvencie a poznatky tímu uložené v gite – a všetko ostatné pripája. Sémantická pamäť, archívy sessions a grafy kódu sa zapájajú ako adaptéry. Mnohé tímy používajú kontext *spolu so* systémom pamäte: pozri [návod pre OpenViking](../guides/03-openviking.md).
+Nie. Vlastní len malú, posúdenú časť (rozhodnutia, konvencie a poznatky tímu uložené v gite) a všetko ostatné pripája. Sémantická pamäť, archívy sessions a grafy kódu sa zapájajú ako adaptéry. Mnohé tímy používajú kontext *spolu so* systémom pamäte: pozri [návod pre OpenViking](../guides/03-openviking.md).
 
 ## Prečo neukladať všetko do vektorovej databázy?
 
@@ -46,4 +46,4 @@ Natívne nie (hooky sú POSIX shell). WSL funguje.
 
 ## Čím sa to líši od AGENTS.md / CLAUDE.md?
 
-Tieto súbory sú pravidlá pre agentov, ktoré píšu ľudia a ktoré sa načítavajú celé. kontext drží veľa malých záznamov s cestami, stavmi a históriou, zoraďuje ich pre konkrétnu úlohu, prepája ich s commitmi a udržiava ich platné – a do `AGENTS.md` pridá krátky blok, ktorý agentom povie, aby ho používali.
+Tieto súbory sú pravidlá pre agentov, ktoré píšu ľudia a ktoré sa načítavajú celé. kontext drží veľa malých záznamov s cestami, stavmi a históriou, zoraďuje ich pre konkrétnu úlohu, prepája ich s commitmi a udržiava ich platné. Do `AGENTS.md` pridá krátky blok, ktorý agentom povie, aby ho používali.

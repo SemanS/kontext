@@ -44,7 +44,7 @@ Vstupy operácií:
 | `join:<sep>` | spojí zoznam (`join:, ` · `join: `) |
 | `truncate:<n>` | najviac n znakov |
 | `after:<sep>`, `before:<sep>` | časť za / pred prvým oddeľovačom (celá hodnota, keď chýba) |
-| `default:<literal>` | použije sa, keď hodnota chýba alebo je prázdna (`{{env.URL|default:http://localhost:1933}}`) |
+| `default:<literal>` | použije sa, keď hodnota chýba alebo je prázdna (`{{env.URL\|default:http://localhost:1933}}`) |
 | `int` | reťazec naparsovaný ako celé číslo |
 
 Ako hodnoty fungujú aj literály v úvodzovkách: `{{'text'|upper}}`.
@@ -66,7 +66,7 @@ Ako hodnoty fungujú aj literály v úvodzovkách: `{{'text'|upper}}`.
 | `a[*]` | každý prvok poľa |
 | `*` | každá hodnota objektu (alebo prvok poľa) |
 | `$` alebo prázdne | koreň |
-| `a|b` | prvá alternatíva, ktorá existuje (v `map`) |
+| `a\|b` | prvá alternatíva, ktorá existuje (v `map`) |
 
 Príklady: `result.memories[*]`, `result.*[*]` (každý zoznam pod `result`), `data[*].attributes`, `results[0].title`.
 
@@ -76,7 +76,7 @@ Pri operáciách `search`, `history` a `code` sa z každej položky stane výsle
 
 | Hodnota `map` | Význam |
 | --- | --- |
-| `name` / `a.b` / `a|b` | cesta do položky |
+| `name` / `a.b` / `a\|b` | cesta do položky |
 | `re:<regex>` | prvá zachytávacia skupina (alebo celá zhoda) regexu na texte položky |
 | `tpl:<template>` | šablóna vykreslená voči položke (`tpl:notes://{{id}}`) |
 | `=<literal>` | konštanta |

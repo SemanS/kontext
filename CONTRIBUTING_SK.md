@@ -38,7 +38,7 @@ npm run docs:dev        # http://localhost:5173/kontext/
 npm run docs:build      # what CI runs; fails on dead links
 ```
 
-Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/` – oba stromy si súbor po súbore zodpovedajú. Keď zmeníš stránku, uprav aj druhý jazyk, alebo to spomeň v pull requeste, aby mohol nadviazať prekladateľ.
+Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/`. Oba stromy si súbor po súbore zodpovedajú. Keď zmeníš stránku, uprav aj druhý jazyk, alebo to spomeň v pull requeste, aby mohol nadviazať prekladateľ.
 
 ## Štruktúra projektu
 
@@ -64,7 +64,7 @@ Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/` – oba stromy si 
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings` a `cargo test` musia prejsť (spúšťa ich CI).
 - Aktualizuj dokumentáciu (podľa možnosti v oboch jazykoch) a pri zmenách viditeľných pre používateľov `docs/*/about/02-changelog.md`.
 - Správy commitov sa riadia [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `refactor:` …).
-- Ak za zmenou stojí rozhodnutie o návrhu, zapíš ho: `kontext capture --kind decision …` a povýš ho do pull requestu – hooky kontextu doplnia trailer.
+- Ak za zmenou stojí rozhodnutie o návrhu, zapíš ho: `kontext capture --kind decision …` a povýš ho do pull requestu. Hooky kontextu doplnia trailer.
 
 ## Pridanie presetu
 

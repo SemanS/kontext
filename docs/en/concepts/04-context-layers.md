@@ -4,7 +4,7 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 
 ## The brief
 
-`ctx_brief` (or `kontext brief`) is the entry point — one block of about 1–2k tokens (`brief.budget_tokens`, default 1400):
+`ctx_brief` (or `kontext brief`) is the entry point, one block of about 1–2k tokens (`brief.budget_tokens`, default 1400):
 
 | Section | Content |
 | --- | --- |
@@ -18,7 +18,7 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags.
 
-Claude Code can receive the brief automatically at session start — see [Claude Code](../agent-integrations/02-claude-code.md).
+Claude Code can receive the brief automatically at session start: see [Claude Code](../agent-integrations/02-claude-code.md).
 
 ## Levels: L0 · L1 · L2
 
@@ -48,4 +48,4 @@ Every hit carries a URI. `ctx_read` returns it at the level the agent asks for:
 - `ctx_why` keeps each section short: at most `limit` items per section.
 - Adapter sections in the brief get at most a third of the remaining budget each.
 
-Token counts are estimated at four characters per token — deliberately simple and conservative.
+Token counts are estimated at four characters per token (deliberately simple and conservative).

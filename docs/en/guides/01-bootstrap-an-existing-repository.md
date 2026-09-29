@@ -11,7 +11,7 @@ git status -- .ai              # what was written
 kontext brief --no-adapters    # what an agent will see
 ```
 
-Nothing is committed and nothing leaves the machine. If you do not like the result, delete `.ai/` (and `kontext hooks uninstall`) — there is no other state to clean up.
+Nothing is committed and nothing leaves the machine. If you do not like the result, delete `.ai/` (and `kontext hooks uninstall`). There is no other state to clean up.
 
 ## Review the detection
 
@@ -25,7 +25,7 @@ Nothing is committed and nothing leaves the machine. If you do not like the resu
    max_module_docs = 30
    ```
 
-2. **Stack.** Detected from manifests and files. It is informational — agents read it in the brief.
+2. **Stack.** Detected from manifests and files. It is informational: agents read it in the brief.
 3. **Purpose.** Taken from the README introduction; if your README starts with setup instructions it stays empty until the `purpose` task writes it.
 
 ## Existing ADRs
@@ -45,7 +45,7 @@ Existing ADRs appear in `kontext log`, the brief and search right away, and new 
 ## Hooks in repositories that already have hooks
 
 - A shell hook in `.git/hooks` or in `core.hooksPath` gets a kontext block after its shebang; your logic stays untouched.
-- A **tracked** hook directory (e.g. `.githooks/` activated by `npm install`) is modified in the working tree — commit the change to share it, or keep kontext out of shared hooks and let each teammate run `kontext hooks install` locally.
+- A **tracked** hook directory (e.g. `.githooks/` activated by `npm install`) is modified in the working tree. Commit the change to share it, or keep kontext out of shared hooks and let each teammate run `kontext hooks install` locally.
 - husky (`.husky/`) is supported; lefthook and pre-commit regenerate their hooks, so call `kontext hook pre-commit` (etc.) from their configuration instead.
 
 `kontext hooks status` shows the result.
@@ -54,7 +54,7 @@ Existing ADRs appear in `kontext log`, the brief and search right away, and new 
 
 - Nx, moon, Turborepo, pnpm/npm workspaces and Cargo workspaces are recognized; every declared project becomes a module and dependency edges come from the workspace graph and imports.
 - Module docs are capped (`init.max_module_docs`, default 40) and ranked: apps and services, then heavily used libraries. The rest are listed in the overview.
-- Scope `ctx_brief` with `focus` — the brief then ranks the knowledge of the modules being touched.
+- Scope `ctx_brief` with `focus`. The brief then ranks the knowledge of the modules being touched.
 
 ## Submodules
 

@@ -20,7 +20,7 @@ Bypass once with `KONTEXT_SKIP=1 git commit …` or `git commit --no-verify`.
 - The target is `core.hooksPath` when it is set (husky's `.husky/_` is mapped to `.husky/`), otherwise `.git/hooks` (`git rev-parse --git-path hooks`, shared by all worktrees).
 - In an existing shell hook a marked block is inserted right after the shebang, so it runs even if the rest of the script exits early.
 - A non-shell hook (e.g. a Node script) is renamed to `<hook>.kontext-chained` and called after kontext's block.
-- Each block looks for `kontext` on `PATH`, in `~/.local/bin` and `~/.cargo/bin`, and does nothing when it is missing — so shared hook directories do not break teammates who have not installed kontext.
+- Each block looks for `kontext` on `PATH`, in `~/.local/bin` and `~/.cargo/bin`, and does nothing when it is missing, so shared hook directories do not break teammates who have not installed kontext.
 - If the hook directory is tracked (e.g. `.githooks/`), the change shows up in `git status`: commit it to share the hooks with the team.
 - If a tracked hook directory exists but is not active yet (for example `npm install` sets `core.hooksPath` later), kontext tells you and `kontext hooks install --dir .githooks` covers it.
 - Hook managers that regenerate hook files (lefthook, pre-commit) are detected; add `kontext hook <name>` to their configuration instead.
@@ -62,7 +62,7 @@ Hooks never talk to the network. Events are appended to `<git-common-dir>/kontex
 
 - Entries are separate files: parallel branches rarely touch the same one.
 - `.ai/README.md` is regenerated and marked `merge=union` (in `.ai/.gitattributes`).
-- Sequential ADR numbers can collide between branches — the same as with any ADR practice; date-based ids (the default for new stores) avoid it.
+- Sequential ADR numbers can collide between branches, the same as with any ADR practice; date-based ids (the default for new stores) avoid it.
 
 ## Worktrees
 

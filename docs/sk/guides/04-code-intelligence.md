@@ -1,6 +1,6 @@
 # Inteligencia kódu
 
-Vlastná extrakcia symbolov, ktorú robí kontext, je zámerne jednoduchá (regulárne výrazy, ktoré napĺňajú zhrnutia modulov). Pre presné odpovede – kde je definovaný `RunContext`, kto ho volá – pripoj server pre inteligenciu kódu cez operáciu `code`. `ctx_why <symbol>` ho použije na nájdenie kódu predtým, než začne hľadať rozhodnutia a históriu.
+Vlastná extrakcia symbolov, ktorú robí kontext, je zámerne jednoduchá (regulárne výrazy, ktoré napĺňajú zhrnutia modulov). Pre presné odpovede (kde je definovaný `RunContext`, kto ho volá) pripoj server pre inteligenciu kódu cez operáciu `code`. `ctx_why <symbol>` ho použije na nájdenie kódu predtým, než začne hľadať rozhodnutia a históriu.
 
 ## CodeGraph
 
@@ -34,7 +34,7 @@ Preset spúšťa `serena start-mcp-server --context ide --project <repo>` a mapu
 
 ## Vlastný nástroj
 
-Poslúži akýkoľvek nástroj, ktorý vie nájsť symboly – MCP server, HTTP služba alebo CLI. Príklad bez závislostí s `git grep`:
+Poslúži akýkoľvek nástroj, ktorý vie nájsť symboly: MCP server, HTTP služba alebo CLI. Príklad bez závislostí s `git grep`:
 
 ```toml
 [adapters.gitgrep]

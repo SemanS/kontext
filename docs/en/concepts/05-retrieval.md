@@ -14,7 +14,7 @@ A [Tantivy](https://github.com/quickwit-oss/tantivy) index per worktree, derived
 
 Noise is filtered: "Merge branch …" commits, `Co-authored-by`/`Signed-off-by` lines, files over `sources.max_bytes`, and anything that looks like a secrets file.
 
-The index refreshes incrementally before a query (entries and docs by modification time and size, commits by SHA) — at most once per second per process. `kontext reindex` rebuilds it from scratch.
+The index refreshes incrementally before a query (entries and docs by modification time and size, commits by SHA), at most once per second per process. `kontext reindex` rebuilds it from scratch.
 
 ### Identifiers
 
@@ -26,7 +26,7 @@ BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5) and body. 
 
 ## Federated search
 
-`ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. Sources are fused by weighted reciprocal rank (each hit scores `weight / (8 + rank)`), so no source's score scale — BM25 here, cosine similarity there — crowds the others out, and a single source keeps its own order. Hits are de-duplicated by URI, by near-identical title/snippet, and when an adapter returns its copy of a local entry (a `sync`ed `…/<id>.md`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
+`ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. Sources are fused by weighted reciprocal rank (each hit scores `weight / (8 + rank)`), so no source's score scale (BM25 here, cosine similarity there) crowds the others out, and a single source keeps its own order. Hits are de-duplicated by URI, by near-identical title/snippet, and when an adapter returns its copy of a local entry (a `sync`ed `…/<id>.md`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
 
 Restrict a search with `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) and `sources` (`local` and/or adapter names).
 
@@ -41,7 +41,7 @@ Restrict a search with `kinds` (`decision`, `convention`, `learning`, `incident`
 | commit sha | message, the knowledge it relates to (via `commits` or `paths`), changed files |
 | symbol or topic | `code` adapters locate it (CodeGraph, Serena), then local knowledge and history, then `history` adapters |
 
-Commits are ranked by decision signals — wording such as *replace*, *migrate*, *instead of*, *because*; Conventional-Commit type; breaking changes; explanation length — and by kontext trailers (`Decision: …`).
+Commits are ranked by decision signals (wording such as *replace*, *migrate*, *instead of*, *because*; Conventional-Commit type; breaking changes; explanation length) and by kontext trailers (`Decision: …`).
 
 ## `ctx_log`
 

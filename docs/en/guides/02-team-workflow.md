@@ -20,9 +20,9 @@ Teammates without kontext are not affected: hook blocks are no-ops without the b
 
 Good habits:
 
-- capture when the decision is made, not at the end of the week — the inbox is cheap,
+- capture when the decision is made, not at the end of the week (the inbox is cheap),
 - one decision per entry, a few lines each; link longer write-ups instead of pasting them,
-- give every entry `paths` — that is what makes it show up for the right change.
+- give every entry `paths`: that is what makes it show up for the right change.
 
 ## Reviewing knowledge in pull requests
 
@@ -30,7 +30,7 @@ Treat entries like code:
 
 - **Is it true and still intended?** An agent may have over-generalized from one commit.
 - **Is it scoped?** `paths` should cover what the decision governs, not the whole repository.
-- **Is it brief?** Context, decision, consequences — a few lines each.
+- **Is it brief?** Context, decision, consequences: a few lines each.
 - **Does it replace something?** Then it should `supersede` the old entry rather than contradict it silently.
 
 ## Changing your mind
@@ -47,7 +47,7 @@ The old entry becomes `superseded` and points to the new one; `kontext log --all
 ## Pitfalls and incidents
 
 - `--kind pitfall` (a learning tagged `pitfall`) for gotchas that cost someone an afternoon.
-- `--kind incident` for what broke, the cause and what changed — short; link the full post-mortem.
+- `--kind incident` for what broke, the cause and what changed (short; link the full post-mortem).
 
 ## Onboarding someone
 

@@ -1,6 +1,6 @@
 # Adapters
 
-An adapter connects kontext to an outside system — a memory store, a session archive, a code-intelligence server, an LLM, a chat webhook. Adapters are **configuration only**: kontext's code never names a product.
+An adapter connects kontext to an outside system: a memory store, a session archive, a code-intelligence server, an LLM, a chat webhook. Adapters are **configuration only**: kontext's code never names a product.
 
 ## Three ideas
 
@@ -75,10 +75,10 @@ kinds = ["decision", "convention"]
 
 ## Federating MCP tools
 
-An MCP adapter can re-publish its server's tools through kontext (`expose = "all"` or a list of tool names), so an agent needs only one MCP server. Tools can also be **declared** in config and backed by any driver — a new MCP tool without code. See [Configuring adapters](./02-configuration.md#tools).
+An MCP adapter can re-publish its server's tools through kontext (`expose = "all"` or a list of tool names), so an agent needs only one MCP server. Tools can also be **declared** in config and backed by any driver: a new MCP tool without code. See [Configuring adapters](./02-configuration.md#tools).
 
 ## Next
 
-- [Configuring adapters](./02-configuration.md) — every field
-- [Presets](./03-presets.md) — ready-made adapters
-- [Writing an adapter](./04-writing-an-adapter.md) — a walkthrough
+- [Configuring adapters](./02-configuration.md): every field
+- [Presets](./03-presets.md): ready-made adapters
+- [Writing an adapter](./04-writing-an-adapter.md): a walkthrough

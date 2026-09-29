@@ -39,7 +39,7 @@ Cursor, OpenCode a automatický brief na začiatku session nájdeš v [Nastaven�
 
 ## 3. Nechaj agenta prehĺbiť zavedenie
 
-V Claude Code spusti prompt **`/mcp__kontext__kontext-init`** alebo požiadaj ktoréhokoľvek pripojeného agenta, nech „pokračuje v zavádzaní kontextu“. Cez `ctx_init` si ťahá malé úlohy – opísať projekt, zhrnúť modul, vydestilovať rozhodnutia zo zhluku commitov – a každú odovzdá cez `ctx_init_submit`. Zastaviť môžeš kedykoľvek; postup sa uchováva v súboroch.
+V Claude Code spusti prompt **`/mcp__kontext__kontext-init`** alebo požiadaj ktoréhokoľvek pripojeného agenta, nech „pokračuje v zavádzaní kontextu“. Cez `ctx_init` si ťahá malé úlohy (opísať projekt, zhrnúť modul, vydestilovať rozhodnutia zo zhluku commitov) a každú odovzdá cez `ctx_init_submit`. Zastaviť môžeš kedykoľvek; postup sa uchováva v súboroch.
 
 Nemáš po ruke agenta? Použi LLM CLI ako autopilota:
 
@@ -75,6 +75,6 @@ Agenti robia to isté cez `ctx_capture` a `ctx_prepare_commit`. Pre-commit hook 
 
 ## Ďalšie kroky
 
-- [Tímový workflow](../guides/02-team-workflow.md) – review, nahrádzanie rozhodnutí, zaúčanie kolegov
-- [Adaptéry](../adapters/01-overview.md) – zapoj OpenViking, CodeGraph, Serenu, archívy sessions
-- [Zavedenie do existujúceho repozitára](../guides/01-bootstrap-an-existing-repository.md) – monorepá, existujúce ADR, klientske repozitáre
+- [Tímový workflow](../guides/02-team-workflow.md): review, nahrádzanie rozhodnutí, zaúčanie kolegov
+- [Adaptéry](../adapters/01-overview.md): zapoj OpenViking, CodeGraph, Serenu, archívy sessions
+- [Zavedenie do existujúceho repozitára](../guides/01-bootstrap-an-existing-repository.md): monorepá, existujúce ADR, klientske repozitáre

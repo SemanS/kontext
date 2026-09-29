@@ -1,6 +1,6 @@
 # Nastavenie agentov
 
-kontext hovorí protokolom Model Context Protocol cez stdio. Každý klient, ktorý vie spustiť lokálny MCP server príkazom `kontext mcp`, dostane celú sadu nástrojov. Server spúšťaj v repozitári (klienti to zvyčajne robia za teba – MCP servery spúšťajú v adresári projektu).
+kontext hovorí protokolom Model Context Protocol cez stdio. Každý klient, ktorý vie spustiť lokálny MCP server príkazom `kontext mcp`, dostane celú sadu nástrojov. Server spúšťaj v repozitári (klienti to zvyčajne robia za teba: MCP servery spúšťajú v adresári projektu).
 
 ## Pripoj klienta
 

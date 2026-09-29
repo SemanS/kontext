@@ -44,7 +44,7 @@ Op inputs:
 | `join:<sep>` | joins a list (`join:, ` · `join: `) |
 | `truncate:<n>` | at most n characters |
 | `after:<sep>`, `before:<sep>` | the part after / before the first separator (the whole value when absent) |
-| `default:<literal>` | used when the value is missing or empty (`{{env.URL|default:http://localhost:1933}}`) |
+| `default:<literal>` | used when the value is missing or empty (`{{env.URL\|default:http://localhost:1933}}`) |
 | `int` | a string parsed as an integer |
 
 Quoted literals work as values: `{{'text'|upper}}`.
@@ -66,7 +66,7 @@ Quoted literals work as values: `{{'text'|upper}}`.
 | `a[*]` | every element of an array |
 | `*` | every value of an object (or element of an array) |
 | `$` or empty | the root |
-| `a|b` | the first alternative that exists (in `map`) |
+| `a\|b` | the first alternative that exists (in `map`) |
 
 Examples: `result.memories[*]`, `result.*[*]` (every list under `result`), `data[*].attributes`, `results[0].title`.
 
@@ -76,7 +76,7 @@ For `search`, `history` and `code` ops each item becomes a hit with `title`, `sn
 
 | `map` value | Meaning |
 | --- | --- |
-| `name` / `a.b` / `a|b` | a path into the item |
+| `name` / `a.b` / `a\|b` | a path into the item |
 | `re:<regex>` | first capture group (or the whole match) of the regex on the item's text |
 | `tpl:<template>` | a template rendered against the item (`tpl:notes://{{id}}`) |
 | `=<literal>` | a constant |

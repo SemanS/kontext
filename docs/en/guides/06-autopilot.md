@@ -1,6 +1,6 @@
 # Deepen with an LLM
 
-The deepen phase of `kontext init` is normally driven by the agent you work with. The autopilot runs the same tasks through any LLM you configure as an adapter with an `llm` op — useful for a first pass over a large repository.
+The deepen phase of `kontext init` is normally driven by the agent you work with. The autopilot runs the same tasks through any LLM you configure as an adapter with an `llm` op, useful for a first pass over a large repository.
 
 ```sh
 kontext adapters add llm-claude              # or llm-codex, llm-ollama, or your own
@@ -30,7 +30,7 @@ llm = "llm-claude"
 
 ## What the model receives
 
-Each task as an agent would see it, plus **inlined sources** (up to `init.task_inline_chars`, 24000 characters): the module's docs and key files, or `git show --stat` of the commits in a decision cluster. Secret files are never attached and attached text is redacted. The model must answer with one JSON object — the same shape as `ctx_init_submit`:
+Each task as an agent would see it, plus **inlined sources** (up to `init.task_inline_chars`, 24000 characters): the module's docs and key files, or `git show --stat` of the commits in a decision cluster. Secret files are never attached and attached text is redacted. The model must answer with one JSON object, the same shape as `ctx_init_submit`:
 
 ```json
 {
@@ -43,14 +43,14 @@ Each task as an agent would see it, plus **inlined sources** (up to `init.task_i
 
 Prose or code fences around the JSON are tolerated. Failed tasks are reported and stay pending.
 
-The answer is the result: the model is told not to call tools, and the presets keep kontext's own MCP server out of the call (`-c mcp_servers.kontext.enabled=false` for Codex, `--strict-mcp-config` for Claude Code) — with kontext connected to your client, the model could otherwise record the task itself through `ctx_init_submit` and again through its answer. While a run is going, `ctx_init_submit` from any other process refuses the run's tasks, and a resubmitted task replaces its own earlier entries instead of adding copies.
+The answer is the result: the model is told not to call tools, and the presets keep kontext's own MCP server out of the call (`-c mcp_servers.kontext.enabled=false` for Codex, `--strict-mcp-config` for Claude Code). With kontext connected to your client, the model could otherwise record the task itself through `ctx_init_submit` and again through its answer. While a run is going, `ctx_init_submit` from any other process refuses the run's tasks, and a resubmitted task replaces its own earlier entries instead of adding copies.
 
 ## Models
 
 | Preset | Runs | Variable |
 | --- | --- | --- |
 | `llm-claude` | `claude -p --strict-mcp-config --tools "" --no-session-persistence --system-prompt … --model <model> --effort <effort>`, with `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` dropped | `model` (default `sonnet`; `claude-opus-5-5` for Opus, `haiku` is cheaper), `effort` (`low` … `max`, default `high`) |
-| `llm-codex` | `codex exec --sandbox read-only --ephemeral -c mcp_servers.kontext.enabled=false`, last message from a file | — |
+| `llm-codex` | `codex exec --sandbox read-only --ephemeral -c mcp_servers.kontext.enabled=false`, last message from a file | – |
 | `llm-ollama` | `POST /api/generate` on `$OLLAMA_HOST` | `model` (default `qwen2.5-coder:14b`) |
 
 ```sh
@@ -59,11 +59,11 @@ kontext adapters add llm-claude --force --var model=claude-opus-5-5 --var effort
 
 Presets are copied into your config when added; after an upgrade, refresh them with `--force` (and your `--var`s).
 
-`llm-claude` runs on the subscription of the account `claude` is logged into — API keys in the environment are dropped for these calls, so nothing is billed to an API account. It gives the model no tools, no MCP servers and a short system prompt: a task then costs a tenth of what Claude Code's full prompt would add to it, which matters for a subscription's usage limits. The calls are not saved as Claude Code sessions, so they do not show up in `claude --resume` or `kontext distill`.
+`llm-claude` runs on the subscription of the account `claude` is logged into. API keys in the environment are dropped for these calls, so nothing is billed to an API account. It gives the model no tools, no MCP servers and a short system prompt: a task then costs a tenth of what Claude Code's full prompt would add to it, which matters for a subscription's usage limits. The calls are not saved as Claude Code sessions, so they do not show up in `claude --resume` or `kontext distill`.
 
 ## Quality
 
-- Review the diff before committing — the autopilot writes into the working tree only.
+- Review the diff before committing: the autopilot writes into the working tree only.
 - Run a few tasks first (`--max 3`) and read them; adjust `init.task_max_files` or `init.task_inline_chars` if summaries are shallow.
 - Decision tasks are the ones to check most carefully: they infer intent from commit messages.
 - Mixing is fine: let the autopilot summarize modules and have your agent do the `dec:` tasks with full tool access.

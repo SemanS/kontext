@@ -1,6 +1,6 @@
 # Knowledge from agent threads
 
-Much of a team's reasoning happens in agent threads: a colleague and Claude Code or Codex weigh two approaches, find a pitfall, settle a rule — and the thread ends. `kontext distill` reads such threads and turns what should outlive them into knowledge candidates. They land in the local inbox and are shared only when promoted with a commit and reviewed, like anything else captured.
+Much of a team's reasoning happens in agent threads: a colleague and Claude Code or Codex weigh two approaches, find a pitfall, settle a rule, and the thread ends. `kontext distill` reads such threads and turns what should outlive them into knowledge candidates. They land in the local inbox and are shared only when promoted with a commit and reviewed, like anything else captured.
 
 Threads are read from this machine: every colleague distills their own. Raw transcripts never enter the repository; only the entries that come out of them do.
 
@@ -27,9 +27,9 @@ Distilling 1 thread(s)…
 
 What happens:
 
-1. The thread is read into a compact transcript — what the developer asked, what the agent answered, what it edited and ran (`→ edit src/cache.ts`, `→ $ git commit …`). Tool output, reasoning and injected instructions (AGENTS.md, environment, hooks) are left out, paths are made relative to the repository, and secrets are redacted.
+1. The thread is read into a compact transcript: what the developer asked, what the agent answered, what it edited and ran (`→ edit src/cache.ts`, `→ $ git commit …`). Tool output, reasoning and injected instructions (AGENTS.md, environment, hooks) are left out, paths are made relative to the repository, and secrets are redacted.
 2. The transcript is split into parts of about 45,000 characters (`--max-parts`, default 12, spread over a longer thread) and sent to your LLM adapter, several at a time (`--jobs`).
-3. The model names the decisions, conventions, pitfalls and incidents the team should still know later — at most `--max` per thread (5) — and is shown what is recorded already, so it does not repeat it. Findings similar to an existing entry or inbox candidate are dropped.
+3. The model names the decisions, conventions, pitfalls and incidents the team should still know later, at most `--max` per thread (5), and is shown what is recorded already, so it does not repeat it. Findings similar to an existing entry or inbox candidate are dropped.
 4. Each finding becomes an inbox candidate with its paths, the commits the thread made it in, `origin: thread` and its source (`claude:4f1c2a9b`, shown by `kontext inbox`, dropped on promotion).
 
 Review them with `kontext inbox`, promote each with the change it belongs to (`kontext prepare-commit --promote <id>`, or `ctx_prepare_commit` from an agent), drop the rest (`kontext inbox drop <id>`). `--dry-run` prints the findings without capturing them (it also works where kontext is not set up yet).
@@ -45,7 +45,7 @@ Review them with `kontext inbox`, promote each with the change it belongs to (`k
 
 ## Sensitive threads
 
-Work threads carry what a project is made of — people's names and addresses, pasted emails and logs, hosts, customer data. Measured on a real client thread: of 52 MB of transcript, 240 KB reach the model (0.5 %) — tool output and file contents never do — and what is left is masked further:
+Work threads carry what a project is made of: people's names and addresses, pasted emails and logs, hosts, customer data. Measured on a real client thread: of 52 MB of transcript, 240 KB reach the model (0.5 %). Tool output and file contents never do, and what is left is masked further:
 
 - secrets, as everywhere in kontext;
 - email addresses, phone numbers, IBANs, card numbers and IP addresses (`127.0.0.1` stays);
@@ -57,16 +57,16 @@ Work threads carry what a project is made of — people's names and addresses, p
   redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
   ```
 
-The model is asked to write for the team — roles instead of people's names, no contact data, records, credentials or hosts — and what it writes is masked again. Nothing is shared before you review it in the inbox.
+The model is asked to write for the team (roles instead of people's names, no contact data, records, credentials or hosts), and what it writes is masked again. Nothing is shared before you review it in the inbox.
 
 For a client's repository, also decide:
 
-- **where the transcript goes**: the model of the `llm` adapter reads it. Use the provider the client's data already goes to — for a Claude Code thread, `--llm llm-claude` — or pin it for the repository with `[init] llm = "llm-claude"` in `~/.config/kontext/repos/<slug>.toml`;
+- **where the transcript goes**: the model of the `llm` adapter reads it. Use the provider the client's data already goes to (for a Claude Code thread, `--llm llm-claude`) or pin it for the repository with `[init] llm = "llm-claude"` in `~/.config/kontext/repos/<slug>.toml`;
 - **where the knowledge lives**: `.ai/` in a client's repository is the client's call. Until they agree, keep the store private, in a locally excluded directory ([repositories you do not own](./01-bootstrap-an-existing-repository.md#repositories-you-do-not-own)).
 
 ## From an agent
 
-The `kontext-distill` prompt (`/mcp__kontext__kontext-distill` in Claude Code), or simply asking — "distill the durable knowledge from thread claude:4f1c2a9b" — lets the connected agent do it with its own model, no LLM adapter needed:
+The `kontext-distill` prompt (`/mcp__kontext__kontext-distill` in Claude Code), or simply asking "distill the durable knowledge from thread claude:4f1c2a9b", lets the connected agent do it with its own model, no LLM adapter needed:
 
 1. `ctx_threads` without arguments lists this repository's recent threads and the current Superset workspace;
 2. `ctx_threads thread="claude:4f1c2a9b"` returns the transcript, in parts (`part=2`, … when it says there are more);
@@ -74,10 +74,10 @@ The `kontext-distill` prompt (`/mcp__kontext__kontext-distill` in Claude Code), 
 
 ## Superset
 
-Superset runs agents in workspaces — a worktree, or a session directory — and gives each an id (`$SUPERSET_WORKSPACE_ID` in its terminals). kontext reads Superset's own records (`~/.superset/host/<organization>/host.db`, with the `sqlite3` command): the workspace's path and branch, and the agent sessions its terminals ran. Their transcripts are found in every Claude Code account (`~/.claude`, `~/.claude-*`, `$CLAUDE_CONFIG_DIR`) and in Codex's sessions (`$CODEX_HOME`, `~/.codex`), plus any thread started in the workspace's directory.
+Superset runs agents in workspaces (a worktree, or a session directory) and gives each an id (`$SUPERSET_WORKSPACE_ID` in its terminals). kontext reads Superset's own records (`~/.superset/host/<organization>/host.db`, with the `sqlite3` command): the workspace's path and branch, and the agent sessions its terminals ran. Their transcripts are found in every Claude Code account (`~/.claude`, `~/.claude-*`, `$CLAUDE_CONFIG_DIR`) and in Codex's sessions (`$CODEX_HOME`, `~/.codex`), plus any thread started in the workspace's directory.
 
 - `--superset` alone means the workspace of the terminal you are in; a name can be the worktree directory (`calm-river`), a path, a branch or an id prefix.
-- Superset binds agents to terminals, not directories: a thread one of its terminals ran in another repository is skipped ("ran outside this repository") — distill it from that repository.
+- Superset binds agents to terminals, not directories: a thread one of its terminals ran in another repository is skipped ("ran outside this repository"). Distill it from that repository.
 - Runs that keep no transcript (`codex exec --ephemeral`, for example) are counted as "without a transcript".
 
 ## Where transcripts come from

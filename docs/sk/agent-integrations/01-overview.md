@@ -4,7 +4,7 @@ kontext je MCP server: `kontext mcp` komunikuje cez JSON-RPC 2.0 na stdio (verzi
 
 ## Čo agenti dostanú
 
-**Nástroje** – parametre nájdeš v [referencii MCP](../reference/02-mcp.md):
+**Nástroje** (parametre nájdeš v [referencii MCP](../reference/02-mcp.md)):
 
 | Nástroj | Kedy ho má agent zavolať |
 | --- | --- |
@@ -20,11 +20,11 @@ kontext je MCP server: `kontext mcp` komunikuje cez JSON-RPC 2.0 na stdio (verzi
 
 Vedľa nich sa zobrazia aj nástroje znovu publikované z MCP adaptérov (`expose`) a nástroje deklarované v konfigurácii adaptérov.
 
-**Prompty** – `kontext-init`, `kontext-commit`, `kontext-reflect` (v Claude Code ako slash príkazy).
+**Prompty**: `kontext-init`, `kontext-commit`, `kontext-reflect` (v Claude Code ako slash príkazy).
 
-**Zdroje** – `kontext://brief` a `kontext://entry/<id>` pre klientov, ktorí prehliadajú zdroje.
+**Zdroje**: `kontext://brief` a `kontext://entry/<id>` pre klientov, ktorí prehliadajú zdroje.
 
-**Inštrukcie** – pri pripojení server agentovi v piatich vetách vysvetlí, ako používať nástroje uvedené vyššie.
+**Inštrukcie**: pri pripojení server agentovi v piatich vetách vysvetlí, ako používať nástroje uvedené vyššie.
 
 ## Správanie servera
 
@@ -43,4 +43,4 @@ Vedľa nich sa zobrazia aj nástroje znovu publikované z MCP adaptérov (`expos
 
 ## Bez MCP
 
-Všetko existuje aj ako CLI príkaz (`kontext brief`, `kontext search`, …) a `kontext call <tool> '<json>'` spustí ľubovoľný nástroj lokálne – šikovné pre prostredia agentov bez podpory MCP a pre skripty.
+Všetko existuje aj ako CLI príkaz (`kontext brief`, `kontext search`, …) a `kontext call <tool> '<json>'` spustí ľubovoľný nástroj lokálne, čo je šikovné pre prostredia agentov bez podpory MCP a pre skripty.

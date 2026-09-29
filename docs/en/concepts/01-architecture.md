@@ -39,8 +39,8 @@
 | What | Where | Committed | Shared by worktrees |
 | --- | --- | --- | --- |
 | Knowledge entries, index, shared config | `.ai/` (or your ADR directory) | yes | via git |
-| Personal adapters | `~/.config/kontext/config.toml` | no | — |
-| Per-repository personal overrides | `~/.config/kontext/repos/<slug>.toml` | no | — |
+| Personal adapters | `~/.config/kontext/config.toml` | no | – |
+| Per-repository personal overrides | `~/.config/kontext/repos/<slug>.toml` | no | – |
 | Clone-local config | `<git-common-dir>/kontext/config.toml` | no | yes |
 | Inbox (candidates) | `<git-common-dir>/kontext/inbox/` | no | yes |
 | Outbox (adapter deliveries) | `<git-common-dir>/kontext/outbox.jsonl` | no | yes |
@@ -56,7 +56,7 @@ kontext derives a stable identity from the `origin` remote: `git@github.com:Acme
 
 ## Request flow: `ctx_search`
 
-1. The local index is refreshed if anything changed (entries, docs, new commits) — at most once per second per process.
+1. The local index is refreshed if anything changed (entries, docs, new commits), at most once per second per process.
 2. Tantivy runs the query (BM25 over title, body and identifier-expanded fields).
 3. In parallel, every adapter with a `search` op receives the query (12 s deadline; a failing adapter cools down for 30 s).
 4. Scores are normalized per source, weighted, merged and de-duplicated by URI and by near-identical text.
@@ -70,4 +70,4 @@ kontext derives a stable identity from the `origin` remote: `git@github.com:Acme
 
 ## Design decisions
 
-The project records its own decisions with kontext — see [`.ai/decisions/`](https://github.com/SemanS/kontext/tree/main/.ai/decisions).
+The project records its own decisions with kontext: see [`.ai/decisions/`](https://github.com/SemanS/kontext/tree/main/.ai/decisions).

@@ -8,7 +8,7 @@ Neskoršie vrstvy vyhrávajú. Tabuľky sa zlučujú kľúč po kľúči; polia 
 
 | # | Súbor | Rozsah | Adaptéry |
 | --- | --- | --- | --- |
-| 1 | vstavané predvolené hodnoty | — | — |
+| 1 | vstavané predvolené hodnoty | – | – |
 | 2 | `~/.config/kontext/config.toml` | ty, každý repozitár | dôveryhodné |
 | 3 | `~/.config/kontext/repos/<slug>.toml` | ty, jeden repozitár (slug z `kontext status`) | dôveryhodné |
 | 4 | `<repo>/.kontext.toml` alebo `<repo>/<store.dir>/kontext.toml` (predvolene `.ai/kontext.toml`) | tím (commitnuté) | až po `kontext trust` |
@@ -42,7 +42,7 @@ Používateľský adresár je `$KONTEXT_CONFIG_DIR`, inak `$XDG_CONFIG_HOME/kont
 | `numbering` | `date` pre rozhodnutia, inak `none` | `date`, `sequential`, `none` |
 | `trailer` | `Decision`, `Convention`, `Learning`, `Incident` | kľúč traileru commitu; pre architecture žiadny |
 
-Fungujú aj vlastné druhy – pridaj tabuľku s `dir`.
+Fungujú aj vlastné druhy: pridaj tabuľku s `dir`.
 
 ## `[sources]`
 
@@ -92,7 +92,7 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 | --- | --- | --- |
 | `scan` | `store` | `store` (súbory znalostí), `staged` (každý stagnutý textový súbor) alebo `off` |
 | `allow` | `[]` | regexy riadkov, ktoré sa ignorujú |
-| `redact` | `[]` | regexy hodnôt, ktoré sa maskujú vo vláknach agentov a v tom, čo sa z nich vydestiluje – meno klienta, id integrácie; drž ich v súkromnej vrstve (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`) |
+| `redact` | `[]` | regexy hodnôt, ktoré sa maskujú vo vláknach agentov a v tom, čo sa z nich vydestiluje (meno klienta, id integrácie); drž ich v súkromnej vrstve (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`) |
 
 ## `[init]`
 

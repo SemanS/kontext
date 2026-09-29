@@ -4,8 +4,8 @@ Surové sessions agentov sú na git príliš dlhé a príliš osobné, no odpove
 
 | Op | Na čo |
 | --- | --- |
-| `history` | `ctx_why <path|commit|topic>` – sessions, ktoré sa dotkli cieľa |
-| `search` | `ctx_search` – fulltextové alebo sémantické výsledky z prepisov |
+| `history` | `ctx_why <path\|commit\|topic>`: sessions, ktoré sa dotkli cieľa |
+| `search` | `ctx_search`: fulltextové alebo sémantické výsledky z prepisov |
 | `brief` | krátka sekcia v `ctx_brief` (primer nedávnej práce) |
 
 ## sessions
@@ -34,4 +34,4 @@ Oba presety naväzujú argumenty zo schém nástrojov; ak sa nástroj zmení, `k
 
 ## Od histórie k znalostiam
 
-Výsledky zo sessions sú dôkazy, nie pravda. Keď session odhalí rozhodnutie, ktoré stojí za to uchovať, zachyť ho – s cestami, ktorých sa týka – a povýš ho do príslušného commitu. Presne to robí na konci session prompt `kontext-reflect`.
+Výsledky zo sessions sú dôkazy, nie pravda. Keď session odhalí rozhodnutie, ktoré stojí za to uchovať, zachyť ho s cestami, ktorých sa týka, a povýš ho do príslušného commitu. Presne to robí na konci session prompt `kontext-reflect`.

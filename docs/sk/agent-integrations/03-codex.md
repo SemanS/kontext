@@ -22,7 +22,7 @@ kontext connect codex --write    # appends it, or adds the approval mode to an e
 
 Codex sa pred volaním MCP nástroja pýta, pokiaľ nevie, že je neškodný, a pri `approval_policy = "never"` namiesto otázky volanie odmietne: `MCP tool call requires approval, but approval policy is never`. V takom nastavení kontext fungujú dve veci:
 
-- každý nástroj kontextu nesie MCP anotácie – `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` a `ctx_log` majú `readOnlyHint: true`, ostatné sú označené ako nedeštruktívne (zapisujú len do lokálneho inboxu, pracovného stromu a git indexu), takže ich Codex spustí bez pýtania;
+- každý nástroj kontextu nesie MCP anotácie: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` a `ctx_log` majú `readOnlyHint: true`, ostatné sú označené ako nedeštruktívne (zapisujú len do lokálneho inboxu, pracovného stromu a git indexu), takže ich Codex spustí bez pýtania;
 - `default_tools_approval_mode = "approve"` v zázname servera schváli nástroje kontextu výslovne, nezávisle od toho, ako konkrétna verzia Codexu anotácie číta.
 
 Pri `sandbox_mode = "workspace-write"` drží Codex `.git` pre vlastné shell príkazy agenta len na čítanie, takže `git add` / `git commit` tam zlyhajú; servera kontextu sa to netýka (`ctx_prepare_commit` stále povyšuje a stagne). Commituj zo sandboxu, ktorý to dovolí, alebo sám.

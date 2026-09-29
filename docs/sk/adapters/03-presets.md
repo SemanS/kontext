@@ -20,18 +20,18 @@ Vlastné presety patria do `~/.config/kontext/presets/<name>.toml` a objavia sa 
 | Preset | Driver | Operácie | Udalosti | Poznámky |
 | --- | --- | --- | --- | --- |
 | `openviking` | http | search, read, store, remember, health | `sync` → store (znalosti tímu do `resources/` peeru), súkromné `capture` → remember (`memories/`) | [návod](../guides/03-openviking.md) |
-| `codegraph` | mcp | code | — | aktívny tam, kde existuje `.codegraph/`; [návod](../guides/04-code-intelligence.md) |
-| `serena` | mcp | code | — | vyhľadávanie symbolov cez LSP; [návod](../guides/04-code-intelligence.md) |
-| `agent-lcm` | mcp | search, history, brief | — | archív sessions naprieč prostrediami agentov; [návod](../guides/05-session-history.md) |
-| `sessions` | mcp | history, search, brief | — | `why_did_this_change` pre `ctx_why`; [návod](../guides/05-session-history.md) |
-| `llm-claude` | command | llm | — | `claude -p` na prehĺbenie autopilotom |
-| `llm-codex` | command | llm | — | `codex exec` (read-only sandbox, ephemeral) |
-| `llm-ollama` | http | llm | — | lokálny model cez `/api/generate` |
+| `codegraph` | mcp | code | – | aktívny tam, kde existuje `.codegraph/`; [návod](../guides/04-code-intelligence.md) |
+| `serena` | mcp | code | – | vyhľadávanie symbolov cez LSP; [návod](../guides/04-code-intelligence.md) |
+| `agent-lcm` | mcp | search, history, brief | – | archív sessions naprieč prostrediami agentov; [návod](../guides/05-session-history.md) |
+| `sessions` | mcp | history, search, brief | – | `why_did_this_change` pre `ctx_why`; [návod](../guides/05-session-history.md) |
+| `llm-claude` | command | llm | – | `claude -p` na prehĺbenie autopilotom |
+| `llm-codex` | command | llm | – | `codex exec` (read-only sandbox, ephemeral) |
+| `llm-ollama` | http | llm | – | lokálny model cez `/api/generate` |
 | `slack-webhook` | http | store | `sync` (rozhodnutia) | oznamuje zlúčené rozhodnutia v kanáli |
 
 Presety, ktorým chýba externý program, sú neaktívne (`when.command`), takže pridať ich na stroji bez daného nástroja je neškodné.
 
-Presety OpenViking a CodeGraph boli overené voči ich aktuálnym verziám; Serena, Agent LCM a sessions vychádzajú z ich zdokumentovaných MCP nástrojov a spoliehajú sa na naväzovanie argumentov zo schémy – ak sa nástroj zmení, `kontext adapters inspect <name>` ukáže, čo upraviť.
+Presety OpenViking a CodeGraph boli overené voči ich aktuálnym verziám; Serena, Agent LCM a sessions vychádzajú z ich zdokumentovaných MCP nástrojov a spoliehajú sa na naväzovanie argumentov zo schémy. Ak sa nástroj zmení, `kontext adapters inspect <name>` ukáže, čo upraviť.
 
 ## Premenné
 

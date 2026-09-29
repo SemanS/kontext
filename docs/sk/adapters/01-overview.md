@@ -1,6 +1,6 @@
 # Adaptéry
 
-Adaptér pripája kontext k vonkajšiemu systému – úložisku pamäte, archívu sessions, serveru s inteligenciou kódu, LLM či chatovému webhooku. Adaptéry sú **len konfigurácia**: kód kontextu nikdy nemenuje žiadny produkt.
+Adaptér pripája kontext k vonkajšiemu systému: úložisku pamäte, archívu sessions, serveru s inteligenciou kódu, LLM či chatovému webhooku. Adaptéry sú **len konfigurácia**: kód kontextu nikdy nemenuje žiadny produkt.
 
 ## Tri myšlienky
 
@@ -75,10 +75,10 @@ kinds = ["decision", "convention"]
 
 ## Federovanie MCP nástrojov
 
-MCP adaptér môže nástroje svojho servera publikovať ďalej cez kontext (`expose = "all"` alebo zoznam názvov nástrojov), takže agent potrebuje len jeden MCP server. Nástroje sa dajú aj **deklarovať** v konfigurácii a oprieť o ľubovoľný driver – nový MCP nástroj bez kódu. Pozri [Konfigurácia adaptérov](./02-configuration.md#tools).
+MCP adaptér môže nástroje svojho servera publikovať ďalej cez kontext (`expose = "all"` alebo zoznam názvov nástrojov), takže agent potrebuje len jeden MCP server. Nástroje sa dajú aj **deklarovať** v konfigurácii a oprieť o ľubovoľný driver: nový MCP nástroj bez kódu. Pozri [Konfigurácia adaptérov](./02-configuration.md#tools).
 
 ## Ďalej
 
-- [Konfigurácia adaptérov](./02-configuration.md) – každé pole
-- [Presety](./03-presets.md) – pripravené adaptéry
-- [Vlastný adaptér](./04-writing-an-adapter.md) – návod krok za krokom
+- [Konfigurácia adaptérov](./02-configuration.md): každé pole
+- [Presety](./03-presets.md): pripravené adaptéry
+- [Vlastný adaptér](./04-writing-an-adapter.md): návod krok za krokom

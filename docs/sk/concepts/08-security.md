@@ -9,11 +9,11 @@ Nič, kým to nenastavíš:
 - lokálny index, inbox, outbox a cache zostávajú v `.git/kontext/`,
 - k ostatným sa znalosti dostanú len cez commity, ktoré pushneš,
 - adaptéry posielajú dáta len tam, kam to určuje ich konfigurácia (a len pre operácie a udalosti, ktoré deklarujú),
-- `kontext distill` pošle skrátený prepis vlákna LLM adaptéru, ktorý si vyberieš – so zamaskovanými tajnými údajmi, e-mailovými adresami, telefónnymi číslami, IBAN, číslami kariet, IP adresami a tvojimi vzormi zo `secrets.redact` (pozri [citlivé vlákna](../guides/08-distill-threads.md#sensitive-threads)).
+- `kontext distill` pošle skrátený prepis vlákna LLM adaptéru, ktorý si vyberieš, so zamaskovanými tajnými údajmi, e-mailovými adresami, telefónnymi číslami, IBAN, číslami kariet, IP adresami a tvojimi vzormi zo `secrets.redact` (pozri [citlivé vlákna](../guides/08-distill-threads.md#sensitive-threads)).
 
 ## Dôvera pre adaptéry deklarované v repozitári {#trust-for-repository-declared-adapters}
 
-Adaptéry môžu spúšťať procesy a volať URL. Repozitár, ktorý si naklonuješ, nesmie vedieť prinútiť kontext – ani jeho git hooky – spúšťať ľubovoľné príkazy. Preto:
+Adaptéry môžu spúšťať procesy a volať URL. Repozitár, ktorý si naklonuješ, nesmie vedieť prinútiť kontext (ani jeho git hooky) spúšťať ľubovoľné príkazy. Preto:
 
 - adaptéry v tvojej používateľskej konfigurácii (`~/.config/kontext/…`) a v konfigurácii pre klon sú dôveryhodné,
 - adaptéry deklarované v **zdieľanej** konfigurácii repozitára (`.ai/kontext.toml`) sa **preskočia**, kým ich neposúdiš a nespustíš `kontext trust`,
@@ -32,7 +32,7 @@ Pre-commit hook skenuje každý stagnutý súbor znalostí; nálezy s vysokou is
 | kľúče Anthropic (`sk-ant-…`) a OpenAI (`sk-…`), kľúče dotenv-vault | vysoká |
 | hlavičky `Authorization: Bearer …`, prihlasovacie údaje v URL | vysoká |
 | API kľúče Google, JWT, priradenia `*_TOKEN=` / `password:` (zástupné hodnoty sa ignorujú) | stredná |
-| tajné údaje vo vetách – „the secret is …“, „rotate the api key …“ – keď hodnota vyzerá náhodne (zmiešané veľké a malé písmená, číslice, vysoká entropia; cesty a zástupné hodnoty sa ignorujú) | stredná |
+| tajné údaje vo vetách („the secret is …“, „rotate the api key …“), keď hodnota vyzerá náhodne (zmiešané veľké a malé písmená, číslice, vysoká entropia; cesty a zástupné hodnoty sa ignorujú) | stredná |
 
 - `secrets.scan = "staged"` rozšíri skenovanie na každý stagnutý textový súbor (nielen znalosti).
 - Riadok, ktorý obsahuje `kontext:allow-secret` alebo zodpovedá regexu v `secrets.allow`, sa ignoruje.
@@ -45,9 +45,9 @@ Súbory `.env` (okrem `.example`, `.sample`, `.template`, `.dist`), SSH kľúče
 ## Agenti a repozitár
 
 - `ctx_read` vracia len súbory vnútri repozitára.
-- Nástroje, ktoré zapisujú (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`), menia len pracovný strom a git index – nikdy históriu, nikdy remote.
+- Nástroje, ktoré zapisujú (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`), menia len pracovný strom a git index, nikdy históriu, nikdy remote.
 - Príkazy, ktoré spúšťajú adaptéry, dostávajú argumenty ako vektor argumentov, nikdy cez shell.
 
 ## Nahlásenie zraniteľnosti
 
-Prosím, neotváraj verejné issue. Použi súkromné hlásenie zraniteľností na GitHube – pozri [SECURITY.md](https://github.com/SemanS/kontext/blob/main/SECURITY.md).
+Prosím, neotváraj verejné issue. Použi súkromné hlásenie zraniteľností na GitHube (pozri [SECURITY.md](https://github.com/SemanS/kontext/blob/main/SECURITY.md)).

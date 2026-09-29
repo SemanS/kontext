@@ -20,18 +20,18 @@ Your own presets go into `~/.config/kontext/presets/<name>.toml` and appear in `
 | Preset | Driver | Ops | Events | Notes |
 | --- | --- | --- | --- | --- |
 | `openviking` | http | search, read, store, remember, health | `sync` → store (team knowledge into the peer's `resources/`), private `capture` → remember (`memories/`) | [guide](../guides/03-openviking.md) |
-| `codegraph` | mcp | code | — | active where `.codegraph/` exists; [guide](../guides/04-code-intelligence.md) |
-| `serena` | mcp | code | — | LSP-backed symbol search; [guide](../guides/04-code-intelligence.md) |
-| `agent-lcm` | mcp | search, history, brief | — | cross-harness session archive; [guide](../guides/05-session-history.md) |
-| `sessions` | mcp | history, search, brief | — | `why_did_this_change` for `ctx_why`; [guide](../guides/05-session-history.md) |
-| `llm-claude` | command | llm | — | `claude -p` for autopilot deepening |
-| `llm-codex` | command | llm | — | `codex exec` (read-only sandbox, ephemeral) |
-| `llm-ollama` | http | llm | — | a local model via `/api/generate` |
+| `codegraph` | mcp | code | – | active where `.codegraph/` exists; [guide](../guides/04-code-intelligence.md) |
+| `serena` | mcp | code | – | LSP-backed symbol search; [guide](../guides/04-code-intelligence.md) |
+| `agent-lcm` | mcp | search, history, brief | – | cross-harness session archive; [guide](../guides/05-session-history.md) |
+| `sessions` | mcp | history, search, brief | – | `why_did_this_change` for `ctx_why`; [guide](../guides/05-session-history.md) |
+| `llm-claude` | command | llm | – | `claude -p` for autopilot deepening |
+| `llm-codex` | command | llm | – | `codex exec` (read-only sandbox, ephemeral) |
+| `llm-ollama` | http | llm | – | a local model via `/api/generate` |
 | `slack-webhook` | http | store | `sync` (decisions) | announces merged decisions in a channel |
 
 Presets whose external program is missing are inactive (`when.command`), so adding one on a machine without the tool is harmless.
 
-The OpenViking and CodeGraph presets were verified against their current versions; Serena, Agent LCM and sessions follow their documented MCP tools and rely on schema-based argument binding — if a tool changes, `kontext adapters inspect <name>` shows what to adjust.
+The OpenViking and CodeGraph presets were verified against their current versions; Serena, Agent LCM and sessions follow their documented MCP tools and rely on schema-based argument binding. If a tool changes, `kontext adapters inspect <name>` shows what to adjust.
 
 ## Variables
 

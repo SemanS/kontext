@@ -1,6 +1,6 @@
 # Set up your agents
 
-kontext speaks the Model Context Protocol over stdio. Any client that can start a local MCP server with the command `kontext mcp` gets the full tool set. Start the server from inside a repository (clients usually do this for you — they launch MCP servers in the project directory).
+kontext speaks the Model Context Protocol over stdio. Any client that can start a local MCP server with the command `kontext mcp` gets the full tool set. Start the server from inside a repository (clients usually do this for you: they launch MCP servers in the project directory).
 
 ## Wire a client
 

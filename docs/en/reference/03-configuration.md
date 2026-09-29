@@ -8,7 +8,7 @@ Later layers win. Tables are merged key by key; arrays are replaced.
 
 | # | File | Scope | Adapters |
 | --- | --- | --- | --- |
-| 1 | built-in defaults | — | — |
+| 1 | built-in defaults | – | – |
 | 2 | `~/.config/kontext/config.toml` | you, every repository | trusted |
 | 3 | `~/.config/kontext/repos/<slug>.toml` | you, one repository (slug from `kontext status`) | trusted |
 | 4 | `<repo>/.kontext.toml` or `<repo>/<store.dir>/kontext.toml` (default `.ai/kontext.toml`) | the team (committed) | only after `kontext trust` |
@@ -42,7 +42,7 @@ The user directory is `$KONTEXT_CONFIG_DIR`, else `$XDG_CONFIG_HOME/kontext`, el
 | `numbering` | `date` for decisions, `none` otherwise | `date`, `sequential`, `none` |
 | `trailer` | `Decision`, `Convention`, `Learning`, `Incident` | commit trailer key; none for architecture |
 
-Custom kinds work too — add a table with a `dir`.
+Custom kinds work too: add a table with a `dir`.
 
 ## `[sources]`
 
@@ -92,7 +92,7 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | --- | --- | --- |
 | `scan` | `store` | `store` (knowledge files), `staged` (every staged text file) or `off` |
 | `allow` | `[]` | regexes of lines to ignore |
-| `redact` | `[]` | regexes of values masked in agent threads and in what is distilled from them — a client's name, an integration id; keep them in a private layer (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`) |
+| `redact` | `[]` | regexes of values masked in agent threads and in what is distilled from them (a client's name, an integration id); keep them in a private layer (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`) |
 
 ## `[init]`
 

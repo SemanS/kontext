@@ -20,9 +20,9 @@
 
 Dobré návyky:
 
-- zachytávaj vo chvíli, keď padne rozhodnutie, nie na konci týždňa – inbox nič nestojí,
+- zachytávaj vo chvíli, keď padne rozhodnutie, nie na konci týždňa (inbox nič nestojí),
 - jedno rozhodnutie na záznam, každé na pár riadkov; na dlhšie texty odkazuj, nevkladaj ich,
-- každému záznamu daj `paths` – vďaka tomu sa zobrazí pri správnej zmene.
+- každému záznamu daj `paths`, vďaka tomu sa zobrazí pri správnej zmene.
 
 ## Review znalostí v pull requestoch
 
@@ -30,7 +30,7 @@ K záznamom pristupuj ako ku kódu:
 
 - **Je to pravda a stále to tak chceme?** Agent mohol z jedného commitu príliš zovšeobecniť.
 - **Má správny rozsah?** `paths` by mali pokrývať to, na čo sa rozhodnutie vzťahuje, nie celý repozitár.
-- **Je stručný?** Kontext, rozhodnutie, dôsledky – každé na pár riadkov.
+- **Je stručný?** Kontext, rozhodnutie, dôsledky (každé na pár riadkov).
 - **Nahrádza niečo?** Potom by mal starý záznam nahradiť cez `supersede`, a nie mu potichu odporovať.
 
 ## Keď zmeníš názor
@@ -47,7 +47,7 @@ Starý záznam prejde do stavu `superseded` a odkazuje na nový; `kontext log --
 ## Úskalia a incidenty
 
 - `--kind pitfall` (poznatok so štítkom `pitfall`) pre zradné veci, ktoré niekoho stáli celé popoludnie.
-- `--kind incident` pre to, čo sa pokazilo, príčinu a čo sa zmenilo – stručne; odkáž na úplný post-mortem.
+- `--kind incident` pre to, čo sa pokazilo, príčinu a čo sa zmenilo (stručne); odkáž na úplný post-mortem.
 
 ## Zaúčanie nováčika
 

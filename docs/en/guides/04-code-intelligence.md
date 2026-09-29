@@ -1,6 +1,6 @@
 # Code intelligence
 
-kontext's own symbol extraction is deliberately light (regexes that feed module summaries). For precise answers — where is `RunContext` defined, who calls it — plug in a code-intelligence server through a `code` op. `ctx_why <symbol>` uses it to locate the code before looking for decisions and history.
+kontext's own symbol extraction is deliberately light (regexes that feed module summaries). For precise answers (where is `RunContext` defined, who calls it), plug in a code-intelligence server through a `code` op. `ctx_why <symbol>` uses it to locate the code before looking for decisions and history.
 
 ## CodeGraph
 
@@ -34,7 +34,7 @@ The preset starts `serena start-mcp-server --context ide --project <repo>` and m
 
 ## Your own
 
-Any tool that finds symbols works — an MCP server, an HTTP service or a CLI. A zero-dependency example with `git grep`:
+Any tool that finds symbols works: an MCP server, an HTTP service or a CLI. A zero-dependency example with `git grep`:
 
 ```toml
 [adapters.gitgrep]

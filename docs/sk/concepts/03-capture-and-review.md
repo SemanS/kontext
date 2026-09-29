@@ -17,7 +17,7 @@ kontext oddeľuje **zapamätanie si** od **zdieľania**. Zachytiť sa dá čoko�
 
 ## Zachytávanie
 
-Zachytenie potrebuje druh, titulok a telo (alebo zhrnutie). Dobré zachytenia sú krátke – *čo, prečo, dôsledky* – a uvádzajú cesty, ktorých sa týkajú:
+Zachytenie potrebuje druh, titulok a telo (alebo zhrnutie). Dobré zachytenia sú krátke (*čo, prečo, dôsledky*) a uvádzajú cesty, ktorých sa týkajú:
 
 ```sh
 kontext capture --kind decision --title "Use Tantivy for local recall" \
@@ -42,20 +42,20 @@ Súkromné zachytenia sa nikdy nedostanú do repozitára. Adaptéry ich môžu p
 
 ## Povyšovanie
 
-Povýšenie zapíše kandidáta do úložiska – so správnym ID, adresárom, štýlom a číslovaním – a stagne ho:
+Povýšenie zapíše kandidáta do úložiska (so správnym ID, adresárom, štýlom a číslovaním) a stagne ho:
 
 - `ctx_prepare_commit` s `promote=[ids]` (to používajú agenti pred commitom),
 - `ctx_inbox` s `action=promote`,
 - `kontext promote <id>…` alebo `kontext prepare-commit --promote <id>`.
 
-`capture --promote` (alebo `promote=true` v `ctx_capture`) inbox preskočí a zapíše záznam priamo do pracovného stromu – hodí sa, keď už vieš, že patrí k aktuálnej zmene. Tak či tak sa nič nezdieľa, kým necommitneš.
+`capture --promote` (alebo `promote=true` v `ctx_capture`) inbox preskočí a zapíše záznam priamo do pracovného stromu, čo sa hodí, keď už vieš, že patrí k aktuálnej zmene. Tak či tak sa nič nezdieľa, kým necommitneš.
 
 ## Pred commitom: `ctx_prepare_commit` {#before-committing-ctx-prepare-commit}
 
 Report vypíše:
 
 1. stagnutú zmenu (alebo pracovný strom, keď nie je nič stagnuté),
-2. zapísané znalosti, ktorých `paths` pokrývajú zmenené súbory – *over, že stále platia*,
+2. zapísané znalosti, ktorých `paths` pokrývajú zmenené súbory (*over, že stále platia*),
 3. kandidátov z inboxu, najprv tých, ktorí sa týkajú zmenených súborov,
 4. výsledky validácie a skenovania tajných údajov pre stagnuté znalosti (chyby commit zablokujú),
 5. dokumenty modulov, ktoré možno treba obnoviť (veľa zmenených súborov alebo pridané/odobrané súbory),
@@ -68,4 +68,4 @@ Znalosti cestujú v tom istom pull requeste ako kód. Posudzovatelia vidia rozho
 
 ## Po merge
 
-Keď kolegovia pullnú, ich hooky `post-merge` / `post-rewrite` porovnajú znalosti v `HEAD` s ich posledným snapshotom a vyšlú udalosti `sync` – ich osobné systémy pamäte sa tak dozvedia rozhodnutia, ktoré tím práve prijal. Povýšené položky inboxu sa odstránia, keď je ich súbor súčasťou `HEAD`.
+Keď kolegovia pullnú, ich hooky `post-merge` / `post-rewrite` porovnajú znalosti v `HEAD` s ich posledným snapshotom a vyšlú udalosti `sync`. Ich osobné systémy pamäte sa tak dozvedia rozhodnutia, ktoré tím práve prijal. Povýšené položky inboxu sa odstránia, keď je ich súbor súčasťou `HEAD`.

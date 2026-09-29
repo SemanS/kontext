@@ -22,7 +22,7 @@ kontext connect codex --write    # appends it, or adds the approval mode to an e
 
 Codex asks before calling an MCP tool unless it can tell the tool is harmless, and with `approval_policy = "never"` it refuses instead of asking: `MCP tool call requires approval, but approval policy is never`. Two things keep kontext working in that setup:
 
-- every kontext tool carries MCP annotations — `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` and `ctx_log` are `readOnlyHint: true`, the rest are marked non-destructive (they write only the local inbox, the working tree and the git index), which Codex runs without asking;
+- every kontext tool carries MCP annotations: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` and `ctx_log` are `readOnlyHint: true`, the rest are marked non-destructive (they write only the local inbox, the working tree and the git index), which Codex runs without asking;
 - `default_tools_approval_mode = "approve"` in the server entry approves kontext's tools explicitly, independent of how a Codex version reads the hints.
 
 With `sandbox_mode = "workspace-write"` Codex keeps `.git` read-only for the agent's own shell commands, so `git add` / `git commit` fail there; kontext's server is not affected (`ctx_prepare_commit` still promotes and stages). Commit from a sandbox that allows it, or yourself.

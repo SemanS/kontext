@@ -140,7 +140,7 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/kontext/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#4338ca' }],
-    ['meta', { property: 'og:title', content: 'kontext — team context bridge for coding agents' }],
+    ['meta', { property: 'og:title', content: 'kontext: team context bridge for coding agents' }],
     ['meta', { property: 'og:description', content: 'Git-native decision memory for Claude Code, Codex, Cursor and every MCP client.' }],
   ],
   themeConfig: {

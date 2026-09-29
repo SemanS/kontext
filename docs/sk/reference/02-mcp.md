@@ -1,6 +1,6 @@
 # MCP nástroje, prompty a zdroje
 
-Server: `kontext mcp` – JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom. Verzie protokolu 2024-11-05, 2025-03-26, 2025-06-18 a 2025-11-25 (verzia klienta sa zopakuje, ak je podporovaná). Schopnosti: `tools`, `prompts`, `resources`, `logging`. Výsledky nástrojov sú text; chyby sa vracajú ako výsledky s `isError: true`.
+Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom. Verzie protokolu 2024-11-05, 2025-03-26, 2025-06-18 a 2025-11-25 (verzia klienta sa zopakuje, ak je podporovaná). Schopnosti: `tools`, `prompts`, `resources`, `logging`. Výsledky nástrojov sú text; chyby sa vracajú ako výsledky s `isError: true`.
 
 ## Nástroje
 
@@ -73,7 +73,7 @@ Každý výsledok: `N. title — snippet [kind · status · date · source] <uri
 | `part` | integer | 1 | časť dlhého prepisu |
 | `budget_chars` | integer | 40000 | znakov na časť (najviac 80000) |
 
-Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto počítači – pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
+Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto počítači. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
 
 ### `ctx_inbox`
 
@@ -96,7 +96,7 @@ Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-re
 | Parameter | Typ | Predvolene | |
 | --- | --- | --- | --- |
 | `count` | integer | 1 | koľko úloh vrátiť (do 5) |
-| `bootstrap` | boolean | false | založí úložisko znalostí, keď ho repozitár nemá – len keď o to požiadal používateľ |
+| `bootstrap` | boolean | false | založí úložisko znalostí, keď ho repozitár nemá (len keď o to požiadal používateľ) |
 
 Keď repozitár ešte nemá `.ai/` a `bootstrap` je true, `ctx_init` najprv spustí scan, history a render (bez hookov) a potom vráti prvú úlohu; bez neho vysvetlí, ako kontext zaviesť. Vetvu nikdy nezavádza, keď tímové znalosti už má iná vetva.
 
@@ -109,7 +109,7 @@ V repozitári bez úložiska znalostí prijme `ctx_capture` len `visibility: pri
 | `task_id` | string (povinné) | `purpose`, `mod:<module>`, `dec:<area>`, `refresh:<module>` |
 | `summary` | string | jeden riadok, najviac ~200 znakov |
 | `overview` | string | Markdown, 5–15 riadkov |
-| `decisions` | object[] | `{title, decision, summary?, context?, consequences?, paths?, commits?, date?, status?, tags?}` – pre úlohy `dec:` |
+| `decisions` | object[] | `{title, decision, summary?, context?, consequences?, paths?, commits?, date?, status?, tags?}` (pre úlohy `dec:`) |
 | `learnings` | object[] | `{title, body, paths?, tags?}` |
 | `skip` | boolean | preskočí úlohu |
 | `reason` | string | prečo sa preskakuje |

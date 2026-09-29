@@ -4,7 +4,7 @@ kontext is an MCP server: `kontext mcp` speaks JSON-RPC 2.0 over stdio (protocol
 
 ## What agents get
 
-**Tools** — see the [MCP reference](../reference/02-mcp.md) for parameters:
+**Tools** (see the [MCP reference](../reference/02-mcp.md) for parameters):
 
 | Tool | When an agent should call it |
 | --- | --- |
@@ -20,11 +20,11 @@ kontext is an MCP server: `kontext mcp` speaks JSON-RPC 2.0 over stdio (protocol
 
 Tools re-published from MCP adapters (`expose`) and tools declared in adapter config appear next to these.
 
-**Prompts** — `kontext-init`, `kontext-commit`, `kontext-reflect` (slash commands in Claude Code).
+**Prompts**: `kontext-init`, `kontext-commit`, `kontext-reflect` (slash commands in Claude Code).
 
-**Resources** — `kontext://brief` and `kontext://entry/<id>` for clients that browse resources.
+**Resources**: `kontext://brief` and `kontext://entry/<id>` for clients that browse resources.
 
-**Instructions** — on connect the server tells the agent, in five sentences, how to use the tools above.
+**Instructions**: on connect the server tells the agent, in five sentences, how to use the tools above.
 
 ## Behaviour of the server
 
@@ -43,4 +43,4 @@ Tools re-published from MCP adapters (`expose`) and tools declared in adapter co
 
 ## Without MCP
 
-Everything is also a CLI command (`kontext brief`, `kontext search`, …), and `kontext call <tool> '<json>'` runs any tool locally — handy for harnesses without MCP support and for scripts.
+Everything is also a CLI command (`kontext brief`, `kontext search`, …), and `kontext call <tool> '<json>'` runs any tool locally, which is handy for harnesses without MCP support and for scripts.

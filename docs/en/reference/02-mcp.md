@@ -1,6 +1,6 @@
 # MCP tools, prompts and resources
 
-Server: `kontext mcp` — JSON-RPC 2.0 over stdio, newline-delimited. Protocol versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 (the client's version is echoed when supported). Capabilities: `tools`, `prompts`, `resources`, `logging`. Tool results are text; errors are returned as `isError: true` results.
+Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 (the client's version is echoed when supported). Capabilities: `tools`, `prompts`, `resources`, `logging`. Tool results are text; errors are returned as `isError: true` results.
 
 ## Tools
 
@@ -73,7 +73,7 @@ Each hit: `N. title — snippet [kind · status · date · source] <uri>`.
 | `part` | integer | 1 | part of a long transcript |
 | `budget_chars` | integer | 40000 | characters per part (up to 80000) |
 
-Compact, redacted transcripts of this repository's agent threads on this machine — see [Knowledge from agent threads](../guides/08-distill-threads.md).
+Compact, redacted transcripts of this repository's agent threads on this machine. See [Knowledge from agent threads](../guides/08-distill-threads.md).
 
 ### `ctx_inbox`
 
@@ -96,7 +96,7 @@ Returns the report described in [Capture and review](../concepts/03-capture-and-
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
 | `count` | integer | 1 | how many tasks to return (up to 5) |
-| `bootstrap` | boolean | false | start the knowledge store when the repository has none — only when the user asked for it |
+| `bootstrap` | boolean | false | start the knowledge store when the repository has none (only when the user asked for it) |
 
 When the repository has no `.ai/` yet and `bootstrap` is true, `ctx_init` first runs scan, history and render (no hooks) and then returns the first task; without it, it explains how to set kontext up. It never bootstraps a branch when another branch already has the team knowledge.
 
@@ -109,7 +109,7 @@ In a repository without a knowledge store `ctx_capture` accepts only `visibility
 | `task_id` | string (required) | `purpose`, `mod:<module>`, `dec:<area>`, `refresh:<module>` |
 | `summary` | string | one line, at most ~200 characters |
 | `overview` | string | Markdown, 5–15 lines |
-| `decisions` | object[] | `{title, decision, summary?, context?, consequences?, paths?, commits?, date?, status?, tags?}` — for `dec:` tasks |
+| `decisions` | object[] | `{title, decision, summary?, context?, consequences?, paths?, commits?, date?, status?, tags?}` (for `dec:` tasks) |
 | `learnings` | object[] | `{title, body, paths?, tags?}` |
 | `skip` | boolean | skip the task |
 | `reason` | string | why it is skipped |

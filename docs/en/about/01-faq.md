@@ -2,7 +2,7 @@
 
 ## Is kontext a memory system like OpenViking or Mem0?
 
-No. It owns only the small, reviewed part — the team's decisions, conventions and lessons, kept in git — and connects everything else. Semantic memory, session archives and code graphs plug in as adapters. Many teams run kontext *with* a memory system: see the [OpenViking guide](../guides/03-openviking.md).
+No. It owns only the small, reviewed part (the team's decisions, conventions and lessons, kept in git) and connects everything else. Semantic memory, session archives and code graphs plug in as adapters. Many teams run kontext *with* a memory system: see the [OpenViking guide](../guides/03-openviking.md).
 
 ## Why not store everything in a vector database?
 
@@ -46,4 +46,4 @@ Not natively (hooks are POSIX shell). WSL works.
 
 ## How is this different from AGENTS.md / CLAUDE.md?
 
-Those files are rules for agents, written by people, loaded whole. kontext keeps many small entries with paths, statuses and history, ranks them for the task at hand, links them to commits and keeps them valid — and it adds a short block to `AGENTS.md` that tells agents to use it.
+Those files are rules for agents, written by people, loaded whole. kontext keeps many small entries with paths, statuses and history, ranks them for the task at hand, links them to commits and keeps them valid. It also adds a short block to `AGENTS.md` that tells agents to use it.

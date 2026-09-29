@@ -24,7 +24,7 @@ Claude Code asks each teammate once whether to trust the project's MCP servers. 
 claude mcp add --scope user kontext -- kontext mcp
 ```
 
-Check with `/mcp` inside Claude Code — the server `kontext` should list eleven `ctx_*` tools.
+Check with `/mcp` inside Claude Code: the server `kontext` should list eleven `ctx_*` tools.
 
 Registered for every project, kontext stays out of the way where nobody set it up: in a repository without a knowledge store it tells the agent so in its instructions, serves `ctx_brief`, `ctx_search`, `ctx_read` and `ctx_why` over docs and history, refuses team captures and promotions (private notes still work), and bootstraps only when asked (`ctx_init` with `bootstrap=true`, which the `kontext-init` prompt passes).
 
@@ -63,7 +63,7 @@ kontext connect claude-hooks --write
 kontext connect agents-md --write
 ```
 
-adds a marked block with the working rules to `AGENTS.md` — or to `CLAUDE.md` when that is the file your repository uses. Re-running updates the block in place.
+adds a marked block with the working rules to `AGENTS.md`, or to `CLAUDE.md` when that is the file your repository uses. Re-running updates the block in place.
 
 ## Permissions
 

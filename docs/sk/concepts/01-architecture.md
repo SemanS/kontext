@@ -39,8 +39,8 @@
 | Čo | Kde | Commitované | Zdieľané medzi worktree |
 | --- | --- | --- | --- |
 | Záznamy znalostí, index, zdieľaná konfigurácia | `.ai/` (alebo tvoj adresár ADR) | áno | cez git |
-| Osobné adaptéry | `~/.config/kontext/config.toml` | nie | — |
-| Osobné nastavenia pre jeden repozitár | `~/.config/kontext/repos/<slug>.toml` | nie | — |
+| Osobné adaptéry | `~/.config/kontext/config.toml` | nie | – |
+| Osobné nastavenia pre jeden repozitár | `~/.config/kontext/repos/<slug>.toml` | nie | – |
 | Konfigurácia pre tento klon | `<git-common-dir>/kontext/config.toml` | nie | áno |
 | Inbox (kandidáti) | `<git-common-dir>/kontext/inbox/` | nie | áno |
 | Outbox (doručenia adaptérom) | `<git-common-dir>/kontext/outbox.jsonl` | nie | áno |
@@ -52,11 +52,11 @@
 
 ## Identita repozitára
 
-kontext odvodí stabilnú identitu z remote `origin`: `git@github.com:Acme/Shop.git` aj `https://github.com/acme/shop` sa zmenia na `github.com/acme/shop` (slug `github.com-acme-shop`). Každý worktree a klon rovnakého remote dostane rovnakú identitu – podľa nej sa riadia osobné nastavenia pre repozitár a premenné adaptérov. Bez remote je identita `local/<dir>-<hash>`.
+kontext odvodí stabilnú identitu z remote `origin`: `git@github.com:Acme/Shop.git` aj `https://github.com/acme/shop` sa zmenia na `github.com/acme/shop` (slug `github.com-acme-shop`). Každý worktree a klon rovnakého remote dostane rovnakú identitu, podľa ktorej sa riadia osobné nastavenia pre repozitár a premenné adaptérov. Bez remote je identita `local/<dir>-<hash>`.
 
 ## Tok požiadavky: `ctx_search`
 
-1. Lokálny index sa obnoví, ak sa niečo zmenilo (záznamy, dokumenty, nové commity) – najviac raz za sekundu v jednom procese.
+1. Lokálny index sa obnoví, ak sa niečo zmenilo (záznamy, dokumenty, nové commity), najviac raz za sekundu v jednom procese.
 2. Tantivy spustí dopyt (BM25 nad titulkom, telom a poliami s rozloženými identifikátormi).
 3. Paralelne dostane dopyt každý adaptér s operáciou `search` (limit 12 s; zlyhávajúci adaptér si dá na 30 s pauzu).
 4. Skóre sa znormalizujú pre každý zdroj, zvážia, zlúčia a zbavia duplicít podľa URI a takmer rovnakého textu.
@@ -70,4 +70,4 @@ kontext odvodí stabilnú identitu z remote `origin`: `git@github.com:Acme/Shop.
 
 ## Rozhodnutia o návrhu
 
-Projekt zapisuje svoje vlastné rozhodnutia kontextom – pozri [`.ai/decisions/`](https://github.com/SemanS/kontext/tree/main/.ai/decisions).
+Projekt zapisuje svoje vlastné rozhodnutia kontextom. Pozri [`.ai/decisions/`](https://github.com/SemanS/kontext/tree/main/.ai/decisions).

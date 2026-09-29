@@ -2,29 +2,29 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
-## 0.1.5 — 2026-09-29
+## 0.1.5 (2026-09-29)
 
 **Autopilot**
-- `llm-claude` runs on the subscription of the logged-in account (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are dropped for its calls), with no tools, no MCP servers and a short system prompt — about a tenth of the tokens per task — and without saving the calls as Claude Code sessions. New `effort` variable (default `high`); timeout 10 minutes. Opus: `kontext adapters add llm-claude --force --var model=claude-opus-5-5`.
+- `llm-claude` runs on the subscription of the logged-in account (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` are dropped for its calls), with no tools, no MCP servers and a short system prompt (about a tenth of the tokens per task), and without saving the calls as Claude Code sessions. New `effort` variable (default `high`); timeout 10 minutes. Opus: `kontext adapters add llm-claude --force --var model=claude-opus-5-5`.
 
 **Init**
 - `kontext init --no-hooks` is remembered for the clone: a later `init` or `init --deepen`, from any worktree, no longer installs hooks where they were declined; `kontext hooks install` adds them.
 
-## 0.1.4 — 2026-09-29
+## 0.1.4 (2026-09-29)
 
 **Sensitive threads**
 - Thread transcripts (`kontext distill`, `ctx_threads`) and what is distilled from them mask email addresses, phone numbers, IBANs, card numbers and IP addresses, besides secrets; `secrets.redact` adds your own patterns (a client's name, an integration id).
 - The model is asked for roles instead of people's names and to leave out contact data, records, credentials and hosts; its entries are masked again.
 - Measured on a client thread: 52 email addresses, 2 phone numbers and 13 IP addresses no longer reach the model, and the distilled entries named no one.
 
-## 0.1.3 — 2026-09-29
+## 0.1.3 (2026-09-29)
 
 **Knowledge from agent threads**
-- `kontext distill` reads Claude Code and Codex threads (every Claude account, `$CODEX_HOME`), Superset workspaces (by id, worktree name, path or branch; `--superset` alone means the current one) or any text, and captures the durable decisions, conventions, pitfalls and incidents an `llm` adapter finds in them into the inbox — with paths, commits, `origin: thread` and the thread as source. Transcripts are compacted and redacted, split into parts for long threads, and checked against what is recorded already. See [Knowledge from agent threads](../guides/08-distill-threads.md).
+- `kontext distill` reads Claude Code and Codex threads (every Claude account, `$CODEX_HOME`), Superset workspaces (by id, worktree name, path or branch; `--superset` alone means the current one) or any text, and captures the durable decisions, conventions, pitfalls and incidents an `llm` adapter finds in them into the inbox, with paths, commits, `origin: thread` and the thread as source. Transcripts are compacted and redacted, split into parts for long threads, and checked against what is recorded already. See [Knowledge from agent threads](../guides/08-distill-threads.md).
 - `ctx_threads` (read-only) gives connected agents the same transcripts, in parts; the `kontext-distill` prompt walks an agent through distilling one with `ctx_capture`, which now takes `source` and `commits`.
 - A Superset workspace's threads that ran in another repository are skipped, and a workspace of another repository is refused.
 
-## 0.1.2 — 2026-09-29
+## 0.1.2 (2026-09-29)
 
 From deploying kontext into that monorepo with Claude Code and Codex connected.
 
@@ -33,14 +33,14 @@ From deploying kontext into that monorepo with Claude Code and Codex connected.
 - While `kontext init --deepen` runs, `ctx_init_submit` from another process refuses the run's tasks.
 - A resubmitted task replaces its own earlier learnings and decisions instead of adding copies, and leaves entries people wrote alone.
 - A branch without team knowledge is told when another branch has it (a bootstrap waiting for review): the brief says to merge it, and `ctx_init` refuses to bootstrap a second, conflicting `.ai/`.
-- Entries mined by init get no commit trailers — they come from the older commits listed in their `commits`, and a bootstrap commit no longer carries dozens of `Decision:` / `Learning:` lines.
+- Entries mined by init get no commit trailers: they come from the older commits listed in their `commits`, and a bootstrap commit no longer carries dozens of `Decision:` / `Learning:` lines.
 
 **Agents**
 - Registered for all repositories (user scope), kontext only reads where nobody set it up: in a repository without a knowledge store the MCP instructions say so, `ctx_capture` refuses team entries (private notes still work), promotions are refused, and `ctx_init` bootstraps only with `bootstrap=true` (the `kontext-init` prompt passes it).
 - A decision or learning captured without `paths` and promoted with a change governs that change's files (conventions stay repository-wide), so `ctx_why` finds it on the code it explains.
 - `kontext connect codex` writes to `$CODEX_HOME/config.toml` when `CODEX_HOME` is set (as account-switching wrappers do), creates the directory if needed and mentions a backup only when it made one.
 
-## 0.1.1 — 2026-09-28
+## 0.1.1 (2026-09-28)
 
 Fixes from a field test on a 74-module moon/Cargo monorepo worked by parallel Claude Code and Codex agents.
 
@@ -66,7 +66,7 @@ Fixes from a field test on a 74-module moon/Cargo monorepo worked by parallel Cl
 **Security**
 - Secrets written into sentences ("the secret is …", "rotate the token …") are detected when the value looks random; paths and placeholders are left alone.
 
-## 0.1.0 — 2026-09-28
+## 0.1.0 (2026-09-28)
 
 First public release.
 

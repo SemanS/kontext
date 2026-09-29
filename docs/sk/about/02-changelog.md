@@ -2,29 +2,29 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## 0.1.5 – 2026-09-29
+## 0.1.5 (2026-09-29)
 
 **Autopilot**
-- `llm-claude` beží na subscription prihláseného účtu (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` sa pre jeho volania zahodia), bez nástrojov, MCP serverov a s krátkym systémovým promptom – zhruba desatina tokenov na úlohu – a volania sa neukladajú ako sessions Claude Code. Nová premenná `effort` (predvolene `high`); časový limit 10 minút. Opus: `kontext adapters add llm-claude --force --var model=claude-opus-5-5`.
+- `llm-claude` beží na subscription prihláseného účtu (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` sa pre jeho volania zahodia), bez nástrojov, MCP serverov a s krátkym systémovým promptom (zhruba desatina tokenov na úlohu) a volania sa neukladajú ako sessions Claude Code. Nová premenná `effort` (predvolene `high`); časový limit 10 minút. Opus: `kontext adapters add llm-claude --force --var model=claude-opus-5-5`.
 
 **Init**
 - `kontext init --no-hooks` sa zapamätá pre klon: neskoršie `init` či `init --deepen` z akéhokoľvek worktree už nenainštaluje hooky tam, kde ich niekto odmietol; `kontext hooks install` ich pridá.
 
-## 0.1.4 – 2026-09-29
+## 0.1.4 (2026-09-29)
 
 **Citlivé vlákna**
 - Prepisy vlákien (`kontext distill`, `ctx_threads`) a to, čo sa z nich vydestiluje, maskujú okrem tajných údajov aj e-mailové adresy, telefónne čísla, IBAN, čísla kariet a IP adresy; `secrets.redact` pridá tvoje vlastné vzory (meno klienta, id integrácie).
 - Model má pokyn písať roly namiesto mien ľudí a vynechať kontakty, záznamy, prístupové údaje a hosty; jeho záznamy sa znova zamaskujú.
 - Namerané na klientskom vlákne: 52 e-mailových adries, 2 telefónne čísla a 13 IP adries sa už nedostane k modelu a vydestilované záznamy nikoho nemenovali.
 
-## 0.1.3 – 2026-09-29
+## 0.1.3 (2026-09-29)
 
 **Znalosti z vlákien agentov**
-- `kontext distill` číta vlákna Claude Code a Codexu (všetky účty Claude, `$CODEX_HOME`), workspaces v Supersete (podľa id, názvu worktree, cesty alebo vetvy; samotné `--superset` znamená aktuálny) alebo akýkoľvek text a trvalé rozhodnutia, konvencie, úskalia a incidenty, ktoré v nich nájde LLM adaptér, zachytí do inboxu – s cestami, commitmi, `origin: thread` a vláknom ako zdrojom. Prepisy sa skrátia a zamaskujú, dlhé vlákna sa rozdelia na časti a porovnajú sa s tým, čo už je zapísané. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
+- `kontext distill` číta vlákna Claude Code a Codexu (všetky účty Claude, `$CODEX_HOME`), workspaces v Supersete (podľa id, názvu worktree, cesty alebo vetvy; samotné `--superset` znamená aktuálny) alebo akýkoľvek text a trvalé rozhodnutia, konvencie, úskalia a incidenty, ktoré v nich nájde LLM adaptér, zachytí do inboxu spolu s cestami, commitmi, `origin: thread` a vláknom ako zdrojom. Prepisy sa skrátia a zamaskujú, dlhé vlákna sa rozdelia na časti a porovnajú sa s tým, čo už je zapísané. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
 - `ctx_threads` (len na čítanie) dá pripojeným agentom tie isté prepisy po častiach; prompt `kontext-distill` prevedie agenta spracovaním vlákna cez `ctx_capture`, ktorý teraz prijíma `source` a `commits`.
 - Vlákna workspace v Supersete, ktoré bežali v inom repozitári, sa preskočia a workspace iného repozitára sa odmietne.
 
-## 0.1.2 – 2026-09-29
+## 0.1.2 (2026-09-29)
 
 Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.
 
@@ -33,14 +33,14 @@ Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.
 - Kým beží `kontext init --deepen`, `ctx_init_submit` z iného procesu úlohy tohto behu odmietne.
 - Opakovane odovzdaná úloha nahradí vlastné skoršie poznatky a rozhodnutia namiesto pridávania kópií a záznamy, ktoré napísali ľudia, nechá na pokoji.
 - Vetva bez tímových znalostí sa dozvie, keď ich má iná vetva (bootstrap čakajúci na review): brief odporučí zlúčenie a `ctx_init` odmietne založiť druhé, konfliktné `.ai/`.
-- Záznamy vyťažené initom nedostanú trailery commitu – pochádzajú zo starších commitov uvedených v ich `commits` a bootstrap commit už nenesie desiatky riadkov `Decision:` / `Learning:`.
+- Záznamy vyťažené initom nedostanú trailery commitu: pochádzajú zo starších commitov uvedených v ich `commits` a bootstrap commit už nenesie desiatky riadkov `Decision:` / `Learning:`.
 
 **Agenti**
 - Keď je kontext zaregistrovaný pre všetky repozitáre (user scope), tam, kde ho nikto nezaviedol, len číta: v repozitári bez úložiska znalostí to povedia MCP inštrukcie, `ctx_capture` odmietne tímové záznamy (súkromné poznámky fungujú ďalej), povýšenia sa odmietnu a `ctx_init` zavádza len s `bootstrap=true` (odovzdá ho prompt `kontext-init`).
 - Rozhodnutie alebo poznatok zachytený bez `paths` a povýšený so zmenou sa vzťahuje na súbory tej zmeny (konvencie zostávajú pre celý repozitár), takže ho `ctx_why` nájde pri kóde, ktorý vysvetľuje.
 - `kontext connect codex` zapisuje do `$CODEX_HOME/config.toml`, keď je `CODEX_HOME` nastavené (ako to robia obaly prepínajúce účty), v prípade potreby vytvorí adresár a zálohu spomenie, len keď ju naozaj vytvoril.
 
-## 0.1.1 – 2026-09-28
+## 0.1.1 (2026-09-28)
 
 Opravy z testu v praxi na monorepe s 74 modulmi (moon/Cargo), na ktorom paralelne pracujú agenti Claude Code a Codex.
 
@@ -66,7 +66,7 @@ Opravy z testu v praxi na monorepe s 74 modulmi (moon/Cargo), na ktorom paraleln
 **Bezpečnosť**
 - Tajné údaje zapísané vo vetách („the secret is …“, „rotate the token …“) sa zachytia, keď hodnota vyzerá náhodne; cesty a zástupné hodnoty zostanú nedotknuté.
 
-## 0.1.0 – 2026-09-28
+## 0.1.0 (2026-09-28)
 
 Prvé verejné vydanie.
 

@@ -15,7 +15,7 @@ Releases are cut from `main` by pushing a version tag; CI builds the binaries an
    git push origin main v0.2.0
    ```
 
-6. The `release` workflow builds `kontext-<target>.tar.gz` for macOS (arm64, x86_64) and Linux (x86_64, arm64) and attaches them to the GitHub release with generated notes. Edit the release text if needed — point to the changelog.
+6. The `release` workflow builds `kontext-<target>.tar.gz` for macOS (arm64, x86_64) and Linux (x86_64, arm64) and attaches them to the GitHub release with generated notes. Edit the release text if needed, and point to the changelog.
 7. Check the install script against the new release:
 
    ```sh
@@ -25,4 +25,4 @@ Releases are cut from `main` by pushing a version tag; CI builds the binaries an
 
 ## Versioning
 
-[Semantic Versioning](https://semver.org/). Before 1.0, a minor version may change configuration keys, the entry format or tool parameters — always with a migration note in the changelog. Patch versions are fixes only.
+[Semantic Versioning](https://semver.org/). Before 1.0, a minor version may change configuration keys, the entry format or tool parameters, always with a migration note in the changelog. Patch versions are fixes only.

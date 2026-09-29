@@ -9,11 +9,11 @@ Nothing, unless you configure it:
 - the local index, inbox, outbox and caches stay in `.git/kontext/`,
 - knowledge reaches others only through commits you push,
 - adapters send data only where their configuration says (and only for the ops and events they declare),
-- `kontext distill` sends a thread's compacted transcript to the `llm` adapter you choose — with secrets redacted and email addresses, phone numbers, IBANs, card numbers, IP addresses and your `secrets.redact` patterns masked (see [sensitive threads](../guides/08-distill-threads.md#sensitive-threads)).
+- `kontext distill` sends a thread's compacted transcript to the `llm` adapter you choose, with secrets redacted and email addresses, phone numbers, IBANs, card numbers, IP addresses and your `secrets.redact` patterns masked (see [sensitive threads](../guides/08-distill-threads.md#sensitive-threads)).
 
 ## Trust for repository-declared adapters
 
-Adapters can start processes and call URLs. A repository you clone must not be able to make kontext — or its git hooks — run arbitrary commands. Therefore:
+Adapters can start processes and call URLs. A repository you clone must not be able to make kontext, or its git hooks, run arbitrary commands. Therefore:
 
 - adapters in your user config (`~/.config/kontext/…`) and in the clone-local config are trusted,
 - adapters declared in a repository's **shared** config (`.ai/kontext.toml`) are **skipped** until you review them and run `kontext trust`,
@@ -32,7 +32,7 @@ Every staged knowledge file is scanned by the pre-commit hook; high-confidence f
 | Anthropic (`sk-ant-…`) and OpenAI (`sk-…`) keys, dotenv-vault keys | high |
 | `Authorization: Bearer …` headers, credentials in URLs | high |
 | Google API keys, JWTs, `*_TOKEN=` / `password:` assignments (placeholders ignored) | medium |
-| secrets in sentences — "the secret is …", "rotate the api key …" — when the value looks random (mixed case, digits, high entropy; paths and placeholders ignored) | medium |
+| secrets in sentences ("the secret is …", "rotate the api key …") when the value looks random (mixed case, digits, high entropy; paths and placeholders ignored) | medium |
 
 - `secrets.scan = "staged"` extends the scan to every staged text file (not only knowledge).
 - A line containing `kontext:allow-secret`, or matching a regex in `secrets.allow`, is ignored.
@@ -45,9 +45,9 @@ Every staged knowledge file is scanned by the pre-commit hook; high-confidence f
 ## Agents and the repository
 
 - `ctx_read` only returns files inside the repository.
-- Tools that write (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`) modify the working tree and the git index only — never history, never remotes.
+- Tools that write (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`) modify the working tree and the git index only, never history, never remotes.
 - Commands run by adapters receive arguments as an argument vector, never through a shell.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue. Use GitHub's private vulnerability reporting — see [SECURITY.md](https://github.com/SemanS/kontext/blob/main/SECURITY.md).
+Please do not open a public issue. Use GitHub's private vulnerability reporting: see [SECURITY.md](https://github.com/SemanS/kontext/blob/main/SECURITY.md).

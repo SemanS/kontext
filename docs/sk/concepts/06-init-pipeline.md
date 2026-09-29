@@ -22,9 +22,9 @@ Zisťuje:
 - **manifesty**: `package.json`, `Cargo.toml`, `pyproject.toml`, `setup.py`, `go.mod`, Nx `project.json`, moon `moon.yml`, `pom.xml`, `build.gradle(.kts)`, `composer.json`, `Gemfile`, `mix.exs`, `deno.json`,
 - **nástroje workspace** (Nx, moon, Turborepo, pnpm/npm workspaces, Cargo workspaces, Bun, uv, Deno, Lerna, Go workspaces),
 - **stack a nástroje** zo závislostí a súborov (React, NestJS, Axum, FastAPI, Firebase, BigQuery, Terraform, Docker, Jest, Playwright, …),
-- **moduly**: každý adresár s manifestom (*deklarovaný* projekt, zostane aj keď je malý), adresáre na najvyššej úrovni s aspoň `init.min_module_files` súbormi kódu (*odvodené*) a – pri moduloch so 150+ súbormi – *oblasti* o úroveň nižšie (alebo pod jeho `src/`, `src/lib/`); každý opíše jeho manifest, úvod jeho README, a ak chýba oboje, dokumentačný komentár balíka (docstring v `__init__.py`, `//!` dokumentácia crate, `doc.go`),
+- **moduly**: každý adresár s manifestom (*deklarovaný* projekt, zostane aj keď je malý), adresáre na najvyššej úrovni s aspoň `init.min_module_files` súbormi kódu (*odvodené*) a pri moduloch so 150+ súbormi aj *oblasti* o úroveň nižšie (alebo pod jeho `src/`, `src/lib/`); každý opíše jeho manifest, úvod jeho README, a ak chýba oboje, dokumentačný komentár balíka (docstring v `__init__.py`, `//!` dokumentácia crate, `doc.go`),
 - **závislosti** medzi modulmi zo závislostí workspace, Cargo path závislostí, moon `dependsOn`, aliasov ciest v tsconfig a relatívnych či balíčkových importov,
-- **symboly** (exportované funkcie, triedy, typy) cez jednoduché regexy pre TypeScript/JavaScript, Python, Rust, Go a jazyky JVM – presná inteligencia kódu je úlohou [adaptérov kódu](../guides/04-code-intelligence.md),
+- **symboly** (exportované funkcie, triedy, typy) cez jednoduché regexy pre TypeScript/JavaScript, Python, Rust, Go a jazyky JVM (presná inteligencia kódu je úlohou [adaptérov kódu](../guides/04-code-intelligence.md)),
 - **dokumenty, adresáre ADR** (s ich štýlom a číslovaním), **súbory s pravidlami pre agentov** (`AGENTS.md`, `CLAUDE.md`, …) a **názvy premenných prostredia** zo súborov typu `.env.example` (len názvy, nikdy hodnoty).
 
 ## 2 · history
@@ -32,17 +32,17 @@ Zisťuje:
 Vyťaží posledných `init.history_max_commits` commitov bez merge (3000):
 
 - **signály rozhodnutí** v správach: *replace*, *migrate*, *switch to*, *instead of*, *deprecate*, *breaking*; voľby formulované ako pravidlá (*X, not Y*, *never*, *no longer*, *is gone*); zdôvodnenie (*because*, *so*, *since*, *otherwise*, *to keep*) a dlhé vysvetľujúce telá; typy Conventional Commits (`refactor`, `feat!`); zakladajúci commit, keď jeho správa vysvetľuje projekt,
-- **výmeny závislostí** z diffov manifestov – „v tom istom commite odobral X a pridal Y“ je jeden z najsilnejších signálov,
+- **výmeny závislostí** z diffov manifestov: „v tom istom commite odobral X a pridal Y“ je jeden z najsilnejších signálov,
 - **churn** pre súbory a moduly a dátum poslednej zmeny,
 - **konvencie**: podiel Conventional Commits, kľúče tiketov v predmetoch.
 
-Commity, ktoré sa dotýkajú len existujúcich ADR alebo `.ai/`, sa preskočia (už sú znalosťami) a trailery s autorstvom (`Co-authored-by`, …) sa odstránia. Keď prah prejde málo commitov – história písaná ako pravidlá, nie „rozhodli sme sa“ – doplnia sa ďalšie najlepšie až do štvrtiny histórie. Kandidáti sa zhlukujú podľa modulov; modul s jedným či dvoma sa pridá k nadradenému modulu a veľký zhluk sa rozdelí na chronologické časti po najviac 8 commitoch. Najsilnejšie zhluky sa stanú úlohami `dec:` (`init.max_decision_tasks`, predvolene 20).
+Commity, ktoré sa dotýkajú len existujúcich ADR alebo `.ai/`, sa preskočia (už sú znalosťami) a trailery s autorstvom (`Co-authored-by`, …) sa odstránia. Keď prah prejde málo commitov (história písaná ako pravidlá, nie „rozhodli sme sa“), doplnia sa ďalšie najlepšie až do štvrtiny histórie. Kandidáti sa zhlukujú podľa modulov; modul s jedným či dvoma sa pridá k nadradenému modulu a veľký zhluk sa rozdelí na chronologické časti po najviac 8 commitoch. Najsilnejšie zhluky sa stanú úlohami `dec:` (`init.max_decision_tasks`, predvolene 20).
 
 ## 3 · render
 
-- `.ai/kontext.toml` (keď ešte neexistuje zdieľaná konfigurácia) – vrátane nájdeného adresára ADR ako domova rozhodnutí,
-- `.ai/architecture/overview.md` – sekcia *Purpose* (úvod z README, kým ho agent nespresní) a generované fakty: stack, tabuľka modulov (a mená modulov bez dokumentu), ako v repozitári pracovať, história,
-- `.ai/architecture/modules/<module>.md` pre prvých `init.max_module_docs` modulov (40) podľa poradia – zástupná sekcia *Overview* a generované fakty: druh, jazyk, veľkosť, manifesty, závislosti, závislé moduly, kľúčové súbory, exporty, balíčky, dokumenty, aktivita,
+- `.ai/kontext.toml` (keď ešte neexistuje zdieľaná konfigurácia) vrátane nájdeného adresára ADR ako domova rozhodnutí,
+- `.ai/architecture/overview.md` so sekciou *Purpose* (úvod z README, kým ho agent nespresní) a generovanými faktami: stack, tabuľka modulov (a mená modulov bez dokumentu), ako v repozitári pracovať, história,
+- `.ai/architecture/modules/<module>.md` pre prvých `init.max_module_docs` modulov (40) podľa poradia, so zástupnou sekciou *Overview* a generovanými faktami: druh, jazyk, veľkosť, manifesty, závislosti, závislé moduly, kľúčové súbory, exporty, balíčky, dokumenty, aktivita,
 - `.ai/README.md` a `.ai/.gitattributes`.
 
 Generované fakty sú medzi `<!-- kontext:facts:start … -->` a `<!-- kontext:facts:end -->`. Pri ďalších spusteniach sa prepisuje len tento blok.
@@ -70,8 +70,8 @@ Poradie: purpose → prvých osem modulov → zhluky rozhodnutí → ostatné mo
 
 Kto robí prácu:
 
-- **pripojený agent** – prompt `kontext-init` alebo `ctx_init` / `ctx_init_submit` (a `ctx_init` sám spustí fázy 1–3, keď `.ai/` ešte neexistuje),
-- **LLM adaptér** – `kontext init --deepen --llm <adapter>`, ktorý ku každej úlohe priloží relevantné úryvky súborov a čaká odpoveď v JSON ([návod na autopilota](../guides/06-autopilot.md)),
-- **ty** – `kontext init next` vypíše úlohu, `kontext init submit answer.json` ju zapíše, `kontext init skip <task>` ju preskočí (preskočenie úlohy `refresh:` potvrdí, že zhrnutie modulu stále platí).
+- **pripojený agent**: prompt `kontext-init` alebo `ctx_init` / `ctx_init_submit` (a `ctx_init` sám spustí fázy 1–3, keď `.ai/` ešte neexistuje),
+- **LLM adaptér**: `kontext init --deepen --llm <adapter>`, ktorý ku každej úlohe priloží relevantné úryvky súborov a čaká odpoveď v JSON ([návod na autopilota](../guides/06-autopilot.md)),
+- **ty**: `kontext init next` vypíše úlohu, `kontext init submit answer.json` ju zapíše, `kontext init skip <task>` ju preskočí (preskočenie úlohy `refresh:` potvrdí, že zhrnutie modulu stále platí).
 
 Odovzdané výsledky sa validujú (limity dĺžky, maskovanie tajných údajov) a zapíšu do pracovného stromu na review.

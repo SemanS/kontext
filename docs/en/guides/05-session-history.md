@@ -4,8 +4,8 @@ Raw agent sessions are too long and too personal for git, but they answer "what 
 
 | Op | Used for |
 | --- | --- |
-| `history` | `ctx_why <path|commit|topic>` — sessions that touched the target |
-| `search` | `ctx_search` — full-text or semantic hits from transcripts |
+| `history` | `ctx_why <path\|commit\|topic>`: sessions that touched the target |
+| `search` | `ctx_search`: full-text or semantic hits from transcripts |
 | `brief` | a short section in `ctx_brief` (a primer of recent work) |
 
 ## sessions
@@ -34,4 +34,4 @@ Both presets bind arguments from the tools' schemas; if a tool changes, `kontext
 
 ## From history to knowledge
 
-Session hits are evidence, not truth. When a session reveals a decision worth keeping, capture it — with the paths it governs — and promote it into the relevant commit. The `kontext-reflect` prompt does exactly that at the end of a session.
+Session hits are evidence, not truth. When a session reveals a decision worth keeping, capture it, with the paths it governs, and promote it into the relevant commit. The `kontext-reflect` prompt does exactly that at the end of a session.

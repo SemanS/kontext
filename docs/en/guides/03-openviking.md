@@ -62,4 +62,4 @@ peer = "shop"
 | "Have I seen something like this before?" | OpenViking (semantic, personal history) |
 | "Why is this line like this?" | `ctx_why`: git history + decisions + adapters |
 
-Keep reviewed decisions in git. Let OpenViking remember everything else — and let it learn the team's decisions through `sync`.
+Keep reviewed decisions in git. Let OpenViking remember everything else, and let it learn the team's decisions through `sync`.

@@ -14,7 +14,7 @@ Index [Tantivy](https://github.com/quickwit-oss/tantivy) pre každý worktree, o
 
 Šum sa odfiltruje: commity „Merge branch …“, riadky `Co-authored-by`/`Signed-off-by`, súbory väčšie ako `sources.max_bytes` a všetko, čo vyzerá ako súbor s tajnými údajmi.
 
-Index sa pred dopytom obnovuje inkrementálne (záznamy a dokumenty podľa času zmeny a veľkosti, commity podľa SHA) – najviac raz za sekundu v jednom procese. `kontext reindex` ho zostaví od nuly.
+Index sa pred dopytom obnovuje inkrementálne (záznamy a dokumenty podľa času zmeny a veľkosti, commity podľa SHA), najviac raz za sekundu v jednom procese. `kontext reindex` ho zostaví od nuly.
 
 ### Identifikátory
 
@@ -26,7 +26,7 @@ BM25 nad titulkom (váha 2,5), pomocným textom s rozloženými identifikátormi
 
 ## Federované vyhľadávanie
 
-`ctx_search` pošle dopyt paralelne každému adaptéru s operáciou `search`, s limitom 12 sekúnd. Zdroje sa spájajú váženým recipročným poradím (každý výsledok má skóre `weight / (8 + rank)`), takže škála skóre žiadneho zdroja – tu BM25, tam kosínusová podobnosť – nevytlačí ostatné a jediný zdroj si zachová vlastné poradie. Duplicity sa odstránia podľa URI, podľa takmer rovnakého titulku/úryvku a vtedy, keď adaptér vráti svoju kópiu lokálneho záznamu (synchronizované `…/<id>.md`). Pomalý alebo zlyhávajúci adaptér nikdy nezablokuje odpoveď: objaví sa v poznámke a na 30 sekúnd si dá pauzu.
+`ctx_search` pošle dopyt paralelne každému adaptéru s operáciou `search`, s limitom 12 sekúnd. Zdroje sa spájajú váženým recipročným poradím (každý výsledok má skóre `weight / (8 + rank)`), takže škála skóre žiadneho zdroja (tu BM25, tam kosínusová podobnosť) nevytlačí ostatné a jediný zdroj si zachová vlastné poradie. Duplicity sa odstránia podľa URI, podľa takmer rovnakého titulku/úryvku a vtedy, keď adaptér vráti svoju kópiu lokálneho záznamu (synchronizované `…/<id>.md`). Pomalý alebo zlyhávajúci adaptér nikdy nezablokuje odpoveď: objaví sa v poznámke a na 30 sekúnd si dá pauzu.
 
 Vyhľadávanie zúžiš cez `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) a `sources` (`local` a/alebo názvy adaptérov).
 
@@ -41,7 +41,7 @@ Vyhľadávanie zúžiš cez `kinds` (`decision`, `convention`, `learning`, `inci
 | SHA commitu | správa, znalosti, s ktorými súvisí (cez `commits` alebo `paths`), zmenené súbory |
 | symbol alebo téma | adaptéry `code` ho nájdu (CodeGraph, Serena), potom lokálne znalosti a história, potom adaptéry `history` |
 
-Commity sa zoraďujú podľa signálov rozhodnutí – slová ako *replace*, *migrate*, *instead of*, *because*; typ Conventional Commits; breaking changes; dĺžka vysvetlenia – a podľa trailerov kontextu (`Decision: …`).
+Commity sa zoraďujú podľa signálov rozhodnutí (slová ako *replace*, *migrate*, *instead of*, *because*; typ Conventional Commits; breaking changes; dĺžka vysvetlenia) a podľa trailerov kontextu (`Decision: …`).
 
 ## `ctx_log`
 

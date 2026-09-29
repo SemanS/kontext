@@ -28,7 +28,7 @@ Názov adresára aj umiestnenie každého druhu sa dajú nastaviť ([konfigurác
 | `convention` | `conventions/` | `Convention:` | ako tím niečo robí (pomenovanie, vrstvenie, testovanie) |
 | `learning` | `learnings/` | `Learning:` | neočividné poznatky a úskalia („gotchas“) |
 | `incident` | `incidents/` | `Incident:` | čo sa pokazilo, prečo a čo sa zmenilo |
-| `architecture` | `architecture/` | — | prehľad a dokumenty modulov (väčšinou generované) |
+| `architecture` | `architecture/` | – | prehľad a dokumenty modulov (väčšinou generované) |
 
 Pri zachytávaní sa akceptujú aliasy: `adr` → decision, `pitfall`/`gotcha` → learning (so štítkom `pitfall`), `note`/`lesson` → learning, `rule`/`guideline` → convention, `postmortem`/`outage` → incident.
 
@@ -65,7 +65,7 @@ Neznáme kľúče vo front matter sa pri prepise súboru zachovajú.
 
 ### Klasické ADR (štýl polí)
 
-Repozitáre, ktoré už ADR vedú, ich zvyčajne píšu takto – kontext ich číta aj zapisuje presne v tomto tvare:
+Repozitáre, ktoré už ADR vedú, ich zvyčajne píšu takto a kontext ich číta aj zapisuje presne v tomto tvare:
 
 ```markdown
 # 0007 — Orders live in PostgreSQL
@@ -83,7 +83,7 @@ Rozpoznané polia: Status, Date, Tags, Paths, Supersedes, Superseded by, Summary
 
 | Číslovanie | Názov súboru | Typicky pre |
 | --- | --- | --- |
-| `date` (predvolené pre rozhodnutia) | `2026-09-28-prices-are-integer-cents.md` | nové úložiská – žiadne kolízie medzi vetvami |
+| `date` (predvolené pre rozhodnutia) | `2026-09-28-prices-are-integer-cents.md` | nové úložiská (žiadne kolízie medzi vetvami) |
 | `sequential` | `0008-orders-live-in-postgresql.md` | existujúce adresáre ADR |
 | `none` | `prices-are-integer-cents.md` | konvencie, poznatky |
 
@@ -95,7 +95,7 @@ Rozhodnutia sú *aktívne*, pokiaľ nie sú `superseded`, `deprecated` alebo `re
 
 ## Záznamy nech sú stručné
 
-Záznamy majú čítať agenti v rámci tokenového rozpočtu. `kontext check` upozorní, keď telo prekročí `store.max_body_lines` (predvolene 80 neprázdnych riadkov) – detaily presuň do bežnej dokumentácie a daj na ňu odkaz.
+Záznamy majú čítať agenti v rámci tokenového rozpočtu. `kontext check` upozorní, keď telo prekročí `store.max_body_lines` (predvolene 80 neprázdnych riadkov). Detaily presuň do bežnej dokumentácie a daj na ňu odkaz.
 
 ## Indexový súbor
 

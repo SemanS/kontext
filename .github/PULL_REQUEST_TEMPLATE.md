@@ -9,6 +9,6 @@
 ## Checklist
 
 - [ ] `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` pass
-- [ ] docs updated (English and, if possible, Slovak) — or not needed
+- [ ] docs updated (English and, if possible, Slovak), or not needed
 - [ ] changelog entry for user-visible changes (`docs/*/about/02-changelog.md`)
 - [ ] a design decision behind the change is recorded in `.ai/decisions/` (if there is one)

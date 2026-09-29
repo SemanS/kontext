@@ -17,7 +17,7 @@ kontext separates **remembering** from **sharing**. Anything can be captured qui
 
 ## Capturing
 
-A capture needs a kind, a title and a body (or a summary). Good captures are short — *what, why, consequences* — and name the paths they govern:
+A capture needs a kind, a title and a body (or a summary). Good captures are short (*what, why, consequences*) and name the paths they govern:
 
 ```sh
 kontext capture --kind decision --title "Use Tantivy for local recall" \
@@ -42,20 +42,20 @@ Private captures never enter the repository. Adapters can receive them (for exam
 
 ## Promoting
 
-Promotion writes a candidate into the store — with the right id, directory, style and numbering — and stages it:
+Promotion writes a candidate into the store (with the right id, directory, style and numbering) and stages it:
 
 - `ctx_prepare_commit` with `promote=[ids]` (what agents use before committing),
 - `ctx_inbox` with `action=promote`,
 - `kontext promote <id>…` or `kontext prepare-commit --promote <id>`.
 
-`capture --promote` (or `promote=true` in `ctx_capture`) skips the inbox and writes the entry into the working tree directly — useful when you already know it belongs to the current change. Either way nothing is shared until you commit.
+`capture --promote` (or `promote=true` in `ctx_capture`) skips the inbox and writes the entry into the working tree directly, which is useful when you already know it belongs to the current change. Either way nothing is shared until you commit.
 
 ## Before committing: `ctx_prepare_commit`
 
 The report lists:
 
 1. the staged change (or the working tree, when nothing is staged),
-2. recorded knowledge whose `paths` cover the changed files — *confirm it still holds*,
+2. recorded knowledge whose `paths` cover the changed files (*confirm it still holds*),
 3. inbox candidates, the ones touching changed files first,
 4. validation and secret-scan results for staged knowledge (errors will block the commit),
 5. module docs that may need a refresh (many changed files, or files added/removed),
@@ -68,4 +68,4 @@ Knowledge travels in the same pull request as the code. Reviewers see the decisi
 
 ## After merge
 
-When teammates pull, their `post-merge` / `post-rewrite` hooks compare knowledge at `HEAD` with their last snapshot and emit `sync` events — so their personal memory systems learn the decisions the team just accepted. Promoted inbox items are removed once their file is part of `HEAD`.
+When teammates pull, their `post-merge` / `post-rewrite` hooks compare knowledge at `HEAD` with their last snapshot and emit `sync` events, so their personal memory systems learn the decisions the team just accepted. Promoted inbox items are removed once their file is part of `HEAD`.

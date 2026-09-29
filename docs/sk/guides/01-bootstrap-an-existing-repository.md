@@ -11,7 +11,7 @@ git status -- .ai              # what was written
 kontext brief --no-adapters    # what an agent will see
 ```
 
-Nič sa necommituje a nič neopustí tvoj počítač. Ak sa ti výsledok nepáči, zmaž `.ai/` (a spusti `kontext hooks uninstall`) – žiadny ďalší stav netreba upratovať.
+Nič sa necommituje a nič neopustí tvoj počítač. Ak sa ti výsledok nepáči, zmaž `.ai/` (a spusti `kontext hooks uninstall`). Žiadny ďalší stav netreba upratovať.
 
 ## Skontroluj detekciu
 
@@ -25,7 +25,7 @@ Nič sa necommituje a nič neopustí tvoj počítač. Ak sa ti výsledok nepáč
    max_module_docs = 30
    ```
 
-2. **Stack.** Zisťuje sa z manifestov a súborov. Je len informatívny – agenti ho čítajú v briefe.
+2. **Stack.** Zisťuje sa z manifestov a súborov. Je len informatívny: agenti ho čítajú v briefe.
 3. **Účel.** Preberá sa z úvodu README; ak tvoje README začína návodom na inštaláciu, zostane prázdny, kým ho nenapíše úloha `purpose`.
 
 ## Existujúce ADR {#existing-adrs}
@@ -45,7 +45,7 @@ Existujúce ADR sa hneď zobrazia v `kontext log`, v briefe aj vo vyhľadávaní
 ## Hooky v repozitároch, ktoré už hooky majú
 
 - Shell hook v `.git/hooks` alebo v `core.hooksPath` dostane za svojím shebangom blok pre kontext; tvoja logika zostane nedotknutá.
-- **Verzovaný** adresár s hookmi (napr. `.githooks/`, ktorý aktivuje `npm install`) sa upraví v pracovnom strome – zmenu commitni, aby sa zdieľala, alebo nechaj kontext mimo zdieľaných hookov a nech si každý člen tímu spustí `kontext hooks install` lokálne.
+- **Verzovaný** adresár s hookmi (napr. `.githooks/`, ktorý aktivuje `npm install`) sa upraví v pracovnom strome. Zmenu commitni, aby sa zdieľala, alebo nechaj kontext mimo zdieľaných hookov a nech si každý člen tímu spustí `kontext hooks install` lokálne.
 - husky (`.husky/`) je podporovaný; lefthook a pre-commit si svoje hooky generujú nanovo, preto namiesto toho volaj `kontext hook pre-commit` (atď.) z ich konfigurácie.
 
 Výsledok ukáže `kontext hooks status`.
@@ -54,7 +54,7 @@ Výsledok ukáže `kontext hooks status`.
 
 - Rozpoznané sú Nx, moon, Turborepo, pnpm/npm workspaces a Cargo workspaces; každý deklarovaný projekt sa stane modulom a hrany závislostí pochádzajú z grafu workspace a z importov.
 - Počet dokumentov modulov je obmedzený (`init.max_module_docs`, predvolene 40) a sú zoradené: najprv aplikácie a služby, potom intenzívne používané knižnice. Ostatné sú uvedené v prehľade.
-- Zúž `ctx_brief` pomocou `focus` – brief potom uprednostní znalosti modulov, na ktorých sa pracuje.
+- Zúž `ctx_brief` pomocou `focus`. Brief potom uprednostní znalosti modulov, na ktorých sa pracuje.
 
 ## Submoduly
 

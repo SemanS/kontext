@@ -28,7 +28,7 @@ The directory name and every kind's location are configurable ([configuration](.
 | `convention` | `conventions/` | `Convention:` | how the team does something (naming, layering, testing) |
 | `learning` | `learnings/` | `Learning:` | non-obvious lessons and pitfalls ("gotchas") |
 | `incident` | `incidents/` | `Incident:` | what broke, why, what changed |
-| `architecture` | `architecture/` | — | the overview and module docs (mostly generated) |
+| `architecture` | `architecture/` | – | the overview and module docs (mostly generated) |
 
 Aliases are accepted when capturing: `adr` → decision, `pitfall`/`gotcha` → learning (tagged `pitfall`), `note`/`lesson` → learning, `rule`/`guideline` → convention, `postmortem`/`outage` → incident.
 
@@ -83,7 +83,7 @@ Recognized fields: Status, Date, Tags, Paths, Supersedes, Superseded by, Summary
 
 | Numbering | File name | Typical for |
 | --- | --- | --- |
-| `date` (default for decisions) | `2026-09-28-prices-are-integer-cents.md` | new stores — no collisions between branches |
+| `date` (default for decisions) | `2026-09-28-prices-are-integer-cents.md` | new stores (no collisions between branches) |
 | `sequential` | `0008-orders-live-in-postgresql.md` | existing ADR directories |
 | `none` | `prices-are-integer-cents.md` | conventions, learnings |
 
@@ -95,7 +95,7 @@ Decisions are *active* unless `superseded`, `deprecated` or `rejected`. Capturin
 
 ## Keep entries brief
 
-Entries are meant to be read by agents inside a token budget. `kontext check` warns when a body exceeds `store.max_body_lines` (80 non-empty lines by default) — move details to regular docs and link them.
+Entries are meant to be read by agents inside a token budget. `kontext check` warns when a body exceeds `store.max_body_lines` (80 non-empty lines by default). Move details to regular docs and link them.
 
 ## The index file
 

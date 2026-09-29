@@ -14,7 +14,7 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 | Voľba | Predvolene | Význam |
 | --- | --- | --- |
-| `--no-hooks` | | nenainštaluje git hooky – zapamätá sa pre klon; `kontext hooks install` ich neskôr pridá |
+| `--no-hooks` | | nenainštaluje git hooky, zapamätá sa pre klon; `kontext hooks install` ich neskôr pridá |
 | `--connect <targets>` | | pripojí aj klientov, oddelených čiarkou (`claude,claude-hooks,cursor,opencode,agents-md`) |
 | `--deepen` | | spustí čakajúce úlohy prehĺbenia cez LLM adaptér |
 | `--llm <adapter>` | `init.llm` | adaptér s operáciou `llm` |
@@ -71,8 +71,8 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 | Voľba | Význam |
 | --- | --- |
-| `-k, --kind <kind>` | `decision`, `convention`, `learning` (`pitfall`), `incident` – povinné |
-| `-t, --title <text>` | krátke tvrdenie – povinné |
+| `-k, --kind <kind>` | `decision`, `convention`, `learning` (`pitfall`), `incident` (povinné) |
+| `-t, --title <text>` | krátke tvrdenie (povinné) |
 | `-b, --body <text>` / `--file <path\|->` / stdin | telo |
 | `--summary <text>` | jeden riadok (keď chýba, odvodí sa z tela) |
 | `-p, --paths <a,b>` | cesty alebo globy, ktorých sa týka |

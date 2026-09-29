@@ -20,7 +20,7 @@ Jednorazovo obídeš cez `KONTEXT_SKIP=1 git commit …` alebo `git commit --no-
 - Cieľom je `core.hooksPath`, ak je nastavený (`.husky/_` od husky sa mapuje na `.husky/`), inak `.git/hooks` (`git rev-parse --git-path hooks`, zdieľané všetkými worktree).
 - Do existujúceho shellového hooku sa vloží označený blok hneď za shebang, takže sa spustí, aj keby zvyšok skriptu skončil predčasne.
 - Hook, ktorý nie je shellový (napr. Node skript), sa premenuje na `<hook>.kontext-chained` a zavolá sa po bloku kontextu.
-- Každý blok hľadá `kontext` v `PATH`, v `~/.local/bin` a `~/.cargo/bin` a bez neho neurobí nič – zdieľané adresáre hookov teda nerozbijú kolegov, ktorí kontext nemajú.
+- Každý blok hľadá `kontext` v `PATH`, v `~/.local/bin` a `~/.cargo/bin` a bez neho neurobí nič. Zdieľané adresáre hookov teda nerozbijú kolegov, ktorí kontext nemajú.
 - Ak je adresár hookov sledovaný (napr. `.githooks/`), zmena sa ukáže v `git status`: commitni ju, aby hooky zdieľal celý tím.
 - Ak sledovaný adresár hookov existuje, ale ešte nie je aktívny (napríklad `core.hooksPath` nastaví až `npm install`), kontext ťa na to upozorní a `kontext hooks install --dir .githooks` ho pokryje.
 - Správcovia hookov, ktorí súbory hookov generujú znova (lefthook, pre-commit), sa rozpoznajú; namiesto toho pridaj `kontext hook <name>` do ich konfigurácie.
@@ -62,7 +62,7 @@ Hooky nikdy nekomunikujú so sieťou. Udalosti sa pripisujú do `<git-common-dir
 
 - Záznamy sú samostatné súbory: paralelné vetvy sa toho istého súboru dotknú len zriedka.
 - `.ai/README.md` sa generuje znova a je označený `merge=union` (v `.ai/.gitattributes`).
-- Sekvenčné čísla ADR môžu medzi vetvami kolidovať – rovnako ako pri akejkoľvek praxi s ADR; ID podľa dátumu (predvolené pre nové úložiská) sa tomu vyhnú.
+- Sekvenčné čísla ADR môžu medzi vetvami kolidovať, rovnako ako pri akejkoľvek praxi s ADR; ID podľa dátumu (predvolené pre nové úložiská) sa tomu vyhnú.
 
 ## Worktree
 

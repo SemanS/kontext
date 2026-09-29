@@ -38,7 +38,7 @@ npm run docs:dev        # http://localhost:5173/kontext/
 npm run docs:build      # what CI runs; fails on dead links
 ```
 
-English sources are in `docs/en/`, Slovak in `docs/sk/` — the two trees mirror each other file by file. When you change a page, update the other language too or mention it in the pull request so a translator can follow up.
+English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror each other file by file. When you change a page, update the other language too or mention it in the pull request so a translator can follow up.
 
 ## Project layout
 
@@ -64,7 +64,7 @@ English sources are in `docs/en/`, Slovak in `docs/sk/` — the two trees mirror
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must pass (CI runs them).
 - Update the docs (both languages when you can) and `docs/*/about/02-changelog.md` for user-visible changes.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `refactor:` …).
-- If your change embodies a design decision, record it: `kontext capture --kind decision …` and promote it into the pull request — kontext's hooks add the trailer.
+- If your change embodies a design decision, record it: `kontext capture --kind decision …` and promote it into the pull request. The kontext hooks add the trailer.
 
 ## Adding a preset
 

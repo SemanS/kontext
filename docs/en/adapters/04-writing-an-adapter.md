@@ -116,7 +116,7 @@ owns = ["wiki://"]
 
 Rules for command ops:
 
-- the argument vector is passed as is — no shell, no globbing; put `--` before user-supplied values when the program supports it,
+- the argument vector is passed as is (no shell, no globbing); put `--` before user-supplied values when the program supports it,
 - `stdin = "{{prompt}}"` feeds long input without hitting argument limits,
 - `output_file = true` gives the program a temporary file (`{{output_file}}`) for its answer, for tools that log to stdout,
 - non-zero exit codes are errors; the timeout kills the process.

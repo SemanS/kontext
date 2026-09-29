@@ -39,7 +39,7 @@ See [Set up your agents](./04-setup-for-agents.md) for Cursor, OpenCode and auto
 
 ## 3. Let the agent deepen the bootstrap
 
-In Claude Code run the prompt **`/mcp__kontext__kontext-init`**, or ask any connected agent to "continue the kontext bootstrap". It pulls small tasks with `ctx_init` — describe the project, summarize a module, distill decisions from a cluster of commits — and answers each with `ctx_init_submit`. Stop whenever you like; progress is kept in the files.
+In Claude Code run the prompt **`/mcp__kontext__kontext-init`**, or ask any connected agent to "continue the kontext bootstrap". It pulls small tasks with `ctx_init` (describe the project, summarize a module, distill decisions from a cluster of commits) and answers each with `ctx_init_submit`. Stop whenever you like; progress is kept in the files.
 
 No agent at hand? Use an LLM CLI as an autopilot:
 
@@ -75,6 +75,6 @@ Agents do the same through `ctx_capture` and `ctx_prepare_commit`. The pre-commi
 
 ## Next steps
 
-- [Team workflow](../guides/02-team-workflow.md) — reviews, superseding decisions, onboarding teammates
-- [Adapters](../adapters/01-overview.md) — plug in OpenViking, CodeGraph, Serena, session archives
-- [Bootstrap an existing repository](../guides/01-bootstrap-an-existing-repository.md) — monorepos, existing ADRs, client repositories
+- [Team workflow](../guides/02-team-workflow.md): reviews, superseding decisions, onboarding teammates
+- [Adapters](../adapters/01-overview.md): plug in OpenViking, CodeGraph, Serena, session archives
+- [Bootstrap an existing repository](../guides/01-bootstrap-an-existing-repository.md): monorepos, existing ADRs, client repositories

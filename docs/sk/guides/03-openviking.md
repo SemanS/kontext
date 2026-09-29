@@ -62,4 +62,4 @@ peer = "shop"
 | „Videl som už niečo podobné?“ | OpenViking (sémantická, osobná história) |
 | „Prečo je tento riadok taký, aký je?“ | `ctx_why`: história gitu + rozhodnutia + adaptéry |
 
-Rozhodnutia, ktoré prešli review, drž v gite. Všetko ostatné nech si pamätá OpenViking – a nech sa cez `sync` naučí rozhodnutia tímu.
+Rozhodnutia, ktoré prešli review, drž v gite. Všetko ostatné nech si pamätá OpenViking a nech sa cez `sync` naučí rozhodnutia tímu.
