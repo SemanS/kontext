@@ -218,15 +218,20 @@ pub fn run(dir: &Path, opts: &InitOpts, out: &dyn Fn(&str)) -> Result<()> {
         },
     );
 
-    // wire
+    // wire — `--no-hooks` is remembered for the clone, so a later `init --deepen` (from any worktree)
+    // does not install hooks where someone chose not to have them (a client's repository, say)
     let mut wired = Vec::new();
-    if opts.hooks {
+    let opted_out = crate::hooks::opted_out(&app.repo);
+    if !opts.hooks {
+        crate::hooks::set_opted_out(&app.repo, true)?;
+        wired.push("hooks skipped (--no-hooks; remembered for this clone)".into());
+    } else if opted_out {
+        wired.push("hooks skipped (this clone chose --no-hooks; `kontext hooks install` adds them)".into());
+    } else {
         match crate::hooks::install(&app, None) {
             Ok(r) => wired.push(r.summary()),
             Err(e) => wired.push(format!("hooks not installed: {e:#}")),
         }
-    } else {
-        wired.push("hooks skipped (--no-hooks)".into());
     }
     for target in &opts.connect {
         match crate::connect::connect(&app, target, true) {

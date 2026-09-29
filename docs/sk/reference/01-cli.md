@@ -14,7 +14,7 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 | Voľba | Predvolene | Význam |
 | --- | --- | --- |
-| `--no-hooks` | | nenainštaluje git hooky |
+| `--no-hooks` | | nenainštaluje git hooky – zapamätá sa pre klon; `kontext hooks install` ich neskôr pridá |
 | `--connect <targets>` | | pripojí aj klientov, oddelených čiarkou (`claude,claude-hooks,cursor,opencode,agents-md`) |
 | `--deepen` | | spustí čakajúce úlohy prehĺbenia cez LLM adaptér |
 | `--llm <adapter>` | `init.llm` | adaptér s operáciou `llm` |

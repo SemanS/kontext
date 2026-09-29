@@ -2,6 +2,14 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.1.5 – 2026-09-29
+
+**Autopilot**
+- `llm-claude` beží na subscription prihláseného účtu (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` sa pre jeho volania zahodia), bez nástrojov, MCP serverov a s krátkym systémovým promptom – zhruba desatina tokenov na úlohu – a volania sa neukladajú ako sessions Claude Code. Nová premenná `effort` (predvolene `high`); časový limit 10 minút. Opus: `kontext adapters add llm-claude --force --var model=claude-opus-5-5`.
+
+**Init**
+- `kontext init --no-hooks` sa zapamätá pre klon: neskoršie `init` či `init --deepen` z akéhokoľvek worktree už nenainštaluje hooky tam, kde ich niekto odmietol; `kontext hooks install` ich pridá.
+
 ## 0.1.4 – 2026-09-29
 
 **Citlivé vlákna**

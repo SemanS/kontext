@@ -97,6 +97,28 @@ fn make_executable(p: &Path) -> Result<()> {
     Ok(())
 }
 
+fn opt_out_marker(repo: &crate::repo::Repo) -> PathBuf {
+    repo.state_dir().join("no-hooks")
+}
+
+/// Whether this clone chose `kontext init --no-hooks`.
+pub fn opted_out(repo: &crate::repo::Repo) -> bool {
+    opt_out_marker(repo).exists()
+}
+
+pub fn set_opted_out(repo: &crate::repo::Repo, yes: bool) -> Result<()> {
+    let marker = opt_out_marker(repo);
+    if yes {
+        if let Some(dir) = marker.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&marker, "hooks declined with `kontext init --no-hooks`; `kontext hooks install` undoes it\n")?;
+    } else if marker.exists() {
+        std::fs::remove_file(&marker)?;
+    }
+    Ok(())
+}
+
 pub fn install(app: &App, dir_override: Option<PathBuf>) -> Result<InstallReport> {
     let (dir, tracked) = match dir_override {
         Some(d) => {

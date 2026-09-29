@@ -49,15 +49,17 @@ Výsledkom je odpoveď: model dostane pokyn nevolať nástroje a presety držia 
 
 | Preset | Spúšťa | Premenná |
 | --- | --- | --- |
-| `llm-claude` | `claude -p --strict-mcp-config --output-format text --model <model>` | `model` (predvolene `sonnet`; `haiku` je lacnejší a na zhrnutia modulov stačí) |
+| `llm-claude` | `claude -p --strict-mcp-config --tools "" --no-session-persistence --system-prompt … --model <model> --effort <effort>`, bez `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` | `model` (predvolene `sonnet`; `claude-opus-5-5` pre Opus, `haiku` je lacnejší), `effort` (`low` … `max`, predvolene `high`) |
 | `llm-codex` | `codex exec --sandbox read-only --ephemeral -c mcp_servers.kontext.enabled=false`, poslednú správu číta zo súboru | — |
-
-Presety sa pri pridaní skopírujú do tvojho configu; po aktualizácii ich obnov cez `kontext adapters add llm-codex --force` (a `llm-claude`).
 | `llm-ollama` | `POST /api/generate` na `$OLLAMA_HOST` | `model` (predvolene `qwen2.5-coder:14b`) |
 
 ```sh
-kontext adapters add llm-claude --var model=haiku --force
+kontext adapters add llm-claude --force --var model=claude-opus-5-5 --var effort=high
 ```
+
+Presety sa pri pridaní skopírujú do tvojho configu; po aktualizácii ich obnov cez `--force` (aj s tvojimi `--var`).
+
+`llm-claude` beží na subscription účtu, do ktorého je `claude` prihlásený – API kľúče z prostredia sa pre tieto volania zahodia, takže sa nič neúčtuje na API účet. Modelu nedá žiadne nástroje, MCP servery a len krátky systémový prompt: úloha tak stojí desatinu toho, čo by k nej pridal plný prompt Claude Code, na čom pri limitoch subscription záleží. Volania sa neukladajú ako sessions Claude Code, takže sa neobjavia v `claude --resume` ani v `kontext distill`.
 
 ## Kvalita
 

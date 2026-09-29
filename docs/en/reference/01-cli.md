@@ -14,7 +14,7 @@ Runs scan → history → render → wire → deepen. Safe to re-run.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--no-hooks` | | do not install git hooks |
+| `--no-hooks` | | do not install git hooks — remembered for the clone; `kontext hooks install` adds them later |
 | `--connect <targets>` | | also wire clients, comma-separated (`claude,claude-hooks,cursor,opencode,agents-md`) |
 | `--deepen` | | run pending deepen tasks with an LLM adapter |
 | `--llm <adapter>` | `init.llm` | adapter with an `llm` op |

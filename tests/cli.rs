@@ -352,6 +352,9 @@ fn distill_threads() {
     let s = Sandbox::new("distill");
     seed(&s);
     s.kontext(&["init", "--no-hooks"]);
+    // the choice holds for later runs: no hooks appear behind the user's back
+    let again = s.kontext(&["init"]);
+    assert!(again.contains("hooks skipped (this clone chose --no-hooks") && !s.repo.join(".git/hooks/pre-commit").exists(), "{again}");
     let home = s.root.join("home");
     let top = s.ok_git(&["rev-parse", "--show-toplevel"]).trim().to_string();
 

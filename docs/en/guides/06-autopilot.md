@@ -49,15 +49,17 @@ The answer is the result: the model is told not to call tools, and the presets k
 
 | Preset | Runs | Variable |
 | --- | --- | --- |
-| `llm-claude` | `claude -p --strict-mcp-config --output-format text --model <model>` | `model` (default `sonnet`; `haiku` is cheaper and good for module summaries) |
+| `llm-claude` | `claude -p --strict-mcp-config --tools "" --no-session-persistence --system-prompt … --model <model> --effort <effort>`, with `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` dropped | `model` (default `sonnet`; `claude-opus-5-5` for Opus, `haiku` is cheaper), `effort` (`low` … `max`, default `high`) |
 | `llm-codex` | `codex exec --sandbox read-only --ephemeral -c mcp_servers.kontext.enabled=false`, last message from a file | — |
-
-Presets are copied into your config when added; after an upgrade, refresh them with `kontext adapters add llm-codex --force` (and `llm-claude`).
 | `llm-ollama` | `POST /api/generate` on `$OLLAMA_HOST` | `model` (default `qwen2.5-coder:14b`) |
 
 ```sh
-kontext adapters add llm-claude --var model=haiku --force
+kontext adapters add llm-claude --force --var model=claude-opus-5-5 --var effort=high
 ```
+
+Presets are copied into your config when added; after an upgrade, refresh them with `--force` (and your `--var`s).
+
+`llm-claude` runs on the subscription of the account `claude` is logged into — API keys in the environment are dropped for these calls, so nothing is billed to an API account. It gives the model no tools, no MCP servers and a short system prompt: a task then costs a tenth of what Claude Code's full prompt would add to it, which matters for a subscription's usage limits. The calls are not saved as Claude Code sessions, so they do not show up in `claude --resume` or `kontext distill`.
 
 ## Quality
 

@@ -1,15 +1,24 @@
-# Claude Code in print mode as the `llm` for `kontext init --deepen --llm llm-claude`.
-# --strict-mcp-config without --mcp-config starts no MCP servers: the answer comes back as JSON.
+# Claude Code in print mode as the `llm` for `kontext init --deepen` and `kontext distill`.
+# Runs on the subscription of the account `claude` is logged into: API keys in the environment are
+# dropped for these calls. No tools, no MCP servers and a short system prompt keep each call small
+# (Claude Code's own prompt is several times a task's size), and the calls are not saved as sessions.
+# Opus: kontext adapters add llm-claude --force --var model=claude-opus-5-5
 [adapters.llm-claude]
 driver = "command"
 description = "Claude Code (claude -p) for autonomous deepening"
 when = { command = "claude" }
-timeout_ms = 300000
+timeout_ms = 600000
 
 [adapters.llm-claude.vars]
 model = "sonnet"
+effort = "high"
 
 [adapters.llm-claude.ops.llm]
-command = ["claude", "-p", "--strict-mcp-config", "--output-format", "text", "--model", "{{vars.model}}"]
+command = [
+    "env", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN",
+    "claude", "-p", "--strict-mcp-config", "--tools", "", "--no-session-persistence",
+    "--system-prompt", "You write concise, accurate technical documentation for a software team. Answer exactly in the format the task asks for.",
+    "--output-format", "text", "--model", "{{vars.model}}", "--effort", "{{vars.effort}}",
+]
 stdin = "{{prompt}}"
 format = "text"

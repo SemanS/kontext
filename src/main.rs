@@ -754,7 +754,12 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::Hooks { action } => {
             let app = open(&dir)?;
             match action {
-                HooksCmd::Install { dir } => println!("{}", hooks::install(&app, dir)?.summary()),
+                HooksCmd::Install { dir } => {
+                    // installing by hand is the explicit choice that `init --no-hooks` waited for
+                    let report = hooks::install(&app, dir)?;
+                    hooks::set_opted_out(&app.repo, false)?;
+                    println!("{}", report.summary());
+                }
                 HooksCmd::Uninstall { dir } => {
                     let removed = hooks::uninstall(&app, dir)?;
                     println!(
