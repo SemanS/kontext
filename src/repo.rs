@@ -179,6 +179,22 @@ impl Repo {
         names.iter().zip(out.lines()).filter(|(_, l)| !l.ends_with(" missing")).map(|(r, _)| r.to_string()).collect()
     }
 
+    /// Roots of every worktree of this clone (the main one first).
+    pub fn worktree_roots(&self) -> Vec<String> {
+        let mut roots: Vec<String> = self
+            .git_opt(&["worktree", "list", "--porcelain"])
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.strip_prefix("worktree "))
+            .map(str::to_string)
+            .collect();
+        let me = self.root.to_string_lossy().to_string();
+        if !roots.contains(&me) {
+            roots.push(me);
+        }
+        roots
+    }
+
     /// Whether the worktree with this key still exists (its state dir records its root).
     pub fn worktree_alive(&self, key: &str) -> bool {
         key == self.worktree_key

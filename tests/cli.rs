@@ -346,3 +346,99 @@ fn mcp_session(repo: &Path, config: &Path) {
     assert!(brief.contains("Prices are integer cents"), "{brief}");
     assert_eq!(replies[&4]["result"]["prompts"][0]["name"], "kontext-init");
 }
+
+#[test]
+fn distill_threads() {
+    let s = Sandbox::new("distill");
+    seed(&s);
+    s.kontext(&["init", "--no-hooks"]);
+    let home = s.root.join("home");
+    let top = s.ok_git(&["rev-parse", "--show-toplevel"]).trim().to_string();
+
+    // a Claude Code thread that ran in this repository
+    let slug: String = top.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let dir = home.join(".claude/projects").join(&slug);
+    std::fs::create_dir_all(&dir).unwrap();
+    let id = "abcd1234-0000-4000-8000-000000000000";
+    let session = [
+        format!(
+            r#"{{"type":"user","sessionId":"{id}","cwd":"{top}","gitBranch":"main","timestamp":"2026-09-28T10:00:00Z","message":{{"role":"user","content":"Round prices half-even: finance reconciles with the bank that way."}}}}"#
+        ),
+        format!(
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Rounding is half-even now."}},{{"type":"tool_use","name":"Edit","input":{{"file_path":"{top}/libs/pricing/src/round.ts"}}}}]}}}}"#
+        ),
+        r#"{"type":"ai-title","aiTitle":"Half-even rounding"}"#.to_string(),
+    ]
+    .join("\n");
+    std::fs::write(dir.join(format!("{id}.jsonl")), session).unwrap();
+
+    // a model that finds one decision in whatever it reads
+    let answer = s.root.join("answer.json");
+    std::fs::write(
+        &answer,
+        r#"{"entries":[{"kind":"decision","title":"Round prices half-even","body":"Finance reconciles with the bank using half-even rounding.","paths":["libs/pricing/src/round.ts"]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        s.config.join("config.toml"),
+        format!(
+            "[adapters.fake-llm]\ndriver = \"command\"\n\n[adapters.fake-llm.ops.llm]\ncommand = [\"sh\", \"-c\", \"cat > /dev/null; cat '{}'\"]\nstdin = \"{{{{prompt}}}}\"\nformat = \"text\"\n",
+            answer.display()
+        ),
+    )
+    .unwrap();
+
+    let run = |args: &[&str], workspace: Option<&str>| -> String {
+        let mut c = s.cmd(env!("CARGO_BIN_EXE_kontext"));
+        c.env("HOME", &home)
+            .env("SUPERSET_HOME_DIR", home.join(".superset"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("CODEX_HOME")
+            .env_remove("SUPERSET_ORGANIZATION_ID")
+            .env_remove("SUPERSET_WORKSPACE_ID");
+        if let Some(w) = workspace {
+            c.env("SUPERSET_WORKSPACE_ID", w);
+        }
+        let o = c.args(args).output().unwrap();
+        assert!(
+            o.status.success(),
+            "kontext {args:?} failed: {}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    let list = run(&["distill", "--list"], None);
+    assert!(list.contains("claude:abcd1234") && list.contains("Half-even rounding"), "{list}");
+    let out = run(&["distill", "--claude", "last", "--llm", "fake-llm"], None);
+    assert!(out.contains("Round prices half-even") && out.contains("inbox:"), "{out}");
+    let inbox = run(&["inbox"], None);
+    assert!(inbox.contains("from claude:abcd1234"), "{inbox}");
+    // once in the inbox, the same finding is not captured again
+    let again = run(&["distill", "--claude", "abcd1234", "--llm", "fake-llm"], None);
+    assert!(again.contains("Nothing durable found"), "{again}");
+    // any text works as a thread, e.g. a copied chat
+    s.write("chat.md", "Anna: let's drop the XML export, nobody uses it.\nBoris: agreed, JSON only from now on.\n");
+    let text = run(&["distill", "chat.md", "--llm", "fake-llm", "--dry-run"], None);
+    assert!(text.contains("text:chat"), "{text}");
+
+    // a Superset workspace names its threads through the terminals that ran them
+    if Command::new("sqlite3").arg("--version").output().is_ok_and(|o| o.status.success()) {
+        let db_dir = home.join(".superset/host/org");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let sql = format!(
+            "create table workspaces (id text primary key, name text, branch text, type text, worktree_path text, last_activity_at integer);\
+             create table terminal_agent_bindings (terminal_id text, workspace_id text, agent_id text, agent_session_id text, transcript_path text, started_at integer);\
+             insert into workspaces values ('ws1111aa-0000', 'Rounding fix', 'main', 'worktree', '{top}', 1);\
+             insert into terminal_agent_bindings values ('t1', 'ws1111aa-0000', 'claude', '{id}', null, 1);"
+        );
+        let o = Command::new("sqlite3").arg(db_dir.join("host.db")).arg(&sql).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let ws = run(&["distill", "--superset", "ws1111", "--list"], None);
+        assert!(ws.contains("Rounding fix") && ws.contains("claude:abcd1234"), "{ws}");
+        // in a Superset terminal the current workspace is the default
+        let current = run(&["distill", "--superset", "--list"], Some("ws1111aa-0000"));
+        assert!(current.contains("Rounding fix"), "{current}");
+    }
+}

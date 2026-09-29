@@ -4,7 +4,7 @@ Server: `kontext mcp` – JSON-RPC 2.0 cez stdio, správy oddelené novým riadk
 
 ## Nástroje
 
-Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` a `ctx_log` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Všetky majú `openWorldHint: false`.
+Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Všetky majú `openWorldHint: false`.
 
 ### `ctx_brief`
 
@@ -62,6 +62,18 @@ Každý výsledok: `N. title — snippet [kind · status · date · source] <uri
 | `supersedes` | string[] | | ID záznamov, ktoré nahrádza |
 | `status` | string | `accepted` pri rozhodnutiach | |
 | `promote` | boolean | false | zapíše ho hneď do úložiska namiesto inboxu |
+| `commits` | string[] | | krátke sha commitov, z ktorých pochádza |
+| `source` | string | | kde sa našiel, napr. označenie vlákna z `ctx_threads` (zostáva len v inboxe) |
+
+### `ctx_threads`
+
+| Parameter | Typ | Predvolene | |
+| --- | --- | --- | --- |
+| `thread` | string | | `claude:<id>`, `codex:<id>`, `superset:<workspace>` (všetky jeho vlákna), súbor s prepisom alebo `last`; bez neho vypíše posledné vlákna |
+| `part` | integer | 1 | časť dlhého prepisu |
+| `budget_chars` | integer | 40000 | znakov na časť (najviac 80000) |
+
+Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto počítači – pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
 
 ### `ctx_inbox`
 
@@ -115,6 +127,7 @@ Nástroje MCP adaptérov s `expose` sa vypisujú s ich pôvodnými schémami (n�
 | `kontext-init` | `tasks` (voliteľné) | zavedie a prehĺbi znalosti repozitára |
 | `kontext-commit` | | pripraví aktuálnu zmenu na commit |
 | `kontext-reflect` | | zachytí zo session najviac tri trvalé veci |
+| `kontext-distill` | `thread` (voliteľný) | vytiahne trvalé znalosti z iného vlákna alebo workspace v Supersete |
 
 ## Zdroje
 

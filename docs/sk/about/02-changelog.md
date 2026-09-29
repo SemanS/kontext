@@ -2,6 +2,13 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.1.3 – 2026-09-29
+
+**Znalosti z vlákien agentov**
+- `kontext distill` číta vlákna Claude Code a Codexu (všetky účty Claude, `$CODEX_HOME`), workspaces v Supersete (podľa id, názvu worktree, cesty alebo vetvy; samotné `--superset` znamená aktuálny) alebo akýkoľvek text a trvalé rozhodnutia, konvencie, úskalia a incidenty, ktoré v nich nájde LLM adaptér, zachytí do inboxu – s cestami, commitmi, `origin: thread` a vláknom ako zdrojom. Prepisy sa skrátia a zamaskujú, dlhé vlákna sa rozdelia na časti a porovnajú sa s tým, čo už je zapísané. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
+- `ctx_threads` (len na čítanie) dá pripojeným agentom tie isté prepisy po častiach; prompt `kontext-distill` prevedie agenta spracovaním vlákna cez `ctx_capture`, ktorý teraz prijíma `source` a `commits`.
+- Vlákna workspace v Supersete, ktoré bežali v inom repozitári, sa preskočia a workspace iného repozitára sa odmietne.
+
 ## 0.1.2 – 2026-09-29
 
 Z nasadenia kontextu do toho monorepa s pripojeným Claude Code a Codexom.

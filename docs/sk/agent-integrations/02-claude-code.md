@@ -24,7 +24,7 @@ Claude Code sa každého člena tímu raz opýta, či má dôverovať MCP server
 claude mcp add --scope user kontext -- kontext mcp
 ```
 
-Over to cez `/mcp` v Claude Code – server `kontext` by mal vypísať desať nástrojov `ctx_*`.
+Over to cez `/mcp` v Claude Code – server `kontext` by mal vypísať jedenásť nástrojov `ctx_*`.
 
 Keď je kontext zaregistrovaný pre všetky projekty, nezavadzia tam, kde ho nikto nezaviedol: v repozitári bez úložiska znalostí to agentovi povie v inštrukciách, poskytuje `ctx_brief`, `ctx_search`, `ctx_read` a `ctx_why` nad dokumentmi a históriou, odmietne tímové zachytenia a povýšenia (súkromné poznámky fungujú ďalej) a zavádza len na požiadanie (`ctx_init` s `bootstrap=true`, ktoré odovzdá prompt `kontext-init`).
 

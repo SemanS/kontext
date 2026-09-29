@@ -8,6 +8,7 @@ mod adapters;
 mod app;
 mod config;
 mod connect;
+mod distill;
 mod events;
 mod glob;
 mod hooks;
@@ -24,6 +25,7 @@ mod secrets;
 mod signals;
 mod store;
 mod template;
+mod threads;
 mod tools;
 mod util;
 
@@ -108,6 +110,38 @@ enum Cmd {
         /// Write the files but do not `git add` them
         #[arg(long)]
         no_stage: bool,
+    },
+    /// Distill team knowledge from agent threads (Claude Code, Codex, Superset workspaces, files) into the inbox
+    Distill {
+        /// Thread files: a Claude Code or Codex transcript (.jsonl) or any text, e.g. a copied Slack thread; `-` reads stdin
+        files: Vec<PathBuf>,
+        /// Claude Code session id or prefix, or `last` (this repository's newest)
+        #[arg(long)]
+        claude: Vec<String>,
+        /// Codex session id or prefix, or `last`
+        #[arg(long)]
+        codex: Vec<String>,
+        /// Superset workspace: id or prefix, worktree name, path or branch (alone: the current workspace)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        superset: Option<String>,
+        /// List the threads instead of distilling them
+        #[arg(long)]
+        list: bool,
+        /// Adapter with an `llm` op (default: init.llm)
+        #[arg(long)]
+        llm: Option<String>,
+        /// Most entries kept per thread
+        #[arg(long, default_value_t = 5)]
+        max: usize,
+        /// Most transcript parts (about 45k characters each) read per thread
+        #[arg(long, default_value_t = 12)]
+        max_parts: usize,
+        /// Parallel llm calls
+        #[arg(long, default_value_t = 3)]
+        jobs: usize,
+        /// Print what would be captured instead of capturing it
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Decision timeline (or another kind)
     Log {
@@ -377,6 +411,117 @@ fn main() {
     std::process::exit(code);
 }
 
+fn run_distill(
+    app: &App,
+    files: Vec<PathBuf>,
+    claude: Vec<String>,
+    codex: Vec<String>,
+    superset: Option<String>,
+    list: bool,
+    opt: distill::Options,
+) -> Result<()> {
+    use threads::Agent;
+    let roots = app.repo.worktree_roots();
+    let mut found: Vec<threads::Found> = Vec::new();
+    for c in &claude {
+        found.push(threads::resolve(Some(Agent::Claude), c, &roots)?);
+    }
+    for c in &codex {
+        found.push(threads::resolve(Some(Agent::Codex), c, &roots)?);
+    }
+    for f in &files {
+        found.push(threads::resolve(None, &f.to_string_lossy(), &roots)?);
+    }
+    if let Some(q) = &superset {
+        let ws = threads::superset_workspace(Some(q.as_str()).filter(|q| !q.is_empty()))?;
+        // a workspace of another repository would put its knowledge into the wrong inbox
+        if std::path::Path::new(&ws.path).is_dir() {
+            let other = repo::Repo::discover(std::path::Path::new(&ws.path)).ok();
+            if other.as_ref().is_some_and(|o| o.common_dir != app.repo.common_dir) {
+                bail!(
+                    "Superset workspace {} works in another repository ({}) — run kontext distill there",
+                    threads::short(&ws.id),
+                    ws.path
+                );
+            }
+        }
+        let (ts, missing) = threads::workspace_threads(&ws);
+        // a terminal of the workspace may have run an agent in another directory
+        let (ts, elsewhere): (Vec<_>, Vec<_>) =
+            ts.into_iter().partition(|f| threads::thread_cwd(f).is_none_or(|cwd| threads::within(&cwd, &roots)));
+        if !elsewhere.is_empty() {
+            let list: Vec<String> =
+                elsewhere.iter().map(|f| format!("{} ({})", f.label(), threads::thread_cwd(f).unwrap_or_default())).collect();
+            println!("skipped, ran outside this repository: {}", list.join(", "));
+        }
+        println!(
+            "Superset workspace {} · {} · {} · {} thread(s) here{}",
+            threads::short(&ws.id),
+            util::truncate_chars(&util::one_line(&ws.name), 70),
+            if ws.branch.is_empty() { ws.kind.clone() } else { ws.branch.clone() },
+            ts.len(),
+            if missing.is_empty() {
+                String::new()
+            } else {
+                format!(", {} without a transcript (ephemeral runs or other agents)", missing.len())
+            }
+        );
+        found.extend(ts);
+    }
+    if list || found.is_empty() {
+        let items = if found.is_empty() { threads::in_roots(&roots, 30) } else { found };
+        if items.is_empty() {
+            println!("No Claude Code or Codex threads of this repository on this machine.");
+            return Ok(());
+        }
+        println!("{:<18} {:<10} {:<22} {:>6}  title", "thread", "started", "branch", "turns");
+        for f in &items {
+            let Ok(t) = threads::load(f) else { continue };
+            println!(
+                "{:<18} {:<10} {:<22} {:>6}  {}",
+                f.label(),
+                t.started.as_deref().unwrap_or("").chars().take(10).collect::<String>(),
+                util::truncate_chars(t.branch.as_deref().unwrap_or(""), 22),
+                t.turns.len(),
+                util::truncate_chars(&util::one_line(t.title.as_deref().unwrap_or("")), 70)
+            );
+        }
+        if !list {
+            println!("\nDistill one: kontext distill --claude <id> | --codex <id> | --superset [workspace] | <file>");
+        }
+        return Ok(());
+    }
+    let dry = opt.dry_run;
+    println!("Distilling {} thread(s){}…", found.len(), if dry { " (dry run)" } else { "" });
+    let outcomes = distill::distill(app, &found, &opt, &|l| println!("{l}"))?;
+    let total: usize = outcomes.iter().map(|o| o.captured.len()).sum();
+    for o in &outcomes {
+        if !o.captured.is_empty() {
+            println!("\n## {}", o.thread);
+        }
+        for (c, loc) in &o.captured {
+            println!(
+                "\n[{}] {}{}\n{}",
+                c.kind,
+                c.title,
+                if c.paths.is_empty() { String::new() } else { format!("  ({})", c.paths.join(", ")) },
+                if dry { c.body.trim().to_string() } else { format!("→ {loc}") }
+            );
+        }
+    }
+    if dry {
+        println!("\n{total} entr{} found; nothing was captured (--dry-run).", if total == 1 { "y" } else { "ies" });
+    } else if total > 0 {
+        println!(
+            "\n{total} entr{} in the inbox — review them (`kontext inbox`), then promote each with the commit it belongs to (`kontext prepare-commit --promote <id>` or ctx_prepare_commit); drop the rest (`kontext inbox drop <id>`).",
+            if total == 1 { "y" } else { "ies" }
+        );
+    } else {
+        println!("\nNothing durable found (or all of it is recorded already).");
+    }
+    Ok(())
+}
+
 fn open(dir: &Option<PathBuf>) -> Result<App> {
     let d = dir.clone().unwrap_or_else(|| PathBuf::from("."));
     App::open(&d)
@@ -502,6 +647,7 @@ fn run(cli: Cli) -> Result<i32> {
                     status: a.status,
                     promote: a.promote,
                     origin: "cli".into(),
+                    ..Default::default()
                 },
             )?;
             println!("{} {}", if out.promoted { "wrote" } else { "captured" }, out.location);
@@ -520,12 +666,13 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                     for e in items {
                         println!(
-                            "{}  [{}{}]  {}{}",
+                            "{}  [{}{}]  {}{}{}",
                             e.id,
                             e.kind,
                             if e.visibility.as_deref() == Some("private") { ", private" } else { "" },
                             e.l0(120),
-                            inbox::Origin::of(&app.repo, &e).note()
+                            inbox::Origin::of(&app.repo, &e).note(),
+                            e.get_extra("source").map(|s| format!(" · from {s}")).unwrap_or_default()
                         );
                     }
                 }
@@ -557,6 +704,18 @@ fn run(cli: Cli) -> Result<i32> {
             } else {
                 print!("{}", ops::render_log(&rows));
             }
+        }
+        Cmd::Distill { files, claude, codex, superset, list, llm, max, max_parts, jobs, dry_run } => {
+            let app = open(&dir)?;
+            run_distill(
+                &app,
+                files,
+                claude,
+                codex,
+                superset,
+                list,
+                distill::Options { llm, max_per_thread: max, max_parts, jobs, dry_run },
+            )?;
         }
         Cmd::Why { target, limit } => {
             let app = open(&dir)?;

@@ -94,6 +94,19 @@ Write candidates into the store and `git add` them.
 
 The report agents get from `ctx_prepare_commit`.
 
+### `kontext distill [<file>…] [--claude <id|last>]… [--codex <id|last>]… [--superset [<workspace>]]`
+
+Distill knowledge from agent threads into the inbox; without a thread it lists this repository's threads on this machine. See [Knowledge from agent threads](../guides/08-distill-threads.md).
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--llm <adapter>` | `init.llm` | adapter with an `llm` op |
+| `--max <n>` | 5 | most entries per thread |
+| `--max-parts <n>` | 12 | most transcript parts per thread |
+| `--jobs <n>` | 3 | parallel model calls |
+| `--list` | | list the threads instead |
+| `--dry-run` | | print the findings, capture nothing |
+
 ### `kontext check [--staged]`
 
 Validate all entries (or exactly what is staged) and scan them for secrets. Exit status 1 on errors.

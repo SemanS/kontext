@@ -94,6 +94,19 @@ Zapíše kandidátov do úložiska a spraví `git add`.
 
 Report, ktorý agenti dostanú z `ctx_prepare_commit`.
 
+### `kontext distill [<súbor>…] [--claude <id|last>]… [--codex <id|last>]… [--superset [<workspace>]]`
+
+Vytiahne znalosti z vlákien agentov do inboxu; bez vlákna vypíše vlákna tohto repozitára na tomto počítači. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
+
+| Voľba | Predvolene | Význam |
+| --- | --- | --- |
+| `--llm <adapter>` | `init.llm` | adaptér s operáciou `llm` |
+| `--max <n>` | 5 | najviac záznamov na vlákno |
+| `--max-parts <n>` | 12 | najviac častí prepisu na vlákno |
+| `--jobs <n>` | 3 | súbežné volania modelu |
+| `--list` | | vlákna len vypíše |
+| `--dry-run` | | zistenia vypíše, nič nezachytí |
+
 ### `kontext check [--staged]`
 
 Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich na tajné údaje. Pri chybách skončí so stavom 1.

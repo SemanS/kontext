@@ -4,7 +4,7 @@ Server: `kontext mcp` — JSON-RPC 2.0 over stdio, newline-delimited. Protocol v
 
 ## Tools
 
-Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why` and `ctx_log` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. All are `openWorldHint: false`.
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. All are `openWorldHint: false`.
 
 ### `ctx_brief`
 
@@ -62,6 +62,18 @@ Each hit: `N. title — snippet [kind · status · date · source] <uri>`.
 | `supersedes` | string[] | | ids of entries it replaces |
 | `status` | string | `accepted` for decisions | |
 | `promote` | boolean | false | write into the store now instead of the inbox |
+| `commits` | string[] | | short shas of the commits it came from |
+| `source` | string | | where it was found, e.g. a thread label from `ctx_threads` (kept in the inbox only) |
+
+### `ctx_threads`
+
+| Parameter | Type | Default | |
+| --- | --- | --- | --- |
+| `thread` | string | | `claude:<id>`, `codex:<id>`, `superset:<workspace>` (all its threads), a transcript file or `last`; without it, the recent threads are listed |
+| `part` | integer | 1 | part of a long transcript |
+| `budget_chars` | integer | 40000 | characters per part (up to 80000) |
+
+Compact, redacted transcripts of this repository's agent threads on this machine — see [Knowledge from agent threads](../guides/08-distill-threads.md).
 
 ### `ctx_inbox`
 
@@ -115,6 +127,7 @@ Tools of MCP adapters with `expose` are listed with their original schemas (name
 | `kontext-init` | `tasks` (optional) | bootstrap and deepen the repository's knowledge |
 | `kontext-commit` | | prepare the current change for commit |
 | `kontext-reflect` | | capture at most three durable items from the session |
+| `kontext-distill` | `thread` (optional) | distill durable knowledge from another thread or a Superset workspace |
 
 ## Resources
 

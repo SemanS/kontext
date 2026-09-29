@@ -39,6 +39,7 @@ fn annotations(name: &str) -> Value {
         "ctx_read" => ("Read a context URI", true, false),
         "ctx_why" => ("Why is this code the way it is", true, false),
         "ctx_log" => ("Decision timeline", true, false),
+        "ctx_threads" => ("Read agent threads", true, false),
         "ctx_capture" => ("Capture knowledge", false, false),
         // `drop` discards only local, never-shared inbox drafts — not destructive in the MCP sense,
         // and Codex refuses destructive tools outright under `approval_policy = "never"`
@@ -110,6 +111,8 @@ fn tool_list() -> Vec<Value> {
                 "tags": arr("Optional tags"),
                 "visibility": {"type": "string", "enum": ["team", "private"]},
                 "supersedes": arr("Ids of entries this replaces (they get marked superseded)"),
+                "commits": arr("Short shas of the commits it came from (e.g. when distilled from a thread)"),
+                "source": s("Where it was found, e.g. a thread from ctx_threads such as claude:4f1c2a9b (kept in the inbox only)"),
                 "status": s("Decisions: proposed | accepted (default)"),
                 "promote": {"type": "boolean", "description": "Write into the repo store now instead of the inbox"}
             }, "required": ["kind", "title", "body"]}
@@ -129,6 +132,15 @@ fn tool_list() -> Vec<Value> {
                 "kind": s("decision (default), convention, learning, incident"),
                 "all": {"type": "boolean", "description": "Include superseded/rejected entries"},
                 "limit": {"type": "integer"}
+            }}
+        }),
+        json!({
+            "name": "ctx_threads",
+            "description": "Agent threads of this repository on this machine — Claude Code and Codex sessions, also grouped by Superset workspace — as compact, redacted transcripts, to distill durable knowledge from (see the kontext-distill prompt). Without `thread` it lists the recent ones; with `thread` it returns that transcript in parts.",
+            "inputSchema": {"type": "object", "properties": {
+                "thread": s("claude:<id>, codex:<id>, superset:<workspace id or worktree name> (every thread of that workspace), a transcript file, or `last`"),
+                "part": {"type": "integer", "description": "Part of a long transcript to return (1-based, default 1)"},
+                "budget_chars": {"type": "integer", "description": "Characters per part (default 40000)"}
             }}
         }),
         json!({
@@ -237,6 +249,8 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 status: str_arg(args, "status"),
                 promote: args.get("promote").and_then(|v| v.as_bool()).unwrap_or(false),
                 origin: origin.to_string(),
+                source: str_arg(args, "source"),
+                commits: list_arg(args, "commits"),
             };
             let out = ops::capture(app, req)?;
             let mut text = if out.promoted {
@@ -257,6 +271,62 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
         "ctx_why" => {
             let target = str_arg(args, "target").ok_or_else(|| anyhow!("target is required"))?;
             ops::why(app, &target, int_arg(args, "limit").unwrap_or(12))
+        }
+        "ctx_threads" => {
+            use crate::threads;
+            let roots = app.repo.worktree_roots();
+            let Some(spec) = str_arg(args, "thread") else {
+                let mut out = String::from("Agent threads of this repository on this machine, newest first:\n");
+                let recent = threads::in_roots(&roots, 20);
+                for f in &recent {
+                    if let Ok(t) = threads::load(f) {
+                        out.push_str(&format!(
+                            "- {} · {} · {} · {} turns · {}\n",
+                            f.label(),
+                            t.started.as_deref().unwrap_or("").chars().take(10).collect::<String>(),
+                            t.branch.as_deref().unwrap_or("-"),
+                            t.turns.len(),
+                            util::truncate_chars(&util::one_line(t.title.as_deref().unwrap_or("")), 80)
+                        ));
+                    }
+                }
+                if recent.is_empty() {
+                    out.push_str("(none)\n");
+                }
+                if let Ok(ws) = threads::superset_workspace(None) {
+                    out.push_str(&format!(
+                        "\nCurrent Superset workspace: {} ({}) — thread=\"superset:{}\" reads the threads its terminals ran.\n",
+                        util::truncate_chars(&util::one_line(&ws.name), 80),
+                        ws.branch,
+                        threads::short(&ws.id)
+                    ));
+                }
+                out.push_str("\nRead one with ctx_threads thread=\"<label>\".");
+                return Ok(out);
+            };
+            let found: Vec<threads::Found> = match spec.strip_prefix("superset:") {
+                Some(ws) => {
+                    let w = threads::superset_workspace(Some(ws).filter(|w| !w.is_empty()))?;
+                    let (ts, _) = threads::workspace_threads(&w);
+                    ts.into_iter().filter(|f| threads::thread_cwd(f).is_none_or(|c| threads::within(&c, &roots))).collect()
+                }
+                None => vec![threads::resolve(None, &spec, &roots)?],
+            };
+            if found.is_empty() {
+                bail!("no thread of this repository found for '{spec}'");
+            }
+            let mut text = String::new();
+            for f in &found {
+                let t = threads::load(f)?;
+                text.push_str(&threads::render(&t, &app.repo.root));
+                text.push_str("\n\n");
+            }
+            let budget = int_arg(args, "budget_chars").unwrap_or(40_000).clamp(4_000, 80_000);
+            let parts = threads::parts(&text, budget);
+            let n = parts.len().max(1);
+            let i = int_arg(args, "part").unwrap_or(1).clamp(1, n);
+            let more = if i < n { format!(" — call ctx_threads again with part={} for the rest", i + 1) } else { String::new() };
+            Ok(format!("{}\n[part {i} of {n}{more}]", parts.get(i - 1).map(String::as_str).unwrap_or("")))
         }
         "ctx_log" => {
             let kind = str_arg(args, "kind").unwrap_or_else(|| "decision".into());
@@ -279,12 +349,13 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                         .iter()
                         .map(|e| {
                             format!(
-                                "- `{}` [{}{}] {}{}\n",
+                                "- `{}` [{}{}] {}{}{}\n",
                                 e.id,
                                 e.kind,
                                 if e.visibility.as_deref() == Some("private") { ", private" } else { "" },
                                 e.l0(150),
-                                crate::inbox::Origin::of(&app.repo, e).note()
+                                crate::inbox::Origin::of(&app.repo, e).note(),
+                                e.get_extra("source").map(|s| format!(" · from {s}")).unwrap_or_default()
                             )
                         })
                         .collect())
@@ -382,6 +453,7 @@ pub fn prompts() -> Vec<Value> {
         json!({"name": "kontext-init", "description": "Bootstrap this repository's team knowledge, one small task at a time", "arguments": [{"name": "tasks", "description": "How many tasks to do now (default: until done)", "required": false}]}),
         json!({"name": "kontext-commit", "description": "Prepare the current change for commit: promote relevant knowledge, capture what is missing"}),
         json!({"name": "kontext-reflect", "description": "Review this session and capture the durable decisions and lessons (at most three)"}),
+        json!({"name": "kontext-distill", "description": "Distill durable team knowledge from another agent thread or a Superset workspace", "arguments": [{"name": "thread", "description": "claude:<id>, codex:<id>, superset:<workspace> or a transcript file (default: choose from the list)", "required": false}]}),
     ]
 }
 
@@ -417,6 +489,24 @@ When finished (or when I stop you), summarise what was written and suggest commi
 For each, call ctx_capture with a short title, a body of a few lines (what, why, consequences) and the paths it governs. Use visibility=private for things only I need. Skip anything already covered — check with ctx_search first."
                 .into(),
         ),
+        "kontext-distill" => {
+            let thread = args.get("thread").and_then(|v| v.as_str()).filter(|t| !t.trim().is_empty());
+            let first = match thread {
+                Some(t) => format!("Call ctx_threads with thread=\"{t}\"."),
+                None => "Call ctx_threads without arguments: it lists this repository's recent threads and the current Superset workspace. Ask me which one I mean if it is not obvious.".to_string(),
+            };
+            (
+                "Distill a thread into team knowledge".into(),
+                format!(
+                    "Distill durable team knowledge from an agent thread.\n\
+1. {first}\n\
+2. Read all of it: when a reply says there are more parts, call ctx_threads again with the next part.\n\
+3. Pick at most five things the team should still know later — decisions (a direction taken or an alternative rejected, and why), conventions, non-obvious pitfalls, incidents. Skip progress notes, debugging chatter and plans that were not carried out.\n\
+4. For each: check with ctx_search that it is not recorded yet, then ctx_capture it — kind, a short title, a few lines (what, why, consequences), the paths it governs, the commits it came from, and source set to the thread's label.\n\
+5. Tell me what you captured. It waits in the local inbox until ctx_prepare_commit promotes it with a commit; nothing is shared before that."
+                ),
+            )
+        }
         other => bail!("unknown prompt '{other}'"),
     })
 }

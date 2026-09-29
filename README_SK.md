@@ -98,7 +98,7 @@ Celý postup: [Rýchly štart](https://semans.github.io/kontext/sk/getting-start
 | **Superset a orchestrátory** | nič navyše – worktree zdieľajú inbox aj postup | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients#superset-and-other-orchestrators) |
 | **Akýkoľvek MCP klient** | príkaz `kontext`, argumenty `["mcp"]` | [Referencia MCP](https://semans.github.io/kontext/sk/reference/02-mcp) |
 
-Nástroje agenta: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` – plus prompty `kontext-init`, `kontext-commit`, `kontext-reflect`.
+Nástroje agenta: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` – plus prompty `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
 
 ## Adaptéry
 

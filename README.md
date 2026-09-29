@@ -98,7 +98,7 @@ Full walkthrough: [Quick start](https://semans.github.io/kontext/getting-started
 | **Superset & orchestrators** | nothing extra — worktrees share inbox and progress | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients#superset-and-other-orchestrators) |
 | **Any MCP client** | command `kontext`, args `["mcp"]` | [MCP reference](https://semans.github.io/kontext/reference/02-mcp) |
 
-Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` — plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`.
+Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` — plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
 
 ## Adapters
 

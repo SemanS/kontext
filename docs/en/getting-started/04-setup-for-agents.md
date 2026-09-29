@@ -36,6 +36,7 @@ kontext publishes three prompts. Claude Code shows them as slash commands:
 | `kontext-init` | `/mcp__kontext__kontext-init` | runs the bootstrap task loop (`ctx_init` → work → `ctx_init_submit`) |
 | `kontext-commit` | `/mcp__kontext__kontext-commit` | prepares the current change: promote candidates, capture what is missing |
 | `kontext-reflect` | `/mcp__kontext__kontext-reflect` | reviews the session and captures at most three durable items |
+| `kontext-distill` | `/mcp__kontext__kontext-distill` | distills durable knowledge from another agent thread or a Superset workspace |
 
 ## Several agents, several worktrees
 

@@ -36,6 +36,7 @@ kontext publikuje tri prompty. Claude Code ich ukazuje ako slash príkazy:
 | `kontext-init` | `/mcp__kontext__kontext-init` | spustí cyklus úloh zavádzania (`ctx_init` → práca → `ctx_init_submit`) |
 | `kontext-commit` | `/mcp__kontext__kontext-commit` | pripraví aktuálnu zmenu: povýši kandidátov, zachytí, čo chýba |
 | `kontext-reflect` | `/mcp__kontext__kontext-reflect` | prejde session a zachytí najviac tri trvalé veci |
+| `kontext-distill` | `/mcp__kontext__kontext-distill` | vytiahne trvalé znalosti z iného vlákna agenta alebo workspace v Supersete |
 
 ## Viac agentov, viac worktree
 

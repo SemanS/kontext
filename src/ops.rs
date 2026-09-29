@@ -234,6 +234,10 @@ pub struct CaptureReq {
     pub status: Option<String>,
     pub promote: bool,
     pub origin: String,
+    /// Where it was found (e.g. `claude:4f1c2a9b`); kept in the inbox, dropped on promotion.
+    pub source: Option<String>,
+    /// Commits it came from.
+    pub commits: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,9 +309,13 @@ pub fn capture(app: &App, mut req: CaptureReq) -> Result<CaptureOut> {
         author: app.repo.user_name(),
         visibility: Some(visibility.clone()),
         origin: Some(req.origin.clone()),
+        commits: req.commits.iter().map(|c| c.trim().chars().take(12).collect::<String>()).filter(|c| !c.is_empty()).collect(),
         body,
         ..Default::default()
     };
+    if let Some(src) = req.source.as_deref().filter(|s| !s.is_empty()) {
+        entry.set_extra("source", crate::store::FmValue::Str(src.to_string()));
+    }
     // similar entries already in the store?
     if let Ok(hits) =
         app.with_index(|idx| idx.search(&entry.title, &SearchOpts { limit: 3, kinds: vec![kind.clone()], sources: vec!["entry".into()] }))
@@ -335,7 +343,7 @@ pub fn capture(app: &App, mut req: CaptureReq) -> Result<CaptureOut> {
     Ok(CaptureOut { id: saved.id.clone(), location: format!("inbox:{}", saved.id), promoted: false, visibility, redactions, notes })
 }
 
-fn title_similarity(a: &str, b: &str) -> f32 {
+pub(crate) fn title_similarity(a: &str, b: &str) -> f32 {
     let words = |s: &str| -> HashSet<String> {
         s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(str::to_string).collect()
     };
@@ -383,7 +391,7 @@ pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, St
             bail!("'{}' is private; recapture it with visibility=team if the team should see it", cand.id);
         }
         let mut e = cand.clone();
-        e.extra.retain(|(k, _)| !matches!(k.as_str(), "captured" | "branch" | "worktree"));
+        e.extra.retain(|(k, _)| !matches!(k.as_str(), "captured" | "branch" | "worktree" | "source"));
         e.visibility = None;
         e.id.clear();
         e.rel_path.clear();

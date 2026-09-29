@@ -35,7 +35,7 @@ pub struct Task {
     pub facts: String,
 }
 
-fn string_or_vec<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+pub(crate) fn string_or_vec<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let v = Value::deserialize(d)?;
     Ok(match v {
         Value::String(s) => s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
