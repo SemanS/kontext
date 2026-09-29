@@ -163,6 +163,104 @@ pub fn redact(text: &str) -> (String, usize) {
     (out, n)
 }
 
+/// Compiled `secrets.redact` patterns (invalid ones are skipped).
+pub fn patterns(list: &[String]) -> Vec<Regex> {
+    list.iter().filter_map(|p| Regex::new(p).ok()).collect()
+}
+
+static EMAIL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b").unwrap());
+static PHONE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|[^\w/+])(\+\d{1,3}(?:[ .-]?\(?\d{1,4}\)?){2,5})").unwrap());
+static IBAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b").unwrap());
+static CARD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b\d(?:[ -]?\d){12,18}\b").unwrap());
+static IPV4: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b").unwrap());
+
+fn luhn(digits: &str) -> bool {
+    let mut sum = 0;
+    for (i, c) in digits.chars().rev().enumerate() {
+        let Some(mut d) = c.to_digit(10) else { return false };
+        if i % 2 == 1 {
+            d *= 2;
+            if d > 9 {
+                d -= 9;
+            }
+        }
+        sum += d;
+    }
+    sum % 10 == 0
+}
+
+/// Mask personal and infrastructure data that agent threads carry and team knowledge does not
+/// need: email addresses, phone numbers, IBANs, card numbers, IPv4 addresses, and the `extra`
+/// patterns of `secrets.redact`. Returns the text and the number of values masked.
+pub fn redact_personal(text: &str, extra: &[Regex]) -> (String, usize) {
+    let mut n = 0;
+    let mut out = EMAIL
+        .replace_all(text, |c: &regex::Captures| {
+            let domain = c[1].to_lowercase();
+            let fake = ["example.com", "example.org", "example.net", "localhost"].contains(&domain.as_str())
+                || [".example", ".test", ".invalid", ".local"].iter().any(|s| domain.ends_with(s));
+            if fake {
+                c[0].to_string()
+            } else {
+                n += 1;
+                "[email]".to_string()
+            }
+        })
+        .into_owned();
+    out = PHONE
+        .replace_all(&out, |c: &regex::Captures| {
+            if c[2].chars().filter(char::is_ascii_digit).count() >= 9 {
+                n += 1;
+                format!("{}[phone]", &c[1])
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned();
+    out = IBAN
+        .replace_all(&out, |c: &regex::Captures| {
+            if c[0].chars().filter(char::is_ascii_digit).count() >= 10 {
+                n += 1;
+                "[iban]".to_string()
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned();
+    out = CARD
+        .replace_all(&out, |c: &regex::Captures| {
+            let digits: String = c[0].chars().filter(char::is_ascii_digit).collect();
+            if luhn(&digits) && !digits.chars().all(|d| d == digits.chars().next().unwrap_or('0')) {
+                n += 1;
+                "[card]".to_string()
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned();
+    out = IPV4
+        .replace_all(&out, |c: &regex::Captures| {
+            let octets: Vec<u32> = (1..=4).filter_map(|i| c[i].parse().ok()).collect();
+            let valid = octets.len() == 4 && octets.iter().all(|o| *o <= 255);
+            if valid && c[0] != *"127.0.0.1" && c[0] != *"0.0.0.0" {
+                n += 1;
+                "[ip]".to_string()
+            } else {
+                c[0].to_string()
+            }
+        })
+        .into_owned();
+    for re in extra {
+        let k = re.find_iter(&out).count();
+        if k > 0 {
+            n += k;
+            out = re.replace_all(&out, "[redacted]").into_owned();
+        }
+    }
+    (out, n)
+}
+
 /// Files that must never be read into shared context.
 pub fn is_sensitive_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
@@ -219,6 +317,22 @@ mod tests {
         ] {
             assert!(scan(ok, &[]).is_empty(), "{ok}: {:?}", scan(ok, &[]));
         }
+    }
+
+    #[test]
+    fn personal_data() {
+        let t = "Write to jane.doe@acme-corp.com or call +421 905 123 456; test@example.com is fine.\n\
+                 IBAN SK31 1200 0000 1987 4263 7541, card 4111 1111 1111 1111, host 34.117.59.81, local 127.0.0.1, v1.2.3.\n\
+                 The integration id is ACME-4471.";
+        let extra = patterns(&["ACME-\\d+".to_string()]);
+        let (out, n) = redact_personal(t, &extra);
+        for gone in ["jane.doe@", "905 123 456", "SK31", "4111", "34.117.59.81", "ACME-4471"] {
+            assert!(!out.contains(gone), "{gone} survived: {out}");
+        }
+        for kept in ["test@example.com", "127.0.0.1", "v1.2.3"] {
+            assert!(out.contains(kept), "{kept} was masked: {out}");
+        }
+        assert_eq!(n, 6, "{out}");
     }
 
     #[test]

@@ -67,6 +67,7 @@ remind_inbox = true
 [secrets]
 scan = "store"
 allow = []
+redact = []
 
 [init]
 max_module_docs = 40
@@ -186,6 +187,9 @@ pub struct SecretsCfg {
     /// "store" (only knowledge files), "staged" (every staged text file) or "off".
     pub scan: String,
     pub allow: Vec<String>,
+    /// Extra values (regexes) masked in agent threads and what is distilled from them — a client's
+    /// name, an integration id. Best kept in a private config layer.
+    pub redact: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

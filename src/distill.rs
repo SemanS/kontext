@@ -56,7 +56,9 @@ const PROMPT: &str = "You are distilling durable team knowledge for the reposito
 - learning: a non-obvious pitfall or gotcha that cost time;\n\
 - incident: something that broke, why, and the fix.\n\
 Skip routine progress, debugging chatter, one-off facts, plans that were not carried out, and anything already recorded (titles below). \
-Prefer zero to three strong entries over many weak ones; an empty list is a valid answer.\n\n\
+Prefer zero to three strong entries over many weak ones; an empty list is a valid answer. \
+Write for the whole team and keep people and data out: roles instead of names (\"the support team\", \"the client's PM\"), \
+and no email addresses, phone numbers, guest or customer records, credentials, hostnames or IP addresses.\n\n\
 Already recorded:\n{known}\n\n\
 {thread}\n<<<\n{text}\n>>>\n\n\
 Answer with ONLY one JSON object, no prose and no code fence, and do not call any tools:\n\
@@ -121,6 +123,9 @@ pub fn distill(app: &App, found: &[Found], opt: &Options, report: &dyn Fn(&str))
     if !adapter.has_op("llm") {
         bail!("adapter '{llm}' has no `llm` op");
     }
+    let extra = crate::secrets::patterns(&app.cfg().secrets.redact);
+    // what the model writes is masked again: it may quote the thread
+    let mask = |s: &str| crate::secrets::redact_personal(&crate::secrets::redact(s).0, &extra).0;
     let (entries, _) = app.entries();
     let mut known: Vec<String> = entries
         .iter()
@@ -148,7 +153,7 @@ pub fn distill(app: &App, found: &[Found], opt: &Options, report: &dyn Fn(&str))
             outcomes.push(out);
             continue;
         }
-        let text = threads::render(&t, &app.repo.root);
+        let text = threads::render(&t, &app.repo.root, &extra);
         let head = text.lines().next().unwrap_or("").to_string();
         let (parts, total) = spread(threads::parts(&text, PART_CHARS), opt.max_parts.max(1));
         if parts.len() < total {
@@ -209,7 +214,7 @@ pub fn distill(app: &App, found: &[Found], opt: &Options, report: &dyn Fn(&str))
             if known.iter().any(|k| dup(k)) || kept.iter().any(|k| dup(&k.title)) {
                 continue;
             }
-            kept.push(Candidate { kind, ..c });
+            kept.push(Candidate { kind, title: mask(&c.title), body: mask(&c.body), ..c });
         }
         kept.truncate(opt.max_per_thread);
         for c in kept {

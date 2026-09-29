@@ -8,7 +8,8 @@ Nothing, unless you configure it:
 
 - the local index, inbox, outbox and caches stay in `.git/kontext/`,
 - knowledge reaches others only through commits you push,
-- adapters send data only where their configuration says (and only for the ops and events they declare).
+- adapters send data only where their configuration says (and only for the ops and events they declare),
+- `kontext distill` sends a thread's compacted transcript to the `llm` adapter you choose — with secrets redacted and email addresses, phone numbers, IBANs, card numbers, IP addresses and your `secrets.redact` patterns masked (see [sensitive threads](../guides/08-distill-threads.md#sensitive-threads)).
 
 ## Trust for repository-declared adapters
 

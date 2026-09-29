@@ -2,6 +2,13 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.1.4 — 2026-09-29
+
+**Sensitive threads**
+- Thread transcripts (`kontext distill`, `ctx_threads`) and what is distilled from them mask email addresses, phone numbers, IBANs, card numbers and IP addresses, besides secrets; `secrets.redact` adds your own patterns (a client's name, an integration id).
+- The model is asked for roles instead of people's names and to leave out contact data, records, credentials and hosts; its entries are masked again.
+- Measured on a client thread: 52 email addresses, 2 phone numbers and 13 IP addresses no longer reach the model, and the distilled entries named no one.
+
 ## 0.1.3 — 2026-09-29
 
 **Knowledge from agent threads**

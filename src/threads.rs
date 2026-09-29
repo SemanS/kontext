@@ -543,8 +543,9 @@ fn codex_tool(p: &Value) -> Vec<String> {
 // ----------------------------------------------------------------------------------- rendering
 
 /// The thread as text for a reader (an agent or an LLM): who said what, what was changed, with
-/// paths relative to the repository and secrets redacted.
-pub fn render(t: &Thread, repo_root: &Path) -> String {
+/// paths relative to the repository, secrets redacted, and personal data (email addresses, phone
+/// numbers, IBANs, cards, IP addresses) and the `extra` patterns masked.
+pub fn render(t: &Thread, repo_root: &Path, extra: &[regex::Regex]) -> String {
     let mut s = format!("Thread {}:{}", t.agent.as_str(), short(&t.id));
     if let Some(title) = &t.title {
         s.push_str(&format!(" — {}", util::one_line(title)));
@@ -573,7 +574,8 @@ pub fn render(t: &Thread, repo_root: &Path) -> String {
             s = s.replace(&format!("{p}/"), "");
         }
     }
-    crate::secrets::redact(&s).0
+    let s = crate::secrets::redact(&s).0;
+    crate::secrets::redact_personal(&s, extra).0
 }
 
 /// Split a rendered thread into parts of about `size` characters, at turn boundaries.
@@ -774,7 +776,7 @@ mod tests {
         assert_eq!((t.id.as_str(), t.branch.as_deref(), t.title.as_deref()), ("s1", Some("feat/x"), Some("Redis cache")));
         let roles: Vec<Role> = t.turns.iter().map(|x| x.role).collect();
         assert_eq!(roles, vec![Role::User, Role::Agent, Role::Tool], "{:?}", t.turns);
-        let text = render(&t, Path::new("/r/app"));
+        let text = render(&t, Path::new("/r/app"), &[]);
         assert!(text.contains("→ edit src/cache.ts") && !text.contains("/r/app/") && !text.contains("hmm"), "{text}");
     }
 
@@ -792,7 +794,7 @@ mod tests {
         .join("\n");
         let t = parse_codex(&jsonl);
         assert_eq!((t.id.as_str(), t.branch.as_deref()), ("019f", Some("main")));
-        let text = render(&t, Path::new("/r/app"));
+        let text = render(&t, Path::new("/r/app"), &[]);
         assert!(text.contains("User: Page by cursor") && !text.contains("AGENTS.md") && !text.contains("permissions"), "{text}");
         assert!(text.contains("→ $ git commit -m 'fix: page by cursor'") && text.contains("→ kontext.ctx_capture"), "{text}");
         assert!(text.contains("→ edit src/page.ts") && !text.contains("ghp_abcdef"), "{text}");

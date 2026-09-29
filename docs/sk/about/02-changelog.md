@@ -2,6 +2,13 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.1.4 – 2026-09-29
+
+**Citlivé vlákna**
+- Prepisy vlákien (`kontext distill`, `ctx_threads`) a to, čo sa z nich vydestiluje, maskujú okrem tajných údajov aj e-mailové adresy, telefónne čísla, IBAN, čísla kariet a IP adresy; `secrets.redact` pridá tvoje vlastné vzory (meno klienta, id integrácie).
+- Model má pokyn písať roly namiesto mien ľudí a vynechať kontakty, záznamy, prístupové údaje a hosty; jeho záznamy sa znova zamaskujú.
+- Namerané na klientskom vlákne: 52 e-mailových adries, 2 telefónne čísla a 13 IP adries sa už nedostane k modelu a vydestilované záznamy nikoho nemenovali.
+
 ## 0.1.3 – 2026-09-29
 
 **Znalosti z vlákien agentov**

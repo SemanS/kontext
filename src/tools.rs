@@ -315,10 +315,11 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             if found.is_empty() {
                 bail!("no thread of this repository found for '{spec}'");
             }
+            let extra = crate::secrets::patterns(&app.cfg().secrets.redact);
             let mut text = String::new();
             for f in &found {
                 let t = threads::load(f)?;
-                text.push_str(&threads::render(&t, &app.repo.root));
+                text.push_str(&threads::render(&t, &app.repo.root, &extra));
                 text.push_str("\n\n");
             }
             let budget = int_arg(args, "budget_chars").unwrap_or(40_000).clamp(4_000, 80_000);

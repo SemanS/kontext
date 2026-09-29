@@ -8,7 +8,8 @@ Nič, kým to nenastavíš:
 
 - lokálny index, inbox, outbox a cache zostávajú v `.git/kontext/`,
 - k ostatným sa znalosti dostanú len cez commity, ktoré pushneš,
-- adaptéry posielajú dáta len tam, kam to určuje ich konfigurácia (a len pre operácie a udalosti, ktoré deklarujú).
+- adaptéry posielajú dáta len tam, kam to určuje ich konfigurácia (a len pre operácie a udalosti, ktoré deklarujú),
+- `kontext distill` pošle skrátený prepis vlákna LLM adaptéru, ktorý si vyberieš – so zamaskovanými tajnými údajmi, e-mailovými adresami, telefónnymi číslami, IBAN, číslami kariet, IP adresami a tvojimi vzormi zo `secrets.redact` (pozri [citlivé vlákna](../guides/08-distill-threads.md#sensitive-threads)).
 
 ## Dôvera pre adaptéry deklarované v repozitári {#trust-for-repository-declared-adapters}
 

@@ -43,6 +43,27 @@ Prejdi ich cez `kontext inbox`, každý povýš so zmenou, ku ktorej patrí (`ko
 | `--list` | | vlákna len vypíše, nespracuje ich |
 | `--dry-run` | | vypíše, nezachytí |
 
+## Citlivé vlákna {#sensitive-threads}
+
+Pracovné vlákna nesú to, z čoho je projekt – mená a adresy ľudí, vložené e-maily a logy, hosty, zákaznícke dáta. Namerané na skutočnom klientskom vlákne: z 52 MB prepisu sa k modelu dostane 240 KB (0,5 %) – výstupy nástrojov a obsah súborov nikdy – a to, čo zostane, sa ďalej maskuje:
+
+- tajné údaje, ako všade v kontexte;
+- e-mailové adresy, telefónne čísla, IBAN, čísla kariet a IP adresy (`127.0.0.1` zostane);
+- tvoje vlastné vzory, napr. id integrácií klienta alebo mená zákazníkov:
+
+  ```toml
+  # .git/kontext/config.toml (len tento klon) alebo ~/.config/kontext/repos/<slug>.toml
+  [secrets]
+  redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
+  ```
+
+Model má pokyn písať pre tím – roly namiesto mien ľudí, žiadne kontakty, záznamy, prístupové údaje ani hosty – a to, čo napíše, sa znova zamaskuje. Nič sa nezdieľa, kým to neprejdeš v inboxe.
+
+Pri repozitári klienta ešte rozhodni:
+
+- **kam ide prepis**: číta ho model LLM adaptéra. Použi poskytovateľa, ku ktorému už dáta klienta idú – pri vlákne z Claude Code `--llm llm-claude` – alebo ho pre repozitár zafixuj cez `[init] llm = "llm-claude"` v `~/.config/kontext/repos/<slug>.toml`;
+- **kde znalosti žijú**: `.ai/` v repozitári klienta je rozhodnutie klienta. Kým nesúhlasí, drž úložisko súkromne, v lokálne vylúčenom adresári ([repozitáre, ktoré nevlastníš](./01-bootstrap-an-existing-repository.md#repositories-you-do-not-own)).
+
 ## Z agenta
 
 Prompt `kontext-distill` (`/mcp__kontext__kontext-distill` v Claude Code), alebo len prosba – „vytiahni trvalé znalosti z vlákna claude:4f1c2a9b“ – nechá prácu na pripojenom agentovi a jeho vlastnom modeli, bez LLM adaptéra:

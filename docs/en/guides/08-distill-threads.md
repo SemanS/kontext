@@ -43,6 +43,27 @@ Review them with `kontext inbox`, promote each with the change it belongs to (`k
 | `--list` | | list the threads instead of distilling them |
 | `--dry-run` | | print, do not capture |
 
+## Sensitive threads
+
+Work threads carry what a project is made of — people's names and addresses, pasted emails and logs, hosts, customer data. Measured on a real client thread: of 52 MB of transcript, 240 KB reach the model (0.5 %) — tool output and file contents never do — and what is left is masked further:
+
+- secrets, as everywhere in kontext;
+- email addresses, phone numbers, IBANs, card numbers and IP addresses (`127.0.0.1` stays);
+- your own patterns, e.g. a client's integration ids or customer names:
+
+  ```toml
+  # .git/kontext/config.toml (this clone only) or ~/.config/kontext/repos/<slug>.toml
+  [secrets]
+  redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
+  ```
+
+The model is asked to write for the team — roles instead of people's names, no contact data, records, credentials or hosts — and what it writes is masked again. Nothing is shared before you review it in the inbox.
+
+For a client's repository, also decide:
+
+- **where the transcript goes**: the model of the `llm` adapter reads it. Use the provider the client's data already goes to — for a Claude Code thread, `--llm llm-claude` — or pin it for the repository with `[init] llm = "llm-claude"` in `~/.config/kontext/repos/<slug>.toml`;
+- **where the knowledge lives**: `.ai/` in a client's repository is the client's call. Until they agree, keep the store private, in a locally excluded directory ([repositories you do not own](./01-bootstrap-an-existing-repository.md#repositories-you-do-not-own)).
+
 ## From an agent
 
 The `kontext-distill` prompt (`/mcp__kontext__kontext-distill` in Claude Code), or simply asking — "distill the durable knowledge from thread claude:4f1c2a9b" — lets the connected agent do it with its own model, no LLM adapter needed:

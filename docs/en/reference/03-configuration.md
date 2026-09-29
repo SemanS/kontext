@@ -92,6 +92,7 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | --- | --- | --- |
 | `scan` | `store` | `store` (knowledge files), `staged` (every staged text file) or `off` |
 | `allow` | `[]` | regexes of lines to ignore |
+| `redact` | `[]` | regexes of values masked in agent threads and in what is distilled from them — a client's name, an integration id; keep them in a private layer (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`) |
 
 ## `[init]`
 
