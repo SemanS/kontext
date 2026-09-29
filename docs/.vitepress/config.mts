@@ -128,8 +128,15 @@ export default defineConfig({
   lastUpdated: true,
   // English sources live in docs/en/ (like docs/sk/) but are served at the site root
   rewrites: { 'en/:rest*': ':rest*' },
-  // the docs show kontext templates such as {{query}} everywhere — keep Vue from interpolating them
-  vue: { template: { compilerOptions: { delimiters: ['{%vue', 'vue%}'] } } },
+  // The docs show kontext templates such as {{query}} in inline code. Fenced code is already v-pre;
+  // inline code gets it here, so Vue leaves the braces alone and the theme keeps its own templates.
+  markdown: {
+    config(md) {
+      const inline = md.renderer.rules.code_inline!
+      md.renderer.rules.code_inline = (tokens, idx, options, env, self) =>
+        inline(tokens, idx, options, env, self).replace(/^<code/, '<code v-pre')
+    },
+  },
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/kontext/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#4338ca' }],
