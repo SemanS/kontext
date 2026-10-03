@@ -2,6 +2,11 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+**Knowledge freshness**
+- The brief's *State* and `kontext status` flag active decisions whose `paths` were touched by many commits since the decision's date, so an agent or reviewer checks whether they still hold. The threshold is `brief.stale_after_commits` (default 20, `0` turns it off). One cached `git log` per `HEAD` covers every decision. See [Freshness](../concepts/04-context-layers.md#freshness).
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

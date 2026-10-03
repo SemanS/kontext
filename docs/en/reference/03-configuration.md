@@ -65,11 +65,12 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 
 ## `[brief]`
 
-| Key | Default |
-| --- | --- |
-| `budget_tokens` | `1400` |
-| `max_decisions` | `12` |
-| `max_modules` | `14` |
+| Key | Default | |
+| --- | --- | --- |
+| `budget_tokens` | `1400` | |
+| `max_decisions` | `12` | |
+| `max_modules` | `14` | |
+| `stale_after_commits` | `20` | flag an active decision once this many commits touched its `paths` since its date; `0` turns it off (see [Freshness](../concepts/04-context-layers.md#freshness)) |
 
 ## `[capture]`
 

@@ -10,6 +10,7 @@ mod config;
 mod connect;
 mod distill;
 mod events;
+mod freshness;
 mod glob;
 mod hooks;
 mod inbox;
@@ -1005,6 +1006,21 @@ fn status(app: &App) -> Result<()> {
     match app.with_index(|i| Ok(i.num_docs())) {
         Ok(n) => println!("index     {n} documents (entries, docs, commits)"),
         Err(e) => println!("index     ✗ {e:#}"),
+    }
+    let threshold = app.cfg().brief.stale_after_commits;
+    if threshold == 0 {
+        println!("freshness off (brief.stale_after_commits = 0)");
+    } else {
+        let stale = freshness::stale_decisions(app, &entries);
+        if stale.is_empty() {
+            println!("freshness no active decision has {threshold}+ commits on its paths since it was made");
+        } else {
+            println!(
+                "freshness {} decision(s) may need a refresh ({threshold}+ commits on their paths since): {}",
+                stale.len(),
+                freshness::render_list(&stale, 5)
+            );
+        }
     }
     let inbox = inbox::Inbox::open(&app.repo).list();
     let private = inbox.iter().filter(|e| e.visibility.as_deref() == Some("private")).count();

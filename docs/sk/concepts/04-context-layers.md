@@ -14,11 +14,21 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Konvencie · Poznatky a úskalia · Incidenty | každé na jeden riadok, zoradené podľa focusu |
 | Moduly | zhrnutia modulov (najviac `brief.max_modules`); pri moduloch vo focuse aj začiatok ich prehľadu |
 | Z adaptérov | sekcie od adaptérov s operáciou `brief` (napr. primer zo sessions) |
-| Stav | počty v inboxe, postup zavádzania, varovania |
+| Stav | počty v inboxe, postup zavádzania, rozhodnutia na prehodnotenie, varovania |
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami.
 
 Claude Code môže dostať brief automaticky na začiatku session. Pozri [Claude Code](../agent-integrations/02-claude-code.md).
+
+### Aktuálnosť {#freshness}
+
+Rozhodnutie sa zapíše raz, ale kód, ktorý riadi, sa ďalej mení. *Stav* v briefe a `kontext status` vypíšu aktívne rozhodnutia, ktorých `paths` sa od dátumu rozhodnutia dotklo aspoň `brief.stale_after_commits` commitov (predvolene 20), najviac zmenené ako prvé:
+
+```text
+- May need a refresh (20+ commits on their paths since): [0007] Prices are integer cents (34 commits) …
+```
+
+Commity z dňa samotného rozhodnutia a merge commity sa nepočítajú a rozhodnutia bez `date` alebo `paths` sa neoznačia nikdy. Označenie je výzva na kontrolu, nie verdikt: ak rozhodnutie stále platí, netreba nič meniť; ak nie, nahraď ho novým (supersede). Počet pochádza z jedného `git log` cez všetky rozhodnutia (obmedzeného `index.max_commits`), uloženého v cache podľa `HEAD` v stavovom adresári worktree, takže brief nepridá žiadne volanie gitu na rozhodnutie. `stale_after_commits = 0` to vypne.
 
 ## Úrovne: L0 · L1 · L2
 

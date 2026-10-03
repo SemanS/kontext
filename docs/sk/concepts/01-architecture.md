@@ -45,7 +45,7 @@
 | Inbox (kandidáti) | `<git-common-dir>/kontext/inbox/` | nie | áno |
 | Outbox (doručenia adaptérom) | `<git-common-dir>/kontext/outbox.jsonl` | nie | áno |
 | Postup zavádzania | `<git-common-dir>/kontext/init-done.json` + samotné záznamy | čiastočne (záznamy) | áno |
-| Vyhľadávací index, cache initu, snapshot synchronizácie | `<git-common-dir>/kontext/worktrees/<worktree>/` | nie | nie (pre každý worktree zvlášť) |
+| Vyhľadávací index, cache initu, snapshot synchronizácie, cache aktuálnosti | `<git-common-dir>/kontext/worktrees/<worktree>/` | nie | nie (pre každý worktree zvlášť) |
 | Logy adaptérov (stderr MCP serverov) | `<git-common-dir>/kontext/logs/` | nie | áno |
 
 `<git-common-dir>` je `$(git rev-parse --git-common-dir)`, zvyčajne `.git`. Všetko v `.git/kontext/` je odvodené alebo lokálne a dá sa zmazať.

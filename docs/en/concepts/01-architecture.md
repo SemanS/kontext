@@ -45,7 +45,7 @@
 | Inbox (candidates) | `<git-common-dir>/kontext/inbox/` | no | yes |
 | Outbox (adapter deliveries) | `<git-common-dir>/kontext/outbox.jsonl` | no | yes |
 | Bootstrap progress | `<git-common-dir>/kontext/init-done.json` + the entries themselves | partly (entries) | yes |
-| Search index, init cache, sync snapshot | `<git-common-dir>/kontext/worktrees/<worktree>/` | no | no (per worktree) |
+| Search index, init cache, sync snapshot, freshness cache | `<git-common-dir>/kontext/worktrees/<worktree>/` | no | no (per worktree) |
 | Adapter logs (MCP servers' stderr) | `<git-common-dir>/kontext/logs/` | no | yes |
 
 `<git-common-dir>` is `$(git rev-parse --git-common-dir)`, normally `.git`. Everything under `.git/kontext/` is derived or local and can be deleted.

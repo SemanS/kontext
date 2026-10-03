@@ -49,6 +49,7 @@ Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/`. Oba stromy si sú
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | `src/store.rs`, `src/inbox.rs` | záznamy znalostí (oba štýly) a lokálni kandidáti |
 | `src/index.rs` | index Tantivy |
+| `src/freshness.rs` | rozhodnutia, ktorých `paths` sa od ich prijatia výrazne zmenili |
 | `src/adapters/` | register, drivery, MCP klient, mapovanie výsledkov |
 | `src/init/` | scan, history, render, deepen |
 | `src/hooks.rs`, `src/events.rs` | git hooky, outbox |

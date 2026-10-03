@@ -14,11 +14,21 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Conventions · Learnings & pitfalls · Incidents | one line each, focus-ranked |
 | Modules | module summaries (up to `brief.max_modules`); for focused modules the start of their overview |
 | From adapters | sections from adapters that have a `brief` op (e.g. a session primer) |
-| State | inbox counts, bootstrap progress, warnings |
+| State | inbox counts, bootstrap progress, decisions that may need a refresh, warnings |
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags.
 
 Claude Code can receive the brief automatically at session start: see [Claude Code](../agent-integrations/02-claude-code.md).
+
+### Freshness
+
+A decision is written once, but the code it governs keeps moving. The brief's *State* and `kontext status` list active decisions whose `paths` were touched by at least `brief.stale_after_commits` commits (default 20) since the decision's date, most-changed first:
+
+```text
+- May need a refresh (20+ commits on their paths since): [0007] Prices are integer cents (34 commits) …
+```
+
+Commits from the decision's own day and merge commits are not counted, and decisions without a `date` or `paths` are never flagged. A flag is a prompt to check, not a verdict: if the decision still holds, nothing needs to change; if it does not, supersede it. The count comes from one `git log` over all decisions (bounded by `index.max_commits`), cached per `HEAD` under the worktree's state directory, so a brief adds no git call per decision. Set `stale_after_commits = 0` to turn it off.
 
 ## Levels: L0 · L1 · L2
 

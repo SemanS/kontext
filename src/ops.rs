@@ -697,6 +697,15 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     } else if done < total {
         let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
     }
+    let stale = crate::freshness::stale_decisions(app, &entries);
+    if !stale.is_empty() {
+        let _ = writeln!(
+            state,
+            "- May need a refresh ({}+ commits on their paths since): {} — check they still hold; supersede if not.",
+            cfg.brief.stale_after_commits,
+            crate::freshness::render_list(&stale, 3)
+        );
+    }
     if !errors.is_empty() {
         let _ = writeln!(state, "- {} store file(s) could not be read.", errors.len());
     }

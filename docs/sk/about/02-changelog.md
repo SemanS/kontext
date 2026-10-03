@@ -2,6 +2,11 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané
+
+**Aktuálnosť znalostí**
+- *Stav* v briefe a `kontext status` označia aktívne rozhodnutia, ktorých `paths` sa od dátumu rozhodnutia dotklo veľa commitov, aby agent alebo recenzent overil, či ešte platia. Prah je `brief.stale_after_commits` (predvolene 20, `0` to vypne). Jeden `git log` v cache podľa `HEAD` pokryje všetky rozhodnutia. Pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness).
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

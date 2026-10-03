@@ -49,6 +49,7 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | `src/store.rs`, `src/inbox.rs` | knowledge entries (both styles) and local candidates |
 | `src/index.rs` | Tantivy index |
+| `src/freshness.rs` | decisions whose `paths` changed a lot since they were made |
 | `src/adapters/` | registry, drivers, MCP client, result mapping |
 | `src/init/` | scan, history, render, deepen |
 | `src/hooks.rs`, `src/events.rs` | git hooks, outbox |

@@ -54,6 +54,7 @@ max_commits = 5000
 budget_tokens = 1400
 max_decisions = 12
 max_modules = 14
+stale_after_commits = 20
 
 [capture]
 default_visibility = "team"
@@ -164,6 +165,8 @@ pub struct BriefCfg {
     pub budget_tokens: usize,
     pub max_decisions: usize,
     pub max_modules: usize,
+    /// Flag an active decision once this many commits touched its `paths` since its date (0 = off).
+    pub stale_after_commits: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -514,6 +517,7 @@ mod tests {
         assert_eq!(cfg.kind_numbering("decision"), Numbering::Sequential);
         assert_eq!(cfg.trailer_for("decision").as_deref(), Some("Decision"));
         assert_eq!(cfg.brief.budget_tokens, 1400);
+        assert_eq!(cfg.brief.stale_after_commits, 20);
     }
 
     #[test]
