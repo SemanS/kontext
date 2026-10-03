@@ -2,6 +2,15 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané
+
+**Agenti konajú podľa rozhodnutí, ktoré riadia zmenu.** Vo vlákne testu dostal agent brief vložený na začiatku session, ktorý ukazuje len najnovšie rozhodnutia, a urobil zmenu, ktorá odporovala staršiemu. O konflikte sa dozvedel až pri commite, z jednoriadkového zhrnutia, v ktorom pravidlo chýbalo, a nič nezaznamenal. Teraz:
+
+- brief bez focusu povie, že `ctx_brief` s `focus` vypíše rozhodnutia, ktoré riadia menené cesty,
+- `ctx_prepare_commit` cituje pravidlo každého dotknutého rozhodnutia (odsek `## Decision`) namiesto zhrnutia a povie, ako zaznamenať nahrádzajúce rozhodnutie a povýšiť ho do toho istého commitu.
+
+Tá istá úloha potom skončila s nahrádzajúcim rozhodnutím v commite a trailerom `Decision:`.
+
 ## 0.2.0 (2026-10-03)
 
 **Migrácia:** `kontext hooks install --dir <dir>` je teraz `--hooks-dir <dir>` (rovnako `uninstall`). `--dir` pomenúva repozitár, rovnako ako `-C`.

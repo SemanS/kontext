@@ -911,7 +911,11 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
             shown += 1;
         }
         if shown < total {
-            let how = if part.prefix.is_empty() {
+            let how = if !focused {
+                // an unfocused brief (e.g. injected at session start) lists the newest only; the ones
+                // that govern the task's paths may be among those left out
+                "`ctx_brief` with `focus` set to the paths you will change lists the ones that govern them".to_string()
+            } else if part.prefix.is_empty() {
                 "`ctx_log` or `ctx_search kinds=[decision]`".to_string()
             } else {
                 format!("`ctx_search kinds=[decision]`, or `ctx_log` with `dir: \"{}\"`", part.prefix.trim_end_matches('/'))
@@ -1564,8 +1568,14 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     if !relevant.is_empty() {
         let _ = writeln!(out, "\n## Recorded knowledge covering this change — confirm it still holds");
         for (e, n) in relevant.iter().take(10) {
-            let _ = writeln!(out, "- [{}] {} ({n} file(s)) <kx:{}>", e.kind, e.l0(140), e.id);
+            let rule = e.rule_text(220);
+            let text = if rule.is_empty() { e.title.clone() } else { format!("{} — {rule}", e.title) };
+            let _ = writeln!(out, "- [{}] {text} ({n} file(s)) <kx:{}>", e.kind, e.id);
         }
+        let _ = writeln!(
+            out,
+            "If this change departs from one, record the new direction as a decision that supersedes it (`ctx_capture` kind=decision, `supersedes: [<id>]`, the paths) and promote it into this commit, so the pull request reviews both."
+        );
     }
 
     // inbox candidates — the inbox is shared by all worktrees; offer only this worktree's own

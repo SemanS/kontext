@@ -129,6 +129,21 @@ impl Entry {
         if p.starts_with("_Pending") || p.starts_with("Pending:") { String::new() } else { p }
     }
 
+    /// What the entry says to do: the first paragraph of `## Decision` when there is one, else the
+    /// summary. A summary often states the goal and leaves the rule itself out ("error pages are no
+    /// content" versus "reject them and try the next engine"), and the rule is what a change is checked against.
+    pub fn rule_text(&self, max: usize) -> String {
+        if let Some(pos) = self.body.find("## Decision") {
+            let after = &self.body[pos + "## Decision".len()..];
+            let after = after.split_once('\n').map(|(_, r)| r).unwrap_or("");
+            let p = util::first_paragraph(after, max);
+            if !p.is_empty() && !p.starts_with("_Pending") {
+                return p;
+            }
+        }
+        self.summary_text(max)
+    }
+
     pub fn l0(&self, max: usize) -> String {
         let s = self.summary_text(max);
         if s.is_empty() { self.title.clone() } else { format!("{} — {}", self.title, s) }

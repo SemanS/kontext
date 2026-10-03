@@ -2,6 +2,15 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+**Agents act on the decisions that govern a change.** In a test thread, an agent was given the brief injected at session start, which lists only the newest decisions, and made a change that contradicted an older one. It learned of the conflict only at commit time, from a one-line summary that left the rule out, and recorded nothing. Now:
+
+- an unfocused brief says that `ctx_brief` with `focus` lists the decisions that govern the paths being changed,
+- `ctx_prepare_commit` quotes each covering decision's rule (the `## Decision` paragraph) instead of its summary, and says how to record a superseding decision and promote it into the same commit.
+
+The same task then ended with the superseding decision in the commit and a `Decision:` trailer.
+
 ## 0.2.0 (2026-10-03)
 
 **Migration:** `kontext hooks install --dir <dir>` is now `--hooks-dir <dir>` (likewise `uninstall`). `--dir` names the repository, like `-C`.
