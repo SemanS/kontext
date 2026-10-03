@@ -114,6 +114,123 @@ fn seed(s: &Sandbox) {
 }
 
 #[test]
+fn knowledge_freshness_in_brief_and_status() {
+    let s = Sandbox::new("freshness");
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 2\n");
+    s.write(
+        ".ai/decisions/use-cache.md",
+        "---\nid: use-cache\nkind: decision\ntitle: Use cache\nstatus: accepted\ndate: 2025-01-01\npaths: [src/**, src/cache.rs]\n---\n\nCache reads.\n",
+    );
+    for (id, kind, status, date, paths) in [
+        ("newer", "decision", "accepted", "2025-01-02", "src/**"),
+        ("superseded", "decision", "superseded", "2025-01-01", "src/**"),
+        ("deprecated", "decision", "deprecated", "2025-01-01", "src/**"),
+        ("rejected", "decision", "rejected", "2025-01-01", "src/**"),
+        ("convention", "convention", "accepted", "2025-01-01", "src/**"),
+        ("undated", "decision", "accepted", "", "src/**"),
+        ("bad-date", "decision", "accepted", "yesterday", "src/**"),
+        ("unscoped", "decision", "accepted", "2025-01-01", ""),
+        ("unrelated", "decision", "accepted", "2025-01-01", "lib/**"),
+    ] {
+        s.write(
+            &format!(".ai/decisions/{id}.md"),
+            &format!("---\nid: {id}\nkind: {kind}\ntitle: {id}\nstatus: {status}\ndate: {date}\npaths: [{paths}]\n---\n\nA rule.\n"),
+        );
+    }
+    s.write("src/cache.rs", "first\n");
+    s.write("src/other.rs", "first\n");
+    let commit = |date: &str| {
+        s.ok_git(&["add", "-A"]);
+        let o = s
+            .cmd("git")
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .args(["commit", "-q", "-m", "test change"])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    commit("2025-01-01T12:00:00Z");
+    s.write("src/cache.rs", "same day\n");
+    commit("2025-01-01T20:00:00Z");
+    s.write("README.md", "Unrelated change\n");
+    commit("2025-01-02T12:00:00Z");
+    s.write("src/cache.rs", "second day\n");
+    s.write("src/other.rs", "second day\n");
+    commit("2025-01-02T13:00:00Z");
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(!brief.contains("May need a refresh"), "one matching commit, despite multiple files and overlapping paths: {brief}");
+
+    // Renaming out of a governed path still changes that path.
+    s.ok_git(&["mv", "src/cache.rs", "cache.rs"]);
+    commit("2025-01-03T12:00:00Z");
+    let brief = s.kontext(&["brief", "--no-adapters", "--budget", "300"]);
+    assert!(
+        brief.contains("## State")
+            && brief.contains("May need a refresh (2+ commits on their paths since they were made): [use-cache] Use cache (2 commits)"),
+        "{brief}"
+    );
+    let status = s.kontext(&["status"]);
+    assert!(
+        status.contains("freshness 1 decision(s) may need a refresh") && status.contains("[use-cache] Use cache (2 commits)"),
+        "{status}"
+    );
+
+    // Reviewing the decision and advancing its date resets the warning, even before commit.
+    let decision_path = ".ai/decisions/use-cache.md";
+    let original = std::fs::read_to_string(s.repo.join(decision_path)).unwrap();
+    s.write(decision_path, &original.replace("date: 2025-01-01", "date: 2025-01-03"));
+    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    s.write(decision_path, &original);
+
+    s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 3\n");
+    s.write("src/other.rs", "uncommitted change\n");
+    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 0\n");
+    assert!(!s.kontext(&["status"]).contains("may need a refresh"));
+
+    // Several stale decisions share one history scan; the small brief points to the full list.
+    s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 2\n");
+    for id in ["cache-a", "cache-b", "cache-c"] {
+        s.write(&format!(".ai/decisions/{id}.md"), &original.replace("id: use-cache", &format!("id: {id}")));
+    }
+    let trace_path = s.root.join("git-trace.jsonl");
+    s.ok_git(&["config", "log.showSignature", "true"]);
+    let output = s
+        .cmd(env!("CARGO_BIN_EXE_kontext"))
+        .env("GIT_TRACE2_EVENT", &trace_path)
+        .args(["brief", "--no-adapters", "--budget", "300"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let brief = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(brief.matches("(2 commits)").count(), 3, "{brief}");
+    assert!(brief.contains("+1 more (`kontext status`)"), "a small brief still has its state: {brief}");
+    let trace = std::fs::read_to_string(trace_path).unwrap();
+    let history_calls = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|event| event["event"] == "start" && event["argv"].as_array().is_some_and(|args| args.iter().any(|a| a == "log")))
+        .count();
+    assert_eq!(history_calls, 1, "all decisions must share one git log call");
+    let status = s.kontext(&["status"]);
+    assert!(status.contains("freshness 4 decision(s) may need a refresh"), "{status}");
+    for id in ["cache-a", "cache-b", "cache-c", "use-cache"] {
+        assert!(status.contains(&format!("[{id}]")), "{status}");
+    }
+}
+
+#[test]
+fn knowledge_freshness_without_commits() {
+    let s = Sandbox::new("freshness-unborn");
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write(".ai/decisions/new.md", "---\nid: new\nkind: decision\ntitle: New\ndate: 2025-01-01\npaths: [src/**]\n---\n\nA new rule.\n");
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(!brief.contains("freshness") && !brief.contains("May need a refresh"), "{brief}");
+}
+
+#[test]
 fn end_to_end() {
     let s = Sandbox::new("e2e");
     seed(&s);
