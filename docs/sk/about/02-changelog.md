@@ -2,7 +2,7 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## Nevydané
+## 0.2.1 (2026-10-03)
 
 **Agenti konajú podľa rozhodnutí, ktoré riadia zmenu.** Vo vlákne testu dostal agent brief vložený na začiatku session, ktorý ukazuje len najnovšie rozhodnutia, a urobil zmenu, ktorá odporovala staršiemu. O konflikte sa dozvedel až pri commite, z jednoriadkového zhrnutia, v ktorom pravidlo chýbalo, a nič nezaznamenal. Teraz:
 
