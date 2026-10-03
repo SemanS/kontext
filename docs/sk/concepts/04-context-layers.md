@@ -13,13 +13,13 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Rozhodnutia | aktívne rozhodnutia, najrelevantnejšie pre focus ako prvé, každé na jeden riadok (najviac `brief.max_decisions`) |
 | Konvencie · Poznatky a úskalia · Incidenty | každé na jeden riadok, zoradené podľa focusu |
 | Moduly | zhrnutia modulov (najviac `brief.max_modules`); pri moduloch vo focuse aj začiatok ich prehľadu |
-| Vnorené repozitáre | sekcia pre každý submodul s vlastnými tímovými znalosťami: keď v ňom ležia cesty z focusu, alebo keď tento repozitár vlastné znalosti nemá. Ostatné dostanú jednoriadkový odkaz |
+| Submoduly | sekcia pre submodul s vlastnými znalosťami, keď v ňom ležia cesty z focusu alebo keď tento repozitár žiadne nemá; inak jednoriadkový odkaz |
 | Lokálne poznámky | poznámky v inboxe tohto klonu (tímoví kandidáti aj súkromné poznámky), ktoré zodpovedajú focusu, inak tri najnovšie |
 | Súvisiace dokumenty a história | v repozitári bez úložiska, keď už vyhľadávanie postavilo lokálny index: dokumenty a commity, ktoré zodpovedajú focusu |
 | Z adaptérov | sekcie od adaptérov s operáciou `brief` (napr. primer zo sessions) |
 | Stav | počty v inboxe, postup zavádzania, rozhodnutia na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
 
-`focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami. Keď všetky cesty vo focuse ležia v jednom inom repozitári (v submodule repozitára bez vlastných znalostí, v inom worktree, v susednom projekte), brief je briefom toho repozitára.
+`focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami. Keď všetky cesty vo focuse ležia v inom repozitári, brief je briefom toho repozitára ([Viac repozitárov](09-several-repositories.md)).
 
 Na záznam sa odkazuje najkratšou jednoznačnou predponou jeho id (`[2026-09-28-adapters]` namiesto id, ktoré opakuje celý titulok), alebo číslom ADR. `ctx_read` rozpozná oboje.
 

@@ -30,7 +30,7 @@ Agents call `ctx_capture` with the same fields. On capture kontext:
 - warns when a similar entry already exists (so it can be updated instead),
 - defaults decisions to `status: accepted` and records the author (`git config user.name`) and origin (`agent` or `cli`),
 - queues a `capture` event for adapters that subscribe to it,
-- files it with the repository that owns its `paths`: a capture about `extractor/…` made from a repository that has `extractor` as a submodule goes into the submodule's inbox, with the paths rewritten relative to it, and is committed there (`ctx_prepare_commit` with `dir: "extractor"`). That needs the submodule to keep team knowledge; otherwise, or when the paths span repositories, the capture stays here and a note says so. Paths that exist nowhere are named in a note too.
+- files it with the repository that owns its `paths`, such as a submodule with its own store ([Several repositories](09-several-repositories.md)).
 
 ## Visibility
 
@@ -41,7 +41,7 @@ Agents call `ctx_capture` with the same fields. On capture kontext:
 
 Private captures never enter the repository. Adapters can receive them (for example as OpenViking memories) by subscribing to `capture` with `visibility = "private"`.
 
-Inbox notes, team or private, are not forgotten either: `ctx_search` finds them (marked *local note*) and the brief lists the ones that match its focus under *Local notes*. In a repository without a knowledge store they are the only knowledge there is. Recall is not promotion: a commit still takes only the candidates its own worktree captured.
+Inbox notes, team or private, stay findable: `ctx_search` finds them (marked *local note*) and the brief lists those that match its focus. Finding a note does not promote it: a commit still takes only the candidates its own worktree captured.
 
 ## Promoting
 

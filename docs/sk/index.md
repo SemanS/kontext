@@ -23,12 +23,22 @@ features:
   - icon: 🧭
     title: Jeden brief pre každého agenta
     details: ctx_brief dá Claude Code, Codexu, Cursoru či OpenCode aktívne rozhodnutia, konvencie, úskalia a mapu modulov v ~1–2k tokenoch, zoradené podľa súborov, na ktoré sa agent chystá siahnuť.
+  - icon: 🗂️
+    title: Znalosti tam, kde je práca
+    details: Agenti odchádzajú z adresára, kde ich session začala. Na cesty v submodule, inom worktree či susednom projekte odpovedá repozitár, ktorému patria, a tam idú aj zachytenia.
+    link: /sk/concepts/09-several-repositories
+    linkText: Viac repozitárov
   - icon: 🌿
     title: Zdrojom pravdy je git
     details: Rozhodnutia a poznatky sú krátke Markdown súbory v repozitári. Menia sa cez commity a pull requesty, takže tím posudzuje znalosti spolu s kódom, ktorý vysvetľujú.
   - icon: 📥
     title: Zachyť, potom povýš
     details: Agenti zachytávajú kandidátov do lokálneho inboxu. ctx_prepare_commit povýši tie relevantné do commitu, kam patria, a hook doplní trailery Decision:.
+  - icon: ⏳
+    title: Neaktuálne rozhodnutia vyplávajú
+    details: Rozhodnutie sa zapíše raz, ale jeho kód sa ďalej mení. Rozhodnutie, ktorého cesty od prijatia zasiahlo 20+ commitov, sa ukáže v briefe aj v kontext status.
+    link: /sk/concepts/04-context-layers#freshness
+    linkText: Aktuálnosť
   - icon: 🔌
     title: Adaptéry, nie integrácie
     details: "OpenViking, CodeGraph, Serena, Agent LCM, sessions, LLM CLI: každý je pár riadkov TOML nad generickými drivermi MCP, HTTP alebo command. Jadro nepozná žiadny produkt."

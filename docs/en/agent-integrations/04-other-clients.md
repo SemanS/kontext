@@ -29,10 +29,10 @@ kontext connect opencode --write   # writes opencode.json
 
 Orchestrators that run many agents in parallel worktrees need nothing special: each agent's harness starts its own `kontext mcp` in its worktree. All worktrees of a clone share the inbox, the outbox and bootstrap progress (they live in the git common directory); each worktree keeps its own search index. State of worktrees that no longer exist is pruned.
 
-Things that come with orchestrated agents:
+Two things to know with orchestrated agents:
 
-- **Fresh clones have no hooks.** A project an orchestrator clones (a Superset project, a CI checkout) runs none of kontext's commit-time checks until `kontext hooks install` runs once in it (worktrees share the hooks). The brief warns, and `ctx_prepare_commit` says when the trailers have to be added by hand.
-- **Work outside the session's directory.** An agent often works in another worktree, a submodule or a sibling project. kontext answers from the repository that owns the paths it is given (focus paths, `ctx_why` targets, capture paths), and every tool takes `dir` to name another one. A brief in a branch without the team knowledge names a worktree that has it.
+- **Fresh clones have no hooks.** Run `kontext hooks install` once in a project the orchestrator cloned (worktrees share the hooks). Until then the brief warns, and `ctx_prepare_commit` says the trailers have to be added by hand.
+- **Agents leave the session's directory** for other worktrees, submodules and sibling projects. See [Several repositories](../concepts/09-several-repositories.md).
 
 A useful division of labour:
 

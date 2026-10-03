@@ -30,7 +30,7 @@ Agenti volajú `ctx_capture` s rovnakými poliami. Pri zachytení kontext:
 - upozorní, keď už podobný záznam existuje (aby sa radšej aktualizoval),
 - rozhodnutiam predvolene nastaví `status: accepted` a zapíše autora (`git config user.name`) a pôvod (`agent` alebo `cli`),
 - zaradí udalosť `capture` pre adaptéry, ktoré ju odoberajú,
-- založí ho v repozitári, ktorému patria jeho `paths`: zachytenie o `extractor/…` z repozitára, ktorý má `extractor` ako submodul, ide do inboxu submodulu s cestami prepísanými relatívne k nemu a commituje sa tam (`ctx_prepare_commit` s `dir: "extractor"`). Submodul na to musí mať tímové znalosti; inak, alebo keď cesty siahajú do viacerých repozitárov, zachytenie zostane tu a povie to poznámka. Cesty, ktoré neexistujú nikde, uvedie poznámka tiež.
+- založí ho v repozitári, ktorému patria jeho `paths`, napríklad v submodule s vlastným úložiskom ([Viac repozitárov](09-several-repositories.md)).
 
 ## Viditeľnosť
 
@@ -41,7 +41,7 @@ Agenti volajú `ctx_capture` s rovnakými poliami. Pri zachytení kontext:
 
 Súkromné zachytenia sa nikdy nedostanú do repozitára. Adaptéry ich môžu prijímať (napríklad ako pamäte v OpenVikingu), ak odoberajú `capture` s `visibility = "private"`.
 
-Poznámky v inboxe, tímové aj súkromné, sa ani nezabudnú: `ctx_search` ich nájde (označené *local note*) a brief uvedie tie, ktoré zodpovedajú jeho focusu, v časti *Local notes*. V repozitári bez úložiska znalostí sú to jediné znalosti, ktoré tam sú. Vybavenie nie je povýšenie: commit stále berie len kandidátov, ktorých zachytil jeho vlastný worktree.
+Poznámky v inboxe, tímové aj súkromné, sa dajú nájsť: `ctx_search` ich nájde (označené *local note*) a brief uvedie tie, ktoré zodpovedajú jeho focusu. Nájdenie poznámku nepovýši: commit stále berie len kandidátov, ktorých zachytil jeho vlastný worktree.
 
 ## Povyšovanie
 

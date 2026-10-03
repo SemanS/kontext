@@ -8,12 +8,7 @@ Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo tr
 
 ### Iný repozitár: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo susedného repozitára (absolútnu, alebo relatívnu ku koreňu tohto repozitára). Nástroj beží tam a jeho odpoveď začína repozitárom, z ktorého prišla.
-
-Aj bez `dir` kontext ide za cestami, ktoré dostane:
-
-- Na cesty vo `focus`, cieľ `ctx_why` a `paths` v `ctx_capture` vnútri submodulu odpovedá submodul a zachytenie ide do jeho inboxu, ak má tímové znalosti. Cesta, ktorá existuje len vnútri jedného submodulu, relatívne k nemu (`apps/runner` pre `extractor/apps/runner`, tak ako cesty pomenúva vlastné `AGENTS.md` submodulu), sa počíta za cestu submodulu. Na absolútne cesty do iného repozitára alebo worktree odpovedá ten.
-- Submodul s vlastnými tímovými znalosťami dostane v briefe vlastnú sekciu a jeho výsledky vyhľadávania nesú jeho cestu: `kx:extractor/<id>`, `git:extractor/<sha>`, `file:extractor/<path>`. `ctx_read` ich otvorí tak, ako sú.
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -23,7 +18,7 @@ Aj bez `dir` kontext ide za cestami, ktoré dostane:
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | približná veľkosť |
 | `adapters` | boolean | true | zahrnie sekcie `brief` z adaptérov |
 
-Odkazy v hranatých zátvorkách sú najkratšia jednoznačná predpona id záznamu (`[2026-09-28-adapters]`), ktorú `ctx_read` rozpozná. Okrem tímových znalostí brief uvádza *Local notes* (inbox tohto klonu) a v repozitári bez úložiska aj *Related docs and history* k focusu. Pozri [Vrstvy kontextu](../concepts/04-context-layers.md).
+Odkazy v hranatých zátvorkách sú najkratšia jednoznačná predpona id (`[2026-09-28-adapters]`), ktorú `ctx_read` rozpozná. Brief uvádza aj *Local notes* (inbox tohto klonu) a bez úložiska aj *Related docs and history*. Pozri [Vrstvy kontextu](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -115,7 +110,7 @@ Keď repozitár ešte nemá `.ai/` a `bootstrap` je true, `ctx_init` najprv spus
 
 V repozitári bez úložiska znalostí prijme `ctx_capture` len `visibility: private` a `ctx_inbox` / `ctx_prepare_commit` nepovyšujú.
 
-Zachytenie, ktorého cesty všetky ležia v submodule alebo inom repozitári s tímovými znalosťami, ide do inboxu toho repozitára a cesty sa prepíšu relatívne k nemu. Inak zostane tu a poznámka povie prečo (zmiešané cesty, submodul bez úložiska, cesty, ktoré neexistujú nikde).
+Zachytenie, ktorého cesty všetky patria inému repozitáru s tímovými znalosťami, ide do inboxu toho repozitára. Pozri [Viac repozitárov](../concepts/09-several-repositories.md#limits).
 
 ### `ctx_init_submit`
 

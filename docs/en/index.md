@@ -23,12 +23,22 @@ features:
   - icon: 🧭
     title: One brief, every agent
     details: ctx_brief gives Claude Code, Codex, Cursor or OpenCode the active decisions, conventions, pitfalls and module map in ~1–2k tokens, ranked for the files the agent is about to touch.
+  - icon: 🗂️
+    title: Knowledge where the work is
+    details: Agents leave the directory their session started in. Paths in a submodule, another worktree or a sibling project are answered from the repository that owns them, and captures land there too.
+    link: /concepts/09-several-repositories
+    linkText: Several repositories
   - icon: 🌿
     title: Git is the source of truth
     details: Decisions and learnings are short Markdown files in the repository. They change through commits and pull requests, so the team reviews knowledge together with the code it explains.
   - icon: 📥
     title: Capture, then promote
     details: Agents capture candidates into a local inbox. ctx_prepare_commit promotes the relevant ones into the commit they belong to and the hook adds Decision:&nbsp;trailers.
+  - icon: ⏳
+    title: Stale decisions surface
+    details: A decision is written once while its code keeps moving. One whose paths saw 20+ commits since it was made shows up in the brief and in kontext status.
+    link: /concepts/04-context-layers#freshness
+    linkText: Freshness
   - icon: 🔌
     title: Adapters, not integrations
     details: "OpenViking, CodeGraph, Serena, Agent LCM, sessions, LLM CLIs: each is a few lines of TOML over generic MCP, HTTP or command drivers. The core never names a product."

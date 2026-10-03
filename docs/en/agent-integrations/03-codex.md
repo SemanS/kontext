@@ -37,7 +37,7 @@ Codex reads `AGENTS.md`. Add kontext's working rules to it:
 kontext connect agents-md --write
 ```
 
-Do this in every repository where Codex should use kontext. Codex in code mode shows a server's instructions only inside one tool's description, and in practice it starts with `ctx_brief` only when `AGENTS.md` says so: in kontext's own repository without the block, Codex made no kontext call in a whole task.
+Do this in every repository where Codex should use kontext. Codex follows `AGENTS.md`, not the MCP server's instructions: without the block it can finish a whole task without one kontext call.
 
 ## Codex as the autopilot LLM
 

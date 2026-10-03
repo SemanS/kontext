@@ -8,12 +8,7 @@ Every tool carries MCP annotations, which clients use to decide what needs appro
 
 ### Another repository: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, a submodule or a sibling repository (absolute, or relative to this repository's root). The tool runs there, and its answer starts with the repository it came from.
-
-Without `dir`, kontext still follows the paths it is given:
-
-- `focus` paths, a `ctx_why` target and `ctx_capture` `paths` inside a submodule are answered from the submodule, and captured into its inbox when it keeps team knowledge. A path that exists only inside one submodule, relative to it (`apps/runner` for `extractor/apps/runner`, as the submodule's own `AGENTS.md` names its paths), counts as the submodule's. Absolute paths into another repository or worktree are answered from there.
-- A submodule with its own team knowledge gets a section of the brief, and its search hits carry its path: `kx:extractor/<id>`, `git:extractor/<sha>`, `file:extractor/<path>`. `ctx_read` opens them as they are.
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -23,7 +18,7 @@ Without `dir`, kontext still follows the paths it is given:
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | approximate size |
 | `adapters` | boolean | true | include adapter `brief` sections |
 
-References in brackets are the shortest unique prefix of an entry's id (`[2026-09-28-adapters]`), which `ctx_read` resolves. Besides the team knowledge, the brief lists *Local notes* (this clone's inbox) and, in a repository without a store, *Related docs and history* for the focus. See [Context layers](../concepts/04-context-layers.md).
+References in brackets are the shortest unique prefix of an id (`[2026-09-28-adapters]`), which `ctx_read` resolves. The brief also lists *Local notes* (this clone's inbox) and, without a store, *Related docs and history*. See [Context layers](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -115,7 +110,7 @@ When the repository has no `.ai/` yet and `bootstrap` is true, `ctx_init` first 
 
 In a repository without a knowledge store `ctx_capture` accepts only `visibility: private`, and `ctx_inbox` / `ctx_prepare_commit` do not promote.
 
-A capture whose paths all lie in a submodule or another repository that keeps team knowledge goes to that repository's inbox, with the paths rewritten relative to it. Otherwise it stays here, and a note says why (mixed paths, a submodule without a store, paths that exist nowhere).
+A capture whose paths all belong to another repository with team knowledge goes to that repository's inbox. See [Several repositories](../concepts/09-several-repositories.md#limits).
 
 ### `ctx_init_submit`
 

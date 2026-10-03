@@ -4,33 +4,19 @@ Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzov
 
 ## 0.2.0 (2026-10-03)
 
-**Migrácia:** `kontext hooks install --dir <dir>` a `hooks uninstall --dir <dir>` sú teraz `--hooks-dir <dir>`; `--dir` pomenúva repozitár, rovnako ako `-C`. Nová sekcia `[freshness]` má predvolené hodnoty; nič iné v konfigurácii ani v záznamoch sa nemení.
+**Migrácia:** `kontext hooks install --dir <dir>` je teraz `--hooks-dir <dir>` (rovnako `uninstall`). `--dir` pomenúva repozitár, rovnako ako `-C`.
 
-Z pozorovania, ako agenti používali kontext vo workspaces v Superset: väčšinou, keď ho zavolali, nemal im čo dať, lebo znalosti boli v submodule, v inom worktree alebo v lokálnom inboxe.
+**Znalosti v submoduloch a iných worktree.** Session, ktorá začala v repozitári aplikácie, ale pracovala v submodule, v inom worktree alebo v susednom projekte, dostala od kontextu „not set up“ a jej zachytenia skončili v inboxe, z ktorého sa nedali povýšiť. Teraz rozhodujú cesty, ktorý repozitár odpovie, a každý nástroj prijíma `dir`. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
 
-**Repozitár, ktorému patria cesty**
-- Každý nástroj viazaný na repozitár prijíma `dir`: cestu vnútri iného worktree, submodulu alebo susedného repozitára. Odpoveď z iného repozitára začína tým, odkiaľ prišla.
-- Na cesty vo focuse, ciele `ctx_why` a cesty v `ctx_capture` vnútri submodulu odpovedá submodul. Zachytenia idú do jeho inboxu s prepísanými cestami, ak má tímové znalosti. Brief repozitára bez vlastných znalostí nesie znalosti jeho submodulov. Vyhľadávanie ich pokrýva tiež (`kx:extractor/<id>`) a `ctx_read` otvorí ich záznamy aj commity.
-- Cesta relatívna k submodulu (`apps/pipeline-runner`, tak ako ju pomenúva `AGENTS.md` submodulu) sa počíta za cestu submodulu, keď ju má len jeden submodul. Na absolútne cesty do iného repozitára alebo worktree odpovedá ten. Zachytenie s cestami, ktoré neexistujú nikde, na to upozorní.
-- Vetva bez tímových znalostí sa dozvie, ktorá vetva a ktorý lokálny worktree ich má. Inštrukcie servera pomenujú submoduly s vlastnými znalosťami.
+**Súkromné poznámky sa dajú znova nájsť.** Súkromné zachytenie v repozitári bez úložiska sa raz zapísalo a už nikdy neprečítalo, lebo vyhľadávanie inbox nepokrývalo. `ctx_search` teraz nájde poznámky v inboxe a brief uvedie tie, ktoré zodpovedajú jeho focusu.
 
-**Lokálne poznámky sa vracajú**
-- `ctx_search` nájde poznámky v inboxe (tímových kandidátov aj súkromné poznámky) a brief uvedie tie, ktoré zodpovedajú jeho focusu. Súkromné zachytenia v repozitári bez úložiska sa zapísali a už nikdy nenašli.
-- V repozitári bez úložiska brief s focusom uvedie súvisiace dokumenty a commity, keď už vyhľadávanie postavilo lokálny index (brief ho nestavia).
+**Neaktuálne rozhodnutia sú označené.** Rozhodnutie sa zapíše raz, ale jeho kód sa ďalej mení. *Stav* v briefe a `kontext status` vypíšu rozhodnutia, ktorých cesty od ich prijatia zasiahlo `[freshness] threshold_commits` (predvolene 20) commitov. Pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness).
 
-**Menšie odpovede**
-- Odkazy v briefe sú najkratšia jednoznačná predpona id (`[2026-09-28-adapters]`) a datovaný odkaz vynechá zopakovaný dátum: riadky rozhodnutí sú asi o 20 % kratšie a `ctx_read` predponu rozpozná.
-- `ctx_threads` zobrazí `<task-notification>` z Claude Code (dokončený agent na pozadí: id, výstupný súbor, poznámka, spotreba, celý výsledok) ako jeden riadok a skráti dočasné cesty relácie. Na vlákne, ktoré rozdeľovalo prácu, sa prepis zmenšil z asi 81 000 na 30 000 znakov. Časti majú predvolene 20 000 znakov, aby sa jedna zmestila do výsledku nástroja (Codex orezával 40 000-znakové časti a agent ich čítal dvakrát).
-- Inštrukcie servera pre repozitár bez úložiska sú kratšie. Popisy nástrojov sú stručnejšie, čo vyváži `dir`.
+**Kratšie odpovede.** Riadok rozhodnutia už neopakuje svoj titulok ako id: odkazy sú najkratšia jednoznačná predpona (`[2026-09-28-adapters]`), takže riadok je asi o 20 % kratší. `ctx_threads` zmení každú notifikáciu o úlohe na pozadí z Claude Code na jeden riadok. Vlákno, ktoré rozdeľovalo prácu, sa zmenšilo z 81 000 na 30 000 znakov a časť (predvolene 20 000 znakov) sa teraz zmestí do jedného výsledku nástroja.
 
-**Commity**
-- `ctx_prepare_commit` povie, či trailery pridá hook prepare-commit-msg. Čerstvý klon hooky nemá a report ich napriek tomu sľuboval. Brief upozorní, keď klon s úložiskom znalostí nemá hooky.
-- `kontext hooks install` / `uninstall` prijímajú `--hooks-dir` namiesto `--dir`, ktoré kolidovalo s globálnym `-C/--dir`: `kontext -C <repo> hooks install` zapísal hooky do koreňa repozitára. Staré `hooks install --dir .githooks` sa odmietne s odkazom na `--hooks-dir`.
-- Blok v `AGENTS.md`, ktorý zapisuje `kontext connect agents-md`, spomína `dir`.
+**Čerstvé klony.** Klon od orchestrátora alebo z CI nemá git hooky. Brief to povie a `ctx_prepare_commit` už nesľubuje trailery, ktoré žiadny hook nepridá.
 
-**Aktuálnosť znalostí**
-- *Stav* v briefe a `kontext status` označia aktívne rozhodnutia, ktorých `paths` sa od dátumu rozhodnutia dotklo veľa commitov (`[freshness] threshold_commits`, predvolene 20, `0` to vypne), aby agent alebo recenzent overil, či ešte platia. Jeden `git log` pokryje všetky rozhodnutia a ukladá sa do cache podľa `HEAD`; presun kódu mimo riadenej cesty sa započíta, deň samotného rozhodnutia nie. Pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness).
-- Brief si drží miesto pre svoj *Stav*, takže varovania prežijú aj brief plný znalostí.
+**Codex** sa riadi `AGENTS.md`, nie inštrukciami MCP servera. `kontext connect agents-md --write` patrí k jeho nastaveniu.
 
 ## 0.1.5 (2026-09-29)
 

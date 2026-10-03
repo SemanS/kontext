@@ -30,6 +30,7 @@ const sections: Section[] = [
       ['06-init-pipeline', 'The init pipeline', 'Inicializačný pipeline'],
       ['07-git-integration', 'Git integration', 'Integrácia s gitom'],
       ['08-security', 'Security and privacy', 'Bezpečnosť a súkromie'],
+      ['09-several-repositories', 'Several repositories', 'Viac repozitárov'],
     ],
   },
   {
@@ -110,7 +111,7 @@ function nav(lang: 'en' | 'sk'): DefaultTheme.NavItem[] {
     { text: t('Agents', 'Agenti'), link: `${p}/agent-integrations/01-overview`, activeMatch: `${p}/agent-integrations/` },
     { text: t('Reference', 'Referencia'), link: `${p}/reference/01-cli`, activeMatch: `${p}/reference/` },
     {
-      text: 'v0.1',
+      text: 'v0.2',
       items: [
         { text: t('Changelog', 'Zoznam zmien'), link: `${p}/about/02-changelog` },
         { text: t('Roadmap', 'Plán'), link: `${p}/about/03-roadmap` },
