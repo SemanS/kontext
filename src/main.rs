@@ -10,6 +10,7 @@ mod config;
 mod connect;
 mod distill;
 mod events;
+mod freshness;
 mod glob;
 mod hooks;
 mod inbox;
@@ -1021,6 +1022,9 @@ fn status(app: &App) -> Result<()> {
     print!("hooks     {}", hooks::status(app).unwrap_or_default().replace('\n', "\n          "));
     println!("\noutbox    {} queued", events::Outbox::open(&app.repo).list().len());
     for w in app.warnings() {
+        println!("warning   {w}");
+    }
+    for w in freshness::warnings(&app.repo, &entries, app.cfg().freshness.threshold_commits) {
         println!("warning   {w}");
     }
     Ok(())

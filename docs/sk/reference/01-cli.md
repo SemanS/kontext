@@ -145,7 +145,7 @@ Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich 
 
 | Príkaz | Význam |
 | --- | --- |
-| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, inbox, postup initu, adaptéry, hooky, outbox |
+| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, inbox, postup initu, adaptéry, hooky, outbox, varovania o aktuálnosti rozhodnutí |
 | `kontext reindex` | zostaví lokálny vyhľadávací index od nuly |
 
 ## Premenné prostredia

@@ -71,6 +71,18 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | `max_decisions` | `12` |
 | `max_modules` | `14` |
 
+## `[freshness]` {#freshness}
+
+| Key | Default | |
+| --- | --- | --- |
+| `threshold_commits` | `20` | warn when at least this many commits touched an active decision's `paths` since its `date`; `0` disables the check |
+
+Warnings appear in the brief's State section and `kontext status`. Each matching commit counts once, even if it changes several governed files or matches overlapping paths. Plain paths cover a file or directory; globs use the usual entry `paths` rules. Renames count for both the old and new path.
+
+The check reads the latest 5,000 non-merge commits reachable from `HEAD` in one git history call for all decisions. It uses committer dates, starting at midnight UTC on the day after the decision's `YYYY-MM-DD` date. Decisions without a valid date or usable paths are skipped, as are superseded, deprecated and rejected decisions. Uncommitted changes are excluded. Counts are lower bounds in older or shallow histories.
+
+A warning suggests review; it does not change the decision or create a task. Review the entry with `ctx_read kx:<id>`, then update its rationale and date if it still applies, or supersede it with a new decision. Keep the date unchanged until that review is complete.
+
 ## `[capture]`
 
 | Key | Default | |

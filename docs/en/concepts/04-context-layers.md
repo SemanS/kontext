@@ -14,9 +14,11 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Conventions · Learnings & pitfalls · Incidents | one line each, focus-ranked |
 | Modules | module summaries (up to `brief.max_modules`); for focused modules the start of their overview |
 | From adapters | sections from adapters that have a `brief` op (e.g. a session primer) |
-| State | inbox counts, bootstrap progress, warnings |
+| State | inbox counts, bootstrap progress, warnings, decisions that may need a refresh |
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags.
+
+Knowledge freshness warns when an active decision's governed paths have accumulated enough commits since its date (default 20; [configuration](../reference/03-configuration.md#freshness)). The brief reserves space for up to three freshness warnings, with the full list in `kontext status`.
 
 Claude Code can receive the brief automatically at session start: see [Claude Code](../agent-integrations/02-claude-code.md).
 

@@ -14,9 +14,11 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Konvencie · Poznatky a úskalia · Incidenty | každé na jeden riadok, zoradené podľa focusu |
 | Moduly | zhrnutia modulov (najviac `brief.max_modules`); pri moduloch vo focuse aj začiatok ich prehľadu |
 | Z adaptérov | sekcie od adaptérov s operáciou `brief` (napr. primer zo sessions) |
-| Stav | počty v inboxe, postup zavádzania, varovania |
+| Stav | počty v inboxe, postup zavádzania, varovania, rozhodnutia, ktoré môžu potrebovať aktualizáciu |
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami.
+
+Kontrola aktuálnosti znalostí varuje, keď cesty spravované aktívnym rozhodnutím nazbierali od jeho dátumu dostatok commitov (predvolene 20; [konfigurácia](../reference/03-configuration.md#freshness)). Brief vyhradí miesto pre najviac tri varovania o aktuálnosti; celý zoznam je v `kontext status`.
 
 Claude Code môže dostať brief automaticky na začiatku session. Pozri [Claude Code](../agent-integrations/02-claude-code.md).
 

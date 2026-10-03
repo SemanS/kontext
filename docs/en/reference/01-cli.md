@@ -145,7 +145,7 @@ Validate all entries (or exactly what is staged) and scan them for secrets. Exit
 
 | Command | Meaning |
 | --- | --- |
-| `kontext status` | identity, config layers, store, index, inbox, init progress, adapters, hooks, outbox |
+| `kontext status` | identity, config layers, store, index, inbox, init progress, adapters, hooks, outbox, decision freshness warnings |
 | `kontext reindex` | rebuild the local search index |
 
 ## Environment variables

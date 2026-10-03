@@ -480,6 +480,18 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     let focus = parse_focus(app, focus);
     let mut budget_left = budget.max(300) as isize;
     let mut out = String::new();
+    let freshness = crate::freshness::warnings(&app.repo, &entries, cfg.freshness.threshold_commits);
+    let mut freshness_state = String::new();
+    for warning in freshness.iter().take(3) {
+        let _ = writeln!(freshness_state, "- note: {}", util::truncate_chars(warning, 220));
+    }
+    if freshness.len() > 3 {
+        let _ = writeln!(freshness_state, "- {} more freshness warnings: `kontext status`.", freshness.len() - 3);
+    }
+    // Keep freshness visible even when decisions, module docs or adapters fill the brief.
+    let freshness_block = if freshness_state.is_empty() { String::new() } else { format!("\n## State\n{freshness_state}") };
+    let freshness_cost = util::est_tokens(&freshness_block) as isize;
+    budget_left -= freshness_cost;
     let add = |out: &mut String, text: &str, budget_left: &mut isize| -> bool {
         let cost = util::est_tokens(text) as isize;
         if cost > *budget_left {
@@ -703,7 +715,11 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     for w in app.warnings().iter().take(3) {
         let _ = writeln!(state, "- note: {w}");
     }
-    if !state.is_empty() {
+    budget_left += freshness_cost;
+    if !freshness_block.is_empty() {
+        add(&mut out, &freshness_block, &mut budget_left);
+        add(&mut out, &state, &mut budget_left);
+    } else if !state.is_empty() {
         add(&mut out, &format!("\n## State\n{state}"), &mut budget_left);
     }
     out.push_str("\nMore: `ctx_search` (decisions, docs, history, adapters) · `ctx_read <uri>` (L0/L1/L2) · `ctx_why <path>` · record with `ctx_capture` · before committing `ctx_prepare_commit`.\n");

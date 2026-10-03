@@ -2,6 +2,10 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+- Knowledge freshness: the brief's State section and `kontext status` warn about active decisions whose governed paths have accumulated at least 20 commits since their date. Configure or disable the threshold with [`freshness.threshold_commits`](../reference/03-configuration.md#freshness). One bounded history scan serves all decisions; warnings suggest review without changing entries.
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

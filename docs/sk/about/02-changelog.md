@@ -2,6 +2,10 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané {#unreleased}
+
+- Aktuálnosť znalostí: sekcia State briefu a `kontext status` varujú pri aktívnych rozhodnutiach, ktorých spravované cesty nazbierali od ich dátumu aspoň 20 commitov. Prah nastavíš alebo vypneš cez [`freshness.threshold_commits`](../reference/03-configuration.md#freshness). Jedno obmedzené načítanie histórie slúži všetkým rozhodnutiam; varovania navrhujú posúdenie bez zmeny záznamov.
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

@@ -71,6 +71,18 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 | `max_decisions` | `12` |
 | `max_modules` | `14` |
 
+## `[freshness]` {#freshness}
+
+| Kľúč | Predvolene | |
+| --- | --- | --- |
+| `threshold_commits` | `20` | varuje, keď aspoň toľko commitov zmenilo `paths` aktívneho rozhodnutia od jeho `date`; `0` kontrolu vypne |
+
+Varovania sa zobrazia v sekcii State briefu a v `kontext status`. Každý zodpovedajúci commit sa počíta raz, aj keď zmení viac spravovaných súborov alebo zodpovedá prekrývajúcim sa cestám. Obyčajné cesty pokrývajú súbor alebo adresár; globy používajú bežné pravidlá `paths` záznamov. Premenovania sa počítajú pre starú aj novú cestu.
+
+Kontrola načíta posledných 5 000 commitov bez merge dosiahnuteľných z `HEAD` jediným volaním histórie gitu pre všetky rozhodnutia. Používa dátum commitera, od polnoci UTC dňa nasledujúceho po dátume rozhodnutia v tvare `YYYY-MM-DD`. Rozhodnutia bez platného dátumu alebo použiteľných ciest preskočí, rovnako ako nahradené, zastarané a zamietnuté rozhodnutia. Necommitnuté zmeny sa nezapočítavajú. V staršej alebo plytkej histórii sú počty dolnou hranicou.
+
+Varovanie navrhuje posúdenie; nemení rozhodnutie ani nevytvára úlohu. Prečítaj záznam cez `ctx_read kx:<id>`, potom aktualizuj odôvodnenie a dátum, ak stále platí, alebo ho nahraď novým rozhodnutím. Dátum nechaj nezmenený, kým posúdenie nie je dokončené.
+
 ## `[capture]`
 
 | Kľúč | Predvolene | |
