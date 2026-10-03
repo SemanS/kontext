@@ -71,6 +71,12 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 | `max_decisions` | `12` |
 | `max_modules` | `14` |
 
+## `[freshness]`
+
+| Kľúč | Predvolene | |
+| --- | --- | --- |
+| `threshold_commits` | `20` | označí aktívne rozhodnutie, keď sa od jeho dátumu jeho `paths` dotklo aspoň toľkoto commitov; `0` to vypne (pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness)) |
+
 ## `[capture]`
 
 | Kľúč | Predvolene | |

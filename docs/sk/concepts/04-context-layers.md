@@ -17,13 +17,25 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Lokálne poznámky | poznámky v inboxe tohto klonu (tímoví kandidáti aj súkromné poznámky), ktoré zodpovedajú focusu, inak tri najnovšie |
 | Súvisiace dokumenty a história | v repozitári bez úložiska, keď už vyhľadávanie postavilo lokálny index: dokumenty a commity, ktoré zodpovedajú focusu |
 | Z adaptérov | sekcie od adaptérov s operáciou `brief` (napr. primer zo sessions) |
-| Stav | počty v inboxe, postup zavádzania, chýbajúce git hooky, varovania |
+| Stav | počty v inboxe, postup zavádzania, rozhodnutia na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami. Keď všetky cesty vo focuse ležia v jednom inom repozitári (v submodule repozitára bez vlastných znalostí, v inom worktree, v susednom projekte), brief je briefom toho repozitára.
 
 Na záznam sa odkazuje najkratšou jednoznačnou predponou jeho id (`[2026-09-28-adapters]` namiesto id, ktoré opakuje celý titulok), alebo číslom ADR. `ctx_read` rozpozná oboje.
 
 Claude Code môže dostať brief automaticky na začiatku session. Pozri [Claude Code](../agent-integrations/02-claude-code.md).
+
+### Aktuálnosť {#freshness}
+
+Rozhodnutie sa zapíše raz, ale kód, ktorý riadi, sa ďalej mení. *Stav* v briefe a `kontext status` vypíšu aktívne rozhodnutia, ktorých `paths` sa od dátumu rozhodnutia dotklo aspoň `freshness.threshold_commits` commitov (predvolene 20), najviac zmenené ako prvé:
+
+```text
+- May need a refresh (20+ commits on their paths since they were made): [0007] Prices are integer cents (34 commits), … — check they still hold; supersede what no longer does.
+```
+
+Commity z dňa samotného rozhodnutia a merge commity sa nepočítajú. Commit sa počíta raz, nech sa zhoduje koľkokoľvek jeho súborov, a započíta sa aj presun kódu mimo riadenej cesty. Rozhodnutia bez `date` alebo `paths` sa neoznačia nikdy. Označenie je výzva na kontrolu, nie verdikt: ak rozhodnutie stále platí, netreba nič meniť; ak nie, nahraď ho novým (supersede).
+
+Počty pochádzajú z jedného `git log` pre všetky rozhodnutia, od dátumu najstaršieho rozhodnutia (obmedzeného `index.max_commits`), a ukladajú sa do cache podľa `HEAD` v stavovom adresári worktree: brief nepridá žiadne volanie gitu na rozhodnutie a do ďalšieho commitu žiadne. `threshold_commits = 0` to vypne.
 
 ## Úrovne: L0 · L1 · L2
 

@@ -26,6 +26,10 @@ Z pozorovania, ako agenti používali kontext vo workspaces v Superset: väčši
 - `kontext hooks install` / `uninstall` prijímajú `--hooks-dir` namiesto `--dir`, ktoré kolidovalo s globálnym `-C/--dir`: `kontext -C <repo> hooks install` zapísal hooky do koreňa repozitára. Staré `hooks install --dir .githooks` sa odmietne s odkazom na `--hooks-dir`.
 - Blok v `AGENTS.md`, ktorý zapisuje `kontext connect agents-md`, spomína `dir`.
 
+**Aktuálnosť znalostí**
+- *Stav* v briefe a `kontext status` označia aktívne rozhodnutia, ktorých `paths` sa od dátumu rozhodnutia dotklo veľa commitov (`[freshness] threshold_commits`, predvolene 20, `0` to vypne), aby agent alebo recenzent overil, či ešte platia. Jeden `git log` pokryje všetky rozhodnutia a ukladá sa do cache podľa `HEAD`; presun kódu mimo riadenej cesty sa započíta, deň samotného rozhodnutia nie. Pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness).
+- Brief si drží miesto pre svoj *Stav*, takže varovania prežijú aj brief plný znalostí.
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

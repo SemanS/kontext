@@ -7,7 +7,7 @@ Nápady, o ktorých uvažujeme, zhruba v poradí. Názory a pull requesty sú v�
 - **Distribúcia**: Homebrew tap, binárky pre Linux ARM, crates.io.
 - **Viac presetov**: služby pamäte v štýle Mem0 / Zep, vyhľadávanie v issues GitHubu a GitLabu, Linear/Jira, Confluence/Notion ako zdroje znalostí len na čítanie.
 - **Symboly cez tree-sitter** ako voliteľná funkcia pre presnejšie fakty o moduloch bez adaptéra kódu.
-- **Aktuálnosť znalostí**: označiť rozhodnutia, ktorých `paths` sa od rozhodnutia výrazne zmenili, a navrhnúť pre ne úlohy `refresh:`.
+- **Aktuálnosť znalostí**: navrhnúť úlohy `refresh:` pre rozhodnutia, ktorých `paths` sa od rozhodnutia výrazne zmenili (brief a `kontext status` ich už označujú).
 
 ## Neskôr
 

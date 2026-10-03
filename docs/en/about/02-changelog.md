@@ -26,6 +26,10 @@ From watching how agents used kontext across Superset workspaces: most of the ti
 - `kontext hooks install` / `uninstall` take `--hooks-dir` instead of `--dir`, which collided with the global `-C/--dir`: `kontext -C <repo> hooks install` wrote the hooks into the repository root. The old `hooks install --dir .githooks` is refused with a pointer to `--hooks-dir`.
 - The `AGENTS.md` block written by `kontext connect agents-md` mentions `dir`.
 
+**Knowledge freshness**
+- The brief's *State* and `kontext status` flag active decisions whose `paths` were touched by many commits since the decision's date (`[freshness] threshold_commits`, default 20, `0` turns it off), so an agent or reviewer checks whether they still hold. One `git log` covers every decision and is cached per `HEAD`; renames out of a governed path count, the decision's own day does not. See [Freshness](../concepts/04-context-layers.md#freshness).
+- The brief keeps room for its *State*, so warnings survive a brief full of knowledge.
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

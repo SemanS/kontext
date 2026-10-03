@@ -55,6 +55,9 @@ budget_tokens = 1400
 max_decisions = 12
 max_modules = 14
 
+[freshness]
+threshold_commits = 20
+
 [capture]
 default_visibility = "team"
 redact = true
@@ -88,6 +91,7 @@ pub struct Config {
     pub sources: SourcesCfg,
     pub index: IndexCfg,
     pub brief: BriefCfg,
+    pub freshness: FreshnessCfg,
     pub capture: CaptureCfg,
     pub hooks: HooksCfg,
     pub secrets: SecretsCfg,
@@ -164,6 +168,13 @@ pub struct BriefCfg {
     pub budget_tokens: usize,
     pub max_decisions: usize,
     pub max_modules: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct FreshnessCfg {
+    /// Flag an active decision once this many commits touched its `paths` since its date (0 = off).
+    pub threshold_commits: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -514,6 +525,7 @@ mod tests {
         assert_eq!(cfg.kind_numbering("decision"), Numbering::Sequential);
         assert_eq!(cfg.trailer_for("decision").as_deref(), Some("Decision"));
         assert_eq!(cfg.brief.budget_tokens, 1400);
+        assert_eq!(cfg.freshness.threshold_commits, 20);
     }
 
     #[test]

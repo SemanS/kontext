@@ -7,7 +7,7 @@ Ideas under consideration, roughly in order. Opinions and pull requests are welc
 - **Distribution**: Homebrew tap, Linux ARM binaries, crates.io.
 - **More presets**: Mem0 / Zep-style memory services, GitHub and GitLab issue search, Linear/Jira, Confluence/Notion as read-only knowledge sources.
 - **Tree-sitter symbols** as an optional feature for more precise module facts without a code adapter.
-- **Knowledge freshness**: flag decisions whose `paths` changed a lot since the decision, and propose `refresh:` tasks for them.
+- **Knowledge freshness**: propose `refresh:` tasks for decisions whose `paths` changed a lot since the decision (they are already flagged in the brief and `kontext status`).
 
 ## Later
 

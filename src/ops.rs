@@ -726,6 +726,53 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         out.push_str(text);
         true
     };
+    let refs = Refs::new(entries.iter().map(|e| e.id.as_str()));
+    let reference = |e: &Entry| format!("{}{}", part.prefix, refs.of(e));
+
+    // the state comes last but must not be crowded out (a stale decision or missing hooks matter
+    // most when knowledge fills the brief): its lines are written now and their budget kept aside
+    let mut state = String::new();
+    if !part.section {
+        let inbox = Inbox::open(&app.repo).list();
+        let (ours, elsewhere_wt): (Vec<&Entry>, Vec<&Entry>) = inbox.iter().partition(|e| Origin::of(&app.repo, e).is_ours());
+        if !ours.is_empty() {
+            let team = ours.iter().filter(|e| e.visibility.as_deref() != Some("private")).count();
+            let _ = writeln!(
+                state,
+                "- Local inbox: {team} team candidate(s), {} private — not shared until promoted and committed (`ctx_prepare_commit`).{}",
+                ours.len() - team,
+                if elsewhere_wt.is_empty() { String::new() } else { format!(" ({} more belong to other worktrees.)", elsewhere_wt.len()) }
+            );
+        }
+        let (done, total) = init_progress(&entries);
+        if total == 0 && entries.is_empty() {
+            let _ = writeln!(state, "- {}", no_knowledge_hint(app));
+        } else if done < total {
+            let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
+        }
+        let stale = crate::freshness::stale_decisions(app, &entries);
+        if !stale.is_empty() {
+            let named = |s: &crate::freshness::Stale| entries.iter().find(|e| e.id == s.id).map(&reference).unwrap_or_else(|| s.id.clone());
+            let _ = writeln!(
+                state,
+                "- May need a refresh ({}+ commits on their paths since they were made): {} — check they still hold; supersede what no longer does.",
+                cfg.freshness.threshold_commits,
+                crate::freshness::render_list(&stale, 3, &named)
+            );
+        }
+        // a fresh clone (a Superset project, a CI checkout) runs none of the commit-time checks
+        if app.is_set_up() && !crate::hooks::opted_out(&app.repo) && !crate::hooks::installed(app, "pre-commit") {
+            let _ = writeln!(
+                state,
+                "- Git hooks are not installed in this clone, so commits get no knowledge checks, secret scan or trailers: `kontext hooks install`."
+            );
+        }
+        if !errors.is_empty() {
+            let _ = writeln!(state, "- {} store file(s) could not be read.", errors.len());
+        }
+    }
+    let reserved = if state.is_empty() { 0 } else { util::est_tokens(&format!("\n## State\n{state}")) as isize };
+    budget_left -= reserved;
 
     let overview = entries.iter().find(|e| e.kind == "architecture" && e.id == "overview");
     let mut head = if part.section {
@@ -838,8 +885,6 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
             }
         }
     }
-    let refs = Refs::new(entries.iter().map(|e| e.id.as_str()));
-    let reference = |e: &Entry| format!("{}{}", part.prefix, refs.of(e));
 
     // decisions
     let mut decisions: Vec<(&Entry, f32)> =
@@ -1011,39 +1056,13 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         }
     }
 
-    // local state
-    let mut state = String::new();
-    let inbox = Inbox::open(&app.repo).list();
-    let (ours, elsewhere_wt): (Vec<&Entry>, Vec<&Entry>) = inbox.iter().partition(|e| Origin::of(&app.repo, e).is_ours());
-    if !ours.is_empty() {
-        let team = ours.iter().filter(|e| e.visibility.as_deref() != Some("private")).count();
-        let _ = writeln!(
-            state,
-            "- Local inbox: {team} team candidate(s), {} private — not shared until promoted and committed (`ctx_prepare_commit`).{}",
-            ours.len() - team,
-            if elsewhere_wt.is_empty() { String::new() } else { format!(" ({} more belong to other worktrees.)", elsewhere_wt.len()) }
-        );
-    }
-    let (done, total) = init_progress(&entries);
-    if total == 0 && entries.is_empty() {
-        let _ = writeln!(state, "- {}", no_knowledge_hint(app));
-    } else if done < total {
-        let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
-    }
-    // a fresh clone (a Superset project, a CI checkout) runs none of the commit-time checks
-    if app.is_set_up() && !crate::hooks::opted_out(&app.repo) && !crate::hooks::installed(app, "pre-commit") {
-        let _ = writeln!(
-            state,
-            "- Git hooks are not installed in this clone, so commits get no knowledge checks, secret scan or trailers: `kontext hooks install`."
-        );
-    }
-    if !errors.is_empty() {
-        let _ = writeln!(state, "- {} store file(s) could not be read.", errors.len());
-    }
+    // the state, with the reservation given back; adapter notes only exist once the registry ran
+    budget_left += reserved;
+    let mut full = state.clone();
     for w in app.warnings().iter().take(3) {
-        let _ = writeln!(state, "- note: {w}");
+        let _ = writeln!(full, "- note: {w}");
     }
-    if !state.is_empty() {
+    if !full.is_empty() && !add(&mut out, &format!("\n## State\n{full}"), &mut budget_left) && !state.is_empty() {
         add(&mut out, &format!("\n## State\n{state}"), &mut budget_left);
     }
     out.push_str("\nMore: `ctx_search` (decisions, docs, history, adapters) · `ctx_read kx:<id>` (L0/L1/L2) · `ctx_why <path>` · record with `ctx_capture` · before committing `ctx_prepare_commit`.\n");

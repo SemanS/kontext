@@ -71,6 +71,12 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | `max_decisions` | `12` |
 | `max_modules` | `14` |
 
+## `[freshness]`
+
+| Key | Default | |
+| --- | --- | --- |
+| `threshold_commits` | `20` | flag an active decision once this many commits touched its `paths` since its date; `0` turns it off (see [Freshness](../concepts/04-context-layers.md#freshness)) |
+
 ## `[capture]`
 
 | Key | Default | |

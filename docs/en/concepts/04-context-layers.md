@@ -17,13 +17,25 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Local notes | notes in this clone's inbox (team candidates and private notes) that match the focus, or the newest three |
 | Related docs and history | in a repository without a store, once a search has built the local index: the docs and commits that match the focus |
 | From adapters | sections from adapters that have a `brief` op (e.g. a session primer) |
-| State | inbox counts, bootstrap progress, missing git hooks, warnings |
+| State | inbox counts, bootstrap progress, decisions that may need a refresh, missing git hooks, warnings; its room is kept aside, so a full brief does not drop it |
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags. When every focus path lies in one other repository (a submodule of a repository without knowledge of its own, another worktree, a sibling project), the brief is that repository's.
 
 An entry is referred to by the shortest unique prefix of its id (`[2026-09-28-adapters]` rather than the id that repeats the whole title), or by its ADR number. `ctx_read` resolves either.
 
 Claude Code can receive the brief automatically at session start: see [Claude Code](../agent-integrations/02-claude-code.md).
+
+### Freshness {#freshness}
+
+A decision is written once, but the code it governs keeps moving. The brief's *State* and `kontext status` list active decisions whose `paths` were touched by at least `freshness.threshold_commits` commits (default 20) since the decision's date, most-changed first:
+
+```text
+- May need a refresh (20+ commits on their paths since they were made): [0007] Prices are integer cents (34 commits), … — check they still hold; supersede what no longer does.
+```
+
+Commits from the decision's own day and merge commits are not counted. A commit counts once however many of its files match, and renaming code out of a governed path counts too. Decisions without a `date` or `paths` are never flagged. A flag is a prompt to check, not a verdict: if the decision still holds, nothing needs to change; if it does not, supersede it.
+
+The counts come from one `git log` for all decisions, from the oldest decision's date (bounded by `index.max_commits`), and are cached per `HEAD` under the worktree's state directory: a brief adds no git call per decision, and none at all until the next commit. Set `threshold_commits = 0` to turn it off.
 
 ## Levels: L0 · L1 · L2
 

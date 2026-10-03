@@ -348,6 +348,47 @@ fn mcp_session(repo: &Path, config: &Path) {
 }
 
 #[test]
+fn stale_decisions() {
+    let s = Sandbox::new("fresh");
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 3\n");
+    s.write(
+        ".ai/decisions/2020-01-01-prices-are-integer-cents.md",
+        "---\nid: 2020-01-01-prices-are-integer-cents\nkind: decision\nstatus: accepted\ndate: 2020-01-01\npaths:\n  - libs/pricing/**\n---\n# Prices are integer cents\n\nAll money is integer cents.\n",
+    );
+    s.write(
+        ".ai/decisions/2020-01-01-routes-live-in-one-file.md",
+        "---\nid: 2020-01-01-routes-live-in-one-file\nkind: decision\nstatus: accepted\ndate: 2020-01-01\npaths:\n  - apps/api/**\n---\n# Routes live in one file\n\nOne routes file.\n",
+    );
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "docs: decisions"]);
+    let fresh = s.kontext(&["brief", "--no-adapters"]);
+    assert!(!fresh.contains("May need a refresh"), "{fresh}");
+
+    for i in 0..3 {
+        s.write("libs/pricing/src/index.ts", &format!("export const v = {i};\n"));
+        s.ok_git(&["add", "-A"]);
+        s.ok_git(&["commit", "-q", "-m", &format!("feat(pricing): change {i}")]);
+    }
+    s.write("apps/api/src/index.ts", "export {};\n");
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "feat(api): start"]);
+
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.contains("May need a refresh (3+ commits on their paths since they were made): [2020-01-01-prices]"), "{brief}");
+    assert!(brief.contains("Prices are integer cents (3 commits)") && !brief.contains("Routes live in one file (1"), "{brief}");
+    // the second run is answered from the cache keyed by HEAD
+    assert!(s.repo.join(".git/kontext/worktrees").exists());
+    assert_eq!(s.kontext(&["brief", "--no-adapters"]), brief);
+    let status = s.kontext(&["status"]);
+    assert!(status.contains("freshness 1 decision(s) may need a refresh"), "{status}");
+
+    s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 0\n");
+    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(s.kontext(&["status"]).contains("freshness off"));
+}
+
+#[test]
 fn distill_threads() {
     let s = Sandbox::new("distill");
     seed(&s);

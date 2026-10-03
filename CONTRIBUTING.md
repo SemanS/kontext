@@ -50,6 +50,7 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 | `src/route.rs` | which repository a path belongs to: submodules, other worktrees, `dir` |
 | `src/store.rs`, `src/inbox.rs` | knowledge entries (both styles) and local candidates |
 | `src/index.rs` | Tantivy index |
+| `src/freshness.rs` | decisions whose `paths` changed a lot since they were made |
 | `src/adapters/` | registry, drivers, MCP client, result mapping |
 | `src/init/` | scan, history, render, deepen |
 | `src/hooks.rs`, `src/events.rs` | git hooks, outbox |
