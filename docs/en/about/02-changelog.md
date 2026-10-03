@@ -2,7 +2,9 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
-## Unreleased
+## 0.2.0 (2026-10-03)
+
+**Migration:** `kontext hooks install --dir <dir>` and `hooks uninstall --dir <dir>` are now `--hooks-dir <dir>`; `--dir` names the repository, like `-C`. The new `[freshness]` section has defaults; nothing else in configuration or entries changes.
 
 From watching how agents used kontext across Superset workspaces: most of the time they called it, it had nothing to give, because the knowledge was in a submodule, another worktree or the local inbox.
 

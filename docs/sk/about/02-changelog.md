@@ -2,7 +2,9 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## Nevydané
+## 0.2.0 (2026-10-03)
+
+**Migrácia:** `kontext hooks install --dir <dir>` a `hooks uninstall --dir <dir>` sú teraz `--hooks-dir <dir>`; `--dir` pomenúva repozitár, rovnako ako `-C`. Nová sekcia `[freshness]` má predvolené hodnoty; nič iné v konfigurácii ani v záznamoch sa nemení.
 
 Z pozorovania, ako agenti používali kontext vo workspaces v Superset: väčšinou, keď ho zavolali, nemal im čo dať, lebo znalosti boli v submodule, v inom worktree alebo v lokálnom inboxe.
 

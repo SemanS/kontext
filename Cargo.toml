@@ -1,6 +1,6 @@
 [package]
 name = "kontext"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Team context bridge for coding agents: git-native decision memory, one MCP server, pluggable adapters"
