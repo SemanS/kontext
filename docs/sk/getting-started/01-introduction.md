@@ -18,7 +18,7 @@ Coding agenti si dnes vedú vlastnú pamäť a žiadna z nich nie je stavaná pr
 
 Ani jedna nevie odpovedať na to, na čo sa pýta tech lead alebo audítor: *ktorými rozhodnutiami sa naši agenti riadia v kóde fakturácie, kto ich prijal a kedy?*
 
-## Deklarované, schválené, dohľadateľné
+## Deklaratívne, reprodukovateľné, posúdené
 
 kontext narába so znalosťami tímu tak, ako Nix so systémom: želaný stav je deklarovaný v súboroch a všetko ostatné sa z nich odvodí.
 
@@ -36,9 +36,26 @@ Floats broke VAT rounding on invoices with many lines.
 Every amount is stored and computed as an integer number of cents.
 ```
 
-- **Deklarované.** Súbor hovorí, čo platí, odkedy a pre ktoré cesty. Brief, vyhľadávanie a `kontext why` sa odvodzujú z týchto súborov a z histórie gitu; index a cache sa dajú kedykoľvek zmazať. Checkoutni minuloročné vydanie a agenti uvidia rozhodnutia, ktoré platili vtedy.
-- **Schválené.** Agenti zachytávajú do lokálneho inboxu. Zachytenie sa stane znalosťou tímu, až keď sa povýši do commitu a zlúči cez pull request, takže ľudia, ktorí posudzujú kód, posúdia aj to, čím sa budú agenti riadiť.
-- **Dohľadateľné.** Commit, ktorý rozhodnutie prináša, nesie trailer `Decision:`. Rozhodnutie sa ruší novším, ktoré ho nahradí, a `kontext log --all` ukáže reťaz. Po 20 commitoch na jeho cestách sa označí na kontrolu.
+```toml
+# .ai/kontext.toml: committed, reviewed like code
+[brief]
+budget_tokens = 1400     # what one brief may cost an agent
+
+[freshness]
+threshold_commits = 20   # flag a decision after this many commits on its paths
+
+[hooks]
+trailers = true          # `Decision: <id>` on the commit that ships a decision
+
+[secrets]
+scan = "staged"          # scan every staged file, not only knowledge
+```
+
+- **Deklaratívne.** Súbor rozhodnutia hovorí, čo platí, odkedy a pre ktoré cesty. `.ai/kontext.toml` hovorí, ako sa znalosti podávajú a stráži. Oboje je v commite; nič nežije v službe ani v UI.
+- **Reprodukovateľné.** Ten istý commit dá každému kolegovi aj agentovi tie isté tímové znalosti. To, čo kontext drží v `.git/kontext/` (vyhľadávací index, cache), je odvodené: zmaž to a ďalšie volanie to zostaví s rovnakým výsledkom. Checkoutni starší commit a agenti uvidia rozhodnutia, ktoré platili v tom commite.
+- **Posúdené a vratné.** Agenti zachytávajú do lokálneho inboxu. Zachytenie sa stane znalosťou tímu, až keď sa povýši do commitu a zlúči cez pull request, takže ľudia, ktorí posudzujú kód, posúdia aj to, čím sa budú agenti riadiť. Rozhodnutie sa ruší novším, ktoré ho nahradí, `kontext log --all` zachová reťaz a `git revert` vráti zlú zmenu.
+
+Brief ukazuje aj tvoje poznámky z inboxu a, ak ich nastavíš, sekcie adaptérov. Tie sú lokálne; tímovú časť určuje commit.
 
 ## Prečo nie niečo iné? {#why-not}
 
@@ -46,9 +63,9 @@ Every amount is stored and computed as an integer number of cents.
 | --- | --- | --- | --- | --- |
 | Píše ju | ľudia, ako prózu | model, sám od seba | model, zo sessions | agenti navrhujú, ľudia schvaľujú |
 | Zdieľaná a posúdená | v pull requestoch | nie: jeden používateľ, jeden stroj | podľa nasadenia, bez review | v pull requeste danej zmeny |
-| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | podľa ciest, ktoré mení |
-| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora, commity |
-| Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po 20 commitoch na jeho cestách |
+| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | zoradená pre cesty, ktoré agent pomenuje, v rámci rozpočtu |
+| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora |
+| Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po N commitoch na jeho cestách (predvolene 20) |
 | Funguje s | Claude Code; ostatní čítajú AGENTS.md | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
 
 - **Pravidlá s cestami.** `.claude/rules/` v Claude Code vie obmedziť pravidlo na cesty. Pravidlo však stále nemá stav, vlastníka ani históriu a ostatní agenti ho nečítajú.
@@ -60,8 +77,8 @@ kontext CLAUDE.md nenahrádza. Nechaj v ňom pár pokynov, ktoré potrebuje kaž
 ## Pod tvojou kontrolou
 
 - **Schvaľovanie.** Znalosti sa menia len cez commity. S `/.ai/ @acme/architects` v CODEOWNERS a povinným review od vlastníkov kódu žiadny agent nezmení to, čím sa riadia všetci agenti, bez súhlasu tohto tímu.
-- **Auditná stopa.** `git log -- .ai` a `kontext log` ukážu, kto čo rozhodol a kedy. `git log --grep "Decision: <id>"` nájde commit, ktorý rozhodnutie priniesol.
-- **Pravidlá v CI.** `kontext check` zastaví pull request s chybným záznamom, duplicitným id alebo uniknutým tajným údajom: pozri [Validácia znalostí v CI](../guides/07-ci.md).
+- **Auditná stopa.** `git log -- .ai` a `kontext log --all` ukážu, kto čo rozhodol, kedy a čo to nahradilo. S nainštalovanými hookmi kontextu `git log --grep "Decision: <id>"` nájde commit, ktorý rozhodnutie priniesol.
+- **Pravidlá v CI.** `kontext check` zastaví pull request s chybným záznamom, duplicitným id alebo tajným údajom s vysokou istotou: pozri [Validácia znalostí v CI](../guides/07-ci.md).
 - **Dáta zostávajú lokálne.** Žiadny účet ani server. Nič neopustí počítač, kým to nenastavíš, a adaptéry deklarované v repozitári sa spustia až po `kontext trust`: pozri [Bezpečnosť a súkromie](../concepts/08-security.md).
 - **Bez uzamknutia.** Úložisko je obyčajný Markdown a dá sa čítať aj bez kontextu. Keď kontext odstrániš, súbory zostanú.
 

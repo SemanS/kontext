@@ -48,9 +48,9 @@ It is one Rust binary with three faces: an **MCP server** (`kontext mcp`), a **C
 
 ## Why kontext
 
-- **Declared, not remembered.** A decision is a file that says what holds, since when and for which paths. Briefs, search and `kontext why` are derived from these files and the git history, so agents know what the repository says. Check out last year's release and they see the decisions that held then. → [Knowledge store](https://semans.github.io/kontext/concepts/02-knowledge-store)
-- **Agents propose, people approve.** A capture waits in a local inbox until it is promoted into a commit and merged through a pull request, under the same CODEOWNERS and CI as the code. → [Capture and review](https://semans.github.io/kontext/concepts/03-capture-and-review)
-- **Traceable to commits.** The commit that ships a decision carries a `Decision:` trailer, and `kontext why src/billing/round.ts:40` combines the decisions covering a line with its blame and history. A reversed decision is superseded, not deleted. → [Git integration](https://semans.github.io/kontext/concepts/07-git-integration)
+- **Declarative.** What agents follow is declared in the repository: one Markdown file per decision says what holds, since when and for which paths, and `.ai/kontext.toml` says how it is served (brief budget, freshness threshold, trailers, secret scanning). Nothing lives in a service or a UI. → [Knowledge store](https://semans.github.io/kontext/concepts/02-knowledge-store)
+- **Reproducible.** The same commit gives every teammate and every agent the same team knowledge. The local index is derived: delete `.git/kontext/` and the next call rebuilds it. Check out an older commit and agents see the decisions that held at that commit. → [Architecture](https://semans.github.io/kontext/concepts/01-architecture)
+- **Reviewed and reversible.** A capture waits in a local inbox until it is promoted into a commit and merged through a pull request, under the same CODEOWNERS and CI as the code. A reversed decision is superseded, not deleted; the commit that ships a decision carries a `Decision:` trailer. → [Capture and review](https://semans.github.io/kontext/concepts/03-capture-and-review)
 - **One brief, every agent.** `ctx_brief` returns the decisions, conventions and pitfalls for the paths an agent is about to touch, in ~1–2k tokens, with details on demand. → [Context layers](https://semans.github.io/kontext/concepts/04-context-layers)
 - **Stale decisions surface.** A decision whose paths saw 20+ commits since it was made is flagged in the brief and in `kontext status`. → [Freshness](https://semans.github.io/kontext/concepts/04-context-layers#freshness)
 - **Step-by-step bootstrap.** `kontext init` scans the repository and mines its history for decision-shaped commits in seconds; your agent then deepens it one small, resumable task at a time. → [Init pipeline](https://semans.github.io/kontext/concepts/06-init-pipeline)
@@ -61,9 +61,9 @@ It is one Rust binary with three faces: an **MCP server** (`kontext mcp`), a **C
 | --- | --- | --- | --- | --- |
 | Written by | people, as prose | the model, on its own | the model, from sessions | agents propose, people approve |
 | Shared and reviewed | in pull requests | no: one user, one machine | per deployment, no review | in the pull request of the change |
-| Reaches the agent | the whole file, every session | first 200 lines of its index, every session | by similarity to the query | by the paths it is changing |
-| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author, commits |
-| When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after 20 commits on its paths |
+| Reaches the agent | the whole file, every session | the first 200 lines of its index, every session | by similarity to the query | ranked for the paths it names, within a budget |
+| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author |
+| When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after N commits on its paths (20 by default) |
 | Works with | Claude Code; others read AGENTS.md | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
 
 kontext does not replace CLAUDE.md: keep the few instructions every session needs there. Decisions are too many to load whole and too important to leave unreviewed. → [Why not something else?](https://semans.github.io/kontext/getting-started/01-introduction#why-not)
@@ -71,8 +71,8 @@ kontext does not replace CLAUDE.md: keep the few instructions every session need
 ## Under your control
 
 - **Approval.** Knowledge changes only through commits. With `/.ai/ @acme/architects` in CODEOWNERS and code-owner review required, no agent changes what every agent follows without that team's approval.
-- **Audit trail.** `git log -- .ai` and `kontext log` show who decided what and when. `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
-- **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or leaked secrets. → [Validate knowledge in CI](https://semans.github.io/kontext/guides/07-ci)
+- **Audit trail.** `git log -- .ai` and `kontext log --all` show who decided what, when, and what replaced it. With kontext's hooks installed, `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
+- **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or high-confidence secrets. → [Validate knowledge in CI](https://semans.github.io/kontext/guides/07-ci)
 - **Local and private.** No account and no server; briefs in ~50 ms, hooks in ~0.1 s. Nothing leaves the machine unless you configure it. → [Security](https://semans.github.io/kontext/concepts/08-security)
 - **No lock-in.** The store is plain Markdown and stays readable without kontext.
 

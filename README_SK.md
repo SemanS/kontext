@@ -48,9 +48,9 @@ Je to jedna Rust binárka s tromi tvárami: **MCP server** (`kontext mcp`), **CL
 
 ## Prečo kontext
 
-- **Deklarované, nie zapamätané.** Rozhodnutie je súbor, ktorý hovorí, čo platí, odkedy a pre ktoré cesty. Brief, vyhľadávanie a `kontext why` sa odvodzujú z týchto súborov a z histórie gitu, takže agenti vedia to, čo hovorí repozitár. Checkoutni minuloročné vydanie a uvidia rozhodnutia, ktoré platili vtedy. → [Úložisko znalostí](https://semans.github.io/kontext/sk/concepts/02-knowledge-store)
-- **Agenti navrhujú, ľudia schvaľujú.** Zachytenie čaká v lokálnom inboxe, kým sa nepovýši do commitu a nezlúči cez pull request, pod tými istými CODEOWNERS a CI ako kód. → [Zachytávanie a review](https://semans.github.io/kontext/sk/concepts/03-capture-and-review)
-- **Dohľadateľné ku commitom.** Commit, ktorý rozhodnutie prináša, nesie trailer `Decision:` a `kontext why src/billing/round.ts:40` spojí rozhodnutia, ktoré riadok pokrývajú, s jeho blame a históriou. Zrušené rozhodnutie nahradí nové, nezmaže sa. → [Integrácia s gitom](https://semans.github.io/kontext/sk/concepts/07-git-integration)
+- **Deklaratívne.** To, čím sa agenti riadia, je deklarované v repozitári: jeden Markdown súbor na rozhodnutie hovorí, čo platí, odkedy a pre ktoré cesty, a `.ai/kontext.toml` hovorí, ako sa to podáva (rozpočet briefu, prah aktuálnosti, trailery, skenovanie tajných údajov). Nič nežije v službe ani v UI. → [Úložisko znalostí](https://semans.github.io/kontext/sk/concepts/02-knowledge-store)
+- **Reprodukovateľné.** Ten istý commit dá každému kolegovi aj agentovi tie isté tímové znalosti. Lokálny index je odvodený: zmaž `.git/kontext/` a ďalšie volanie ho zostaví znova. Checkoutni starší commit a agenti uvidia rozhodnutia, ktoré platili v tom commite. → [Architektúra](https://semans.github.io/kontext/sk/concepts/01-architecture)
+- **Posúdené a vratné.** Zachytenie čaká v lokálnom inboxe, kým sa nepovýši do commitu a nezlúči cez pull request, pod tými istými CODEOWNERS a CI ako kód. Zrušené rozhodnutie nahradí nové, nezmaže sa; commit, ktorý rozhodnutie prináša, nesie trailer `Decision:`. → [Zachytávanie a review](https://semans.github.io/kontext/sk/concepts/03-capture-and-review)
 - **Jeden brief pre každého agenta.** `ctx_brief` vráti rozhodnutia, konvencie a úskalia pre cesty, na ktoré sa agent chystá siahnuť, v ~1–2k tokenoch, s detailmi na požiadanie. → [Vrstvy kontextu](https://semans.github.io/kontext/sk/concepts/04-context-layers)
 - **Neaktuálne rozhodnutia vyplávajú.** Rozhodnutie, ktorého cesty od prijatia zasiahlo 20+ commitov, sa označí v briefe aj v `kontext status`. → [Aktuálnosť](https://semans.github.io/kontext/sk/concepts/04-context-layers#freshness)
 - **Zavedenie krok za krokom.** `kontext init` za pár sekúnd prejde repozitár a vyťaží z histórie commity v tvare rozhodnutí; tvoj agent ho potom prehlbuje po malých úlohách, ktoré sa dajú prerušiť a obnoviť. → [Inicializačný pipeline](https://semans.github.io/kontext/sk/concepts/06-init-pipeline)
@@ -61,9 +61,9 @@ Je to jedna Rust binárka s tromi tvárami: **MCP server** (`kontext mcp`), **CL
 | --- | --- | --- | --- | --- |
 | Píše ju | ľudia, ako prózu | model, sám od seba | model, zo sessions | agenti navrhujú, ľudia schvaľujú |
 | Zdieľaná a posúdená | v pull requestoch | nie: jeden používateľ, jeden stroj | podľa nasadenia, bez review | v pull requeste danej zmeny |
-| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | podľa ciest, ktoré mení |
-| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora, commity |
-| Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po 20 commitoch na jeho cestách |
+| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | zoradená pre cesty, ktoré agent pomenuje, v rámci rozpočtu |
+| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora |
+| Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po N commitoch na jeho cestách (predvolene 20) |
 | Funguje s | Claude Code; ostatní čítajú AGENTS.md | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
 
 kontext CLAUDE.md nenahrádza: nechaj v ňom pár pokynov, ktoré potrebuje každá session. Rozhodnutí je priveľa na to, aby sa načítavali celé, a sú pridôležité na to, aby zostali neposúdené. → [Prečo nie niečo iné?](https://semans.github.io/kontext/sk/getting-started/01-introduction#why-not)
@@ -71,8 +71,8 @@ kontext CLAUDE.md nenahrádza: nechaj v ňom pár pokynov, ktoré potrebuje kaž
 ## Pod tvojou kontrolou
 
 - **Schvaľovanie.** Znalosti sa menia len cez commity. S `/.ai/ @acme/architects` v CODEOWNERS a povinným review od vlastníkov kódu žiadny agent nezmení to, čím sa riadia všetci agenti, bez súhlasu tohto tímu.
-- **Auditná stopa.** `git log -- .ai` a `kontext log` ukážu, kto čo rozhodol a kedy. `git log --grep "Decision: <id>"` nájde commit, ktorý rozhodnutie priniesol.
-- **Pravidlá v CI.** `kontext check` zastaví pull request s chybným záznamom, duplicitným id alebo uniknutým tajným údajom. → [Validácia znalostí v CI](https://semans.github.io/kontext/sk/guides/07-ci)
+- **Auditná stopa.** `git log -- .ai` a `kontext log --all` ukážu, kto čo rozhodol, kedy a čo to nahradilo. S nainštalovanými hookmi kontextu `git log --grep "Decision: <id>"` nájde commit, ktorý rozhodnutie priniesol.
+- **Pravidlá v CI.** `kontext check` zastaví pull request s chybným záznamom, duplicitným id alebo tajným údajom s vysokou istotou. → [Validácia znalostí v CI](https://semans.github.io/kontext/sk/guides/07-ci)
 - **Lokálny a súkromný.** Žiadny účet ani server; brief za ~50 ms, hooky za ~0,1 s. Nič neopustí počítač, kým to nenastavíš. → [Bezpečnosť](https://semans.github.io/kontext/sk/concepts/08-security)
 - **Bez uzamknutia.** Úložisko je obyčajný Markdown a dá sa čítať aj bez kontextu.
 

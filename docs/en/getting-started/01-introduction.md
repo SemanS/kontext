@@ -18,7 +18,7 @@ Coding agents now keep their own memory, and none of it is built for a team:
 
 None of them can answer what a tech lead or an auditor asks: *which decisions do our agents follow in the billing code, who made them, and when?*
 
-## Declared, approved, traceable
+## Declarative, reproducible, reviewed
 
 kontext treats team knowledge the way Nix treats a system: the desired state is declared in files, and everything else is derived from them.
 
@@ -36,9 +36,26 @@ Floats broke VAT rounding on invoices with many lines.
 Every amount is stored and computed as an integer number of cents.
 ```
 
-- **Declared.** The file says what holds, since when and for which paths. Briefs, search and `kontext why` are derived from these files and the git history; the index and caches can be deleted at any time. Check out last year's release and agents see the decisions that held then.
-- **Approved.** Agents capture into a local inbox. A capture becomes team knowledge only when it is promoted into a commit and merged through a pull request, so the people who review the code also review what agents will follow.
-- **Traceable.** The commit that ships a decision carries a `Decision:` trailer. A decision is reversed by a newer one that supersedes it, and `kontext log --all` shows the chain. After 20 commits on its paths it is flagged for a check.
+```toml
+# .ai/kontext.toml: committed, reviewed like code
+[brief]
+budget_tokens = 1400     # what one brief may cost an agent
+
+[freshness]
+threshold_commits = 20   # flag a decision after this many commits on its paths
+
+[hooks]
+trailers = true          # `Decision: <id>` on the commit that ships a decision
+
+[secrets]
+scan = "staged"          # scan every staged file, not only knowledge
+```
+
+- **Declarative.** The decision file says what holds, since when and for which paths. `.ai/kontext.toml` says how knowledge is served and guarded. Both are committed; nothing lives in a service or a UI.
+- **Reproducible.** The same commit gives every teammate and every agent the same team knowledge. What kontext keeps in `.git/kontext/` (the search index, caches) is derived: delete it and the next call rebuilds it with the same result. Check out an older commit and agents see the decisions that held at that commit.
+- **Reviewed and reversible.** Agents capture into a local inbox. A capture becomes team knowledge only when it is promoted into a commit and merged through a pull request, so the people who review the code also review what agents will follow. A decision is reversed by a newer one that supersedes it, `kontext log --all` keeps the chain, and `git revert` undoes a bad change.
+
+The brief also lists your own inbox notes and, if you configure them, adapter sections. Those are local; the team part is what the commit declares.
 
 ## Why not something else? {#why-not}
 
@@ -46,9 +63,9 @@ Every amount is stored and computed as an integer number of cents.
 | --- | --- | --- | --- | --- |
 | Written by | people, as prose | the model, on its own | the model, from sessions | agents propose, people approve |
 | Shared and reviewed | in pull requests | no: one user, one machine | per deployment, no review | in the pull request of the change |
-| Reaches the agent | the whole file, every session | first 200 lines of its index, every session | by similarity to the query | by the paths it is changing |
-| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author, commits |
-| When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after 20 commits on its paths |
+| Reaches the agent | the whole file, every session | the first 200 lines of its index, every session | by similarity to the query | ranked for the paths it names, within a budget |
+| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author |
+| When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after N commits on its paths (20 by default) |
 | Works with | Claude Code; others read AGENTS.md | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
 
 - **Path-scoped rules.** Claude Code's `.claude/rules/` can limit a rule to paths. The rule still has no status, owner or history, and other agents do not read it.
@@ -60,8 +77,8 @@ kontext does not replace CLAUDE.md. Keep there the few instructions every sessio
 ## Under your control
 
 - **Approval.** Knowledge changes only through commits. With `/.ai/ @acme/architects` in CODEOWNERS and code-owner review required, no agent changes what every agent follows without that team's approval.
-- **Audit trail.** `git log -- .ai` and `kontext log` show who decided what and when. `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
-- **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or leaked secrets: see [Validate knowledge in CI](../guides/07-ci.md).
+- **Audit trail.** `git log -- .ai` and `kontext log --all` show who decided what, when, and what replaced it. With kontext's hooks installed, `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
+- **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or high-confidence secrets: see [Validate knowledge in CI](../guides/07-ci.md).
 - **Data stays local.** No account and no server. Nothing leaves the machine unless you configure it, and adapters declared in a repository run only after `kontext trust`: see [Security and privacy](../concepts/08-security.md).
 - **No lock-in.** The store is plain Markdown and stays readable without kontext. Removing kontext leaves the files.
 
