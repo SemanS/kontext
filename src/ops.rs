@@ -752,7 +752,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         }
         let stale = crate::freshness::stale_decisions(app, &entries);
         if !stale.is_empty() {
-            let named = |s: &crate::freshness::Stale| entries.iter().find(|e| e.id == s.id).map(&reference).unwrap_or_else(|| s.id.clone());
+            let named = |s: &crate::freshness::Stale| entries.iter().find(|e| e.id == s.id).map(reference).unwrap_or_else(|| s.id.clone());
             let _ = writeln!(
                 state,
                 "- May need a refresh ({}+ commits on their paths since they were made): {} — check they still hold; supersede what no longer does.",
