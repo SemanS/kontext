@@ -47,6 +47,7 @@ Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/`. Oba stromy si sú
 | `src/main.rs` | CLI |
 | `src/mcp.rs`, `src/tools.rs` | MCP server a nástroje pre agentov |
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
+| `src/route.rs` | ktorému repozitáru patrí cesta: submoduly, iné worktree, `dir` |
 | `src/store.rs`, `src/inbox.rs` | záznamy znalostí (oba štýly) a lokálni kandidáti |
 | `src/index.rs` | index Tantivy |
 | `src/adapters/` | register, drivery, MCP klient, mapovanie výsledkov |

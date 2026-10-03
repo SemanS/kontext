@@ -6,6 +6,15 @@ Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol vers
 
 Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. All are `openWorldHint: false`.
 
+### Another repository: `dir` {#dir}
+
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, a submodule or a sibling repository (absolute, or relative to this repository's root). The tool runs there, and its answer starts with the repository it came from.
+
+Without `dir`, kontext still follows the paths it is given:
+
+- `focus` paths, a `ctx_why` target and `ctx_capture` `paths` inside a submodule are answered from the submodule, and captured into its inbox when it keeps team knowledge. A path that exists only inside one submodule, relative to it (`apps/runner` for `extractor/apps/runner`, as the submodule's own `AGENTS.md` names its paths), counts as the submodule's. Absolute paths into another repository or worktree are answered from there.
+- A submodule with its own team knowledge gets a section of the brief, and its search hits carry its path: `kx:extractor/<id>`, `git:extractor/<sha>`, `file:extractor/<path>`. `ctx_read` opens them as they are.
+
 ### `ctx_brief`
 
 | Parameter | Type | Default | |
@@ -13,6 +22,8 @@ Every tool carries MCP annotations, which clients use to decide what needs appro
 | `focus` | string[] | | paths or topic words to prioritise |
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | approximate size |
 | `adapters` | boolean | true | include adapter `brief` sections |
+
+References in brackets are the shortest unique prefix of an entry's id (`[2026-09-28-adapters]`), which `ctx_read` resolves. Besides the team knowledge, the brief lists *Local notes* (this clone's inbox) and, in a repository without a store, *Related docs and history* for the focus. See [Context layers](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -25,6 +36,8 @@ Every tool carries MCP annotations, which clients use to decide what needs appro
 | `budget_tokens` | integer | 1200 | approximate size of the answer |
 
 Each hit: `N. title — snippet [kind · status · date · source] <uri>`.
+
+The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *local note*) and submodules that keep their own team knowledge (marked with their path).
 
 ### `ctx_read`
 
@@ -71,9 +84,9 @@ Each hit: `N. title — snippet [kind · status · date · source] <uri>`.
 | --- | --- | --- | --- |
 | `thread` | string | | `claude:<id>`, `codex:<id>`, `superset:<workspace>` (all its threads), a transcript file or `last`; without it, the recent threads are listed |
 | `part` | integer | 1 | part of a long transcript |
-| `budget_chars` | integer | 40000 | characters per part (up to 80000) |
+| `budget_chars` | integer | 20000 | characters per part (up to 80000) |
 
-Compact, redacted transcripts of this repository's agent threads on this machine. See [Knowledge from agent threads](../guides/08-distill-threads.md).
+Compact, redacted transcripts of this repository's agent threads on this machine. A harness notification (Claude Code's `<task-notification>` for a finished background task) becomes one line, and paths in an agent's per-session temp dir are shortened to `<tmp>/`. A part fits one tool result: clients cut longer ones. See [Knowledge from agent threads](../guides/08-distill-threads.md).
 
 ### `ctx_inbox`
 
@@ -89,7 +102,7 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 | `promote` | string[] | inbox ids to write into the store and stage |
 | `drop` | string[] | inbox ids to discard |
 
-Returns the report described in [Capture and review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit).
+Returns the report described in [Capture and review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). It lists the commit trailers and says whether the prepare-commit-msg hook adds them: a clone without kontext's hooks (a fresh clone, a Superset project) needs them added by hand, or `kontext hooks install`.
 
 ### `ctx_init`
 
@@ -101,6 +114,8 @@ Returns the report described in [Capture and review](../concepts/03-capture-and-
 When the repository has no `.ai/` yet and `bootstrap` is true, `ctx_init` first runs scan, history and render (no hooks) and then returns the first task; without it, it explains how to set kontext up. It never bootstraps a branch when another branch already has the team knowledge.
 
 In a repository without a knowledge store `ctx_capture` accepts only `visibility: private`, and `ctx_inbox` / `ctx_prepare_commit` do not promote.
+
+A capture whose paths all lie in a submodule or another repository that keeps team knowledge goes to that repository's inbox, with the paths rewritten relative to it. Otherwise it stays here, and a note says why (mixed paths, a submodule without a store, paths that exist nowhere).
 
 ### `ctx_init_submit`
 

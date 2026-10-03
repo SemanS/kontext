@@ -29,7 +29,8 @@ Agents call `ctx_capture` with the same fields. On capture kontext:
 - redacts secret-looking values (`capture.redact = true`),
 - warns when a similar entry already exists (so it can be updated instead),
 - defaults decisions to `status: accepted` and records the author (`git config user.name`) and origin (`agent` or `cli`),
-- queues a `capture` event for adapters that subscribe to it.
+- queues a `capture` event for adapters that subscribe to it,
+- files it with the repository that owns its `paths`: a capture about `extractor/…` made from a repository that has `extractor` as a submodule goes into the submodule's inbox, with the paths rewritten relative to it, and is committed there (`ctx_prepare_commit` with `dir: "extractor"`). That needs the submodule to keep team knowledge; otherwise, or when the paths span repositories, the capture stays here and a note says so. Paths that exist nowhere are named in a note too.
 
 ## Visibility
 
@@ -39,6 +40,8 @@ Agents call `ctx_capture` with the same fields. On capture kontext:
 | `private` | in the inbox, and in personal adapters | no | your own notes, half-formed hypotheses, preferences |
 
 Private captures never enter the repository. Adapters can receive them (for example as OpenViking memories) by subscribing to `capture` with `visibility = "private"`.
+
+Inbox notes, team or private, are not forgotten either: `ctx_search` finds them (marked *local note*) and the brief lists the ones that match its focus under *Local notes*. In a repository without a knowledge store they are the only knowledge there is. Recall is not promotion: a commit still takes only the candidates its own worktree captured.
 
 ## Promoting
 
@@ -59,7 +62,7 @@ The report lists:
 3. inbox candidates, the ones touching changed files first,
 4. validation and secret-scan results for staged knowledge (errors will block the commit),
 5. module docs that may need a refresh (many changed files, or files added/removed),
-6. the trailers the hook will add,
+6. the commit trailers, and whether the prepare-commit-msg hook adds them (a clone without kontext's hooks needs them added by hand, or `kontext hooks install`),
 7. a nudge when a large change carries no knowledge at all.
 
 ## Review

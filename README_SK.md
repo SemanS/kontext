@@ -92,7 +92,7 @@ Celý postup: [Rýchly štart](https://semans.github.io/kontext/sk/getting-start
 | Agent | Pripojenie | Návod |
 | --- | --- | --- |
 | **Claude Code** | `kontext connect claude --write` (+ `claude-hooks` pre brief na začiatku session) | [Claude Code](https://semans.github.io/kontext/sk/agent-integrations/02-claude-code) |
-| **Codex** | `kontext connect codex --write` | [Codex](https://semans.github.io/kontext/sk/agent-integrations/03-codex) |
+| **Codex** | `kontext connect codex --write` (+ `agents-md`: Codex sa riadi `AGENTS.md`) | [Codex](https://semans.github.io/kontext/sk/agent-integrations/03-codex) |
 | **Cursor** | `kontext connect cursor --write` | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients) |
 | **OpenCode** | `kontext connect opencode --write` | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients) |
 | **Superset a orchestrátory** | nič navyše: worktree zdieľajú inbox aj postup | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients#superset-and-other-orchestrators) |

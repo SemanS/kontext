@@ -169,7 +169,7 @@ pub fn install(app: &App, dir_override: Option<PathBuf>) -> Result<InstallReport
         for cand in [".githooks", ".husky", "githooks", ".hooks"] {
             let d = app.repo.root.join(cand);
             if d.is_dir() && d != dir {
-                rep.notes.push(format!("{cand}/ exists and may be activated later (e.g. `core.hooksPath` set by npm install); run `kontext hooks install --dir {cand}` to cover it too"));
+                rep.notes.push(format!("{cand}/ exists and may be activated later (e.g. `core.hooksPath` set by npm install); run `kontext hooks install --hooks-dir {cand}` to cover it too"));
             }
         }
     }
@@ -210,6 +210,38 @@ pub fn uninstall(app: &App, dir_override: Option<PathBuf>) -> Result<Vec<String>
         }
     }
     Ok(removed)
+}
+
+/// Whether `hook` carries the kontext block where git looks for hooks (`core.hooksPath` wins over
+/// `.git/hooks`). Fresh clones (Superset projects, CI checkouts) have none until `kontext hooks install`.
+pub fn installed(app: &App, hook: &str) -> bool {
+    let has_block = |dir: &Path| std::fs::read_to_string(dir.join(hook)).is_ok_and(|t| t.contains(START_PREFIX));
+    // the brief asks every time: without core.hooksPath (or an include) in any config git reads,
+    // the hooks are `<common dir>/hooks`, and no git process is needed to know it
+    let home = util::home_dir();
+    let xdg = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    let configs = [
+        app.repo.common_dir.join("config"),
+        app.repo.git_dir.join("config.worktree"),
+        home.join(".gitconfig"),
+        xdg.join("git").join("config"),
+        PathBuf::from("/etc/gitconfig"),
+        PathBuf::from("/opt/homebrew/etc/gitconfig"),
+        PathBuf::from("/usr/local/etc/gitconfig"),
+        PathBuf::from("/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig"),
+        PathBuf::from("/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig"),
+    ];
+    let unusual = std::env::vars_os().any(|(k, _)| k.to_string_lossy().starts_with("GIT_CONFIG"))
+        || configs.iter().any(|p| {
+            std::fs::read_to_string(p).is_ok_and(|t| {
+                let t = t.to_ascii_lowercase();
+                t.contains("hookspath") || t.contains("[include")
+            })
+        });
+    if !unusual {
+        return has_block(&app.repo.common_dir.join("hooks"));
+    }
+    hooks_dir(app).is_ok_and(|(dir, _)| has_block(&dir))
 }
 
 pub fn status(app: &App) -> Result<String> {

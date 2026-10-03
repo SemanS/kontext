@@ -37,6 +37,8 @@ Codex číta `AGENTS.md`. Pridaj doň pracovné pravidlá pre kontext:
 kontext connect agents-md --write
 ```
 
+Urob to v každom repozitári, kde má Codex kontext používať. Codex v code mode ukazuje inštrukcie servera len v popise jedného nástroja a v praxi začne s `ctx_brief` iba vtedy, keď to hovorí `AGENTS.md`: vo vlastnom repozitári kontextu bez tohto bloku Codex počas celej úlohy kontext nezavolal ani raz.
+
 ## Codex ako LLM pre autopilot
 
 ```sh

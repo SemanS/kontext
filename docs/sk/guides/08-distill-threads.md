@@ -27,7 +27,7 @@ Distilling 1 thread(s)…
 
 Čo sa deje:
 
-1. Vlákno sa prečíta do kompaktného prepisu: čo sa vývojár pýtal, čo agent odpovedal, čo upravil a spustil (`→ edit src/cache.ts`, `→ $ git commit …`). Výstupy nástrojov, uvažovanie a vložené inštrukcie (AGENTS.md, prostredie, hooky) sa vynechajú, cesty sa prepíšu relatívne k repozitáru a tajné údaje sa zamaskujú.
+1. Vlákno sa prečíta do kompaktného prepisu: čo sa vývojár pýtal, čo agent odpovedal, čo upravil a spustil (`→ edit src/cache.ts`, `→ $ git commit …`). Výstupy nástrojov, uvažovanie a vložené inštrukcie (AGENTS.md, prostredie, hooky) sa vynechajú. Notifikácia prostredia, napríklad `<task-notification>` v Claude Code o dokončenom agentovi na pozadí, sa zmení na jeden riadok (`→ Agent "…" finished: <začiatok jeho výsledku>`). Cesty sa prepíšu relatívne k repozitáru, dočasné adresáre relácie agenta sa skrátia na `<tmp>/` a tajné údaje sa zamaskujú.
 2. Prepis sa rozdelí na časti po zhruba 45 000 znakoch (`--max-parts`, predvolene 12, pri dlhšom vlákne rovnomerne rozložené) a pošle sa tvojmu LLM adaptéru, viacero naraz (`--jobs`).
 3. Model pomenuje rozhodnutia, konvencie, úskalia a incidenty, ktoré má tím vedieť aj neskôr, najviac `--max` na vlákno (5). Vidí, čo už je zapísané, takže to neopakuje. Zistenia podobné existujúcemu záznamu alebo kandidátovi v inboxe sa vyradia.
 4. Každé zistenie sa stane kandidátom v inboxe s cestami, commitmi, v ktorých ho vlákno urobilo, `origin: thread` a zdrojom (`claude:4f1c2a9b`, ukáže ho `kontext inbox`, pri povýšení sa zahodí).

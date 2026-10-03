@@ -27,7 +27,7 @@ Distilling 1 thread(s)…
 
 What happens:
 
-1. The thread is read into a compact transcript: what the developer asked, what the agent answered, what it edited and ran (`→ edit src/cache.ts`, `→ $ git commit …`). Tool output, reasoning and injected instructions (AGENTS.md, environment, hooks) are left out, paths are made relative to the repository, and secrets are redacted.
+1. The thread is read into a compact transcript: what the developer asked, what the agent answered, what it edited and ran (`→ edit src/cache.ts`, `→ $ git commit …`). Tool output, reasoning and injected instructions (AGENTS.md, environment, hooks) are left out. A harness notification, such as Claude Code's `<task-notification>` for a finished background agent, becomes one line (`→ Agent "…" finished: <the start of its result>`). Paths are made relative to the repository, an agent's per-session temp dirs are shortened to `<tmp>/`, and secrets are redacted.
 2. The transcript is split into parts of about 45,000 characters (`--max-parts`, default 12, spread over a longer thread) and sent to your LLM adapter, several at a time (`--jobs`).
 3. The model names the decisions, conventions, pitfalls and incidents the team should still know later, at most `--max` per thread (5), and is shown what is recorded already, so it does not repeat it. Findings similar to an existing entry or inbox candidate are dropped.
 4. Each finding becomes an inbox candidate with its paths, the commits the thread made it in, `origin: thread` and its source (`claude:4f1c2a9b`, shown by `kontext inbox`, dropped on promotion).

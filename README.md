@@ -92,7 +92,7 @@ Full walkthrough: [Quick start](https://semans.github.io/kontext/getting-started
 | Agent | Connect | Guide |
 | --- | --- | --- |
 | **Claude Code** | `kontext connect claude --write` (+ `claude-hooks` for a brief at session start) | [Claude Code](https://semans.github.io/kontext/agent-integrations/02-claude-code) |
-| **Codex** | `kontext connect codex --write` | [Codex](https://semans.github.io/kontext/agent-integrations/03-codex) |
+| **Codex** | `kontext connect codex --write` (+ `agents-md`: Codex follows `AGENTS.md`) | [Codex](https://semans.github.io/kontext/agent-integrations/03-codex) |
 | **Cursor** | `kontext connect cursor --write` | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients) |
 | **OpenCode** | `kontext connect opencode --write` | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients) |
 | **Superset & orchestrators** | nothing extra: worktrees share inbox and progress | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients#superset-and-other-orchestrators) |

@@ -4,10 +4,61 @@ use crate::config::{self, Config, LoadedConfig};
 use crate::index::LocalIndex;
 use crate::repo::Repo;
 use crate::store::{Entry, Store};
-use anyhow::Result;
-use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+/// Contexts of other repositories this process was pointed at (another worktree, a submodule, a
+/// sibling project), opened once and kept like the server's own: by worktree root.
+struct Others {
+    by_root: HashMap<PathBuf, Arc<App>>,
+    root_of: HashMap<PathBuf, PathBuf>,
+}
+
+static OTHERS: LazyLock<Mutex<Others>> = LazyLock::new(|| Mutex::new(Others { by_root: HashMap::new(), root_of: HashMap::new() }));
+
+/// Whether a repository now sits between `dir` and the root it was resolved to (a submodule
+/// initialized while a server runs): the cached answer belongs to the outer repository.
+fn repo_appeared(dir: &Path, root: &Path) -> bool {
+    let mut cur = dir;
+    while cur != root {
+        if cur.join(".git").exists() {
+            return true;
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => return true,
+        }
+    }
+    false
+}
+
+/// The context of the repository (worktree) that contains `path`, a file or a directory.
+pub fn open_shared(path: &Path) -> Result<Arc<App>> {
+    let canon = path.canonicalize().with_context(|| format!("no such file or directory: {}", path.display()))?;
+    let dir = if canon.is_dir() { canon } else { canon.parent().map(Path::to_path_buf).unwrap_or(canon) };
+    {
+        let g = OTHERS.lock().unwrap();
+        if let Some(app) = g.root_of.get(&dir).and_then(|root| g.by_root.get(root))
+            && !app.config_changed()
+            && !repo_appeared(&dir, &app.repo.root)
+        {
+            return Ok(app.clone());
+        }
+    }
+    // git runs outside the lock: concurrent MCP requests for other repositories do not wait on it
+    let fresh = Arc::new(App::open(&dir)?);
+    let mut g = OTHERS.lock().unwrap();
+    let root = fresh.repo.root.clone();
+    g.root_of.insert(dir, root.clone());
+    let slot = g.by_root.entry(root).or_insert_with(|| fresh.clone());
+    if slot.config_changed() {
+        *slot = fresh;
+    }
+    Ok(slot.clone())
+}
 
 pub struct App {
     pub repo: Repo,

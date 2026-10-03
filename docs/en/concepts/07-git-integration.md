@@ -22,7 +22,7 @@ Bypass once with `KONTEXT_SKIP=1 git commit …` or `git commit --no-verify`.
 - A non-shell hook (e.g. a Node script) is renamed to `<hook>.kontext-chained` and called after kontext's block.
 - Each block looks for `kontext` on `PATH`, in `~/.local/bin` and `~/.cargo/bin`, and does nothing when it is missing, so shared hook directories do not break teammates who have not installed kontext.
 - If the hook directory is tracked (e.g. `.githooks/`), the change shows up in `git status`: commit it to share the hooks with the team.
-- If a tracked hook directory exists but is not active yet (for example `npm install` sets `core.hooksPath` later), kontext tells you and `kontext hooks install --dir .githooks` covers it.
+- If a tracked hook directory exists but is not active yet (for example `npm install` sets `core.hooksPath` later), kontext tells you and `kontext hooks install --hooks-dir .githooks` covers it.
 - Hook managers that regenerate hook files (lefthook, pre-commit) are detected; add `kontext hook <name>` to their configuration instead.
 
 `kontext hooks status` shows what is installed; `kontext hooks uninstall` removes the blocks and restores chained originals.

@@ -29,6 +29,11 @@ kontext connect opencode --write   # writes opencode.json
 
 Orchestrátory, ktoré spúšťajú veľa agentov v paralelných worktree, nepotrebujú nič špeciálne: prostredie každého agenta si vo svojom worktree spustí vlastný `kontext mcp`. Všetky worktree jedného klonu zdieľajú inbox, outbox a postup zavedenia (sú uložené v spoločnom git adresári); každý worktree má vlastný vyhľadávací index. Stav worktree, ktoré už neexistujú, sa vyčistí.
 
+Čo prináša práca s orchestrovanými agentmi:
+
+- **Čerstvé klony nemajú hooky.** Projekt, ktorý naklonuje orchestrátor (projekt v Superset, CI checkout), nespúšťa žiadne kontroly kontextu pri commite, kým v ňom raz nebeží `kontext hooks install` (worktree hooky zdieľajú). Brief na to upozorní a `ctx_prepare_commit` povie, keď treba trailery dopísať ručne.
+- **Práca mimo adresára relácie.** Agent často pracuje v inom worktree, submodule alebo susednom projekte. kontext odpovedá z repozitára, ktorému patria cesty, ktoré dostane (cesty vo focuse, ciele `ctx_why`, cesty zachytenia), a každý nástroj prijíma `dir`, ktorým sa dá pomenovať iný. Brief vo vetve bez tímových znalostí pomenuje worktree, ktorý ich má.
+
 Užitočné rozdelenie práce:
 
 - jeden agent spustí `/mcp__kontext__kontext-init`, aby prehĺbil zavedenie, kým ostatní pracujú,

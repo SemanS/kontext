@@ -47,6 +47,7 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 | `src/main.rs` | CLI |
 | `src/mcp.rs`, `src/tools.rs` | MCP server and the agent tool surface |
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
+| `src/route.rs` | which repository a path belongs to: submodules, other worktrees, `dir` |
 | `src/store.rs`, `src/inbox.rs` | knowledge entries (both styles) and local candidates |
 | `src/index.rs` | Tantivy index |
 | `src/adapters/` | registry, drivers, MCP client, result mapping |

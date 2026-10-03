@@ -340,6 +340,55 @@ fn injected(text: &str) -> bool {
         || t.starts_with("<command-")
         || t.starts_with("Caveat: The messages below were generated")
         || t.starts_with("[Request interrupted")
+        || t.starts_with("<recommended_plugins>")
+        || t.starts_with("<artifact-content-authored-by-others")
+}
+
+/// The value of `<name>…</name>` in a harness block.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let (open, close) = (format!("<{name}>"), format!("</{name}>"));
+    let a = text.find(&open)? + open.len();
+    let b = text[a..].find(&close)? + a;
+    Some(text[a..b].trim())
+}
+
+/// Claude Code reports a finished background task (a subagent, a shell) as a `<task-notification>`
+/// in a user turn: ids, an output file, a note, usage and the whole result. Nobody typed it, and in
+/// threads that fan work out it was most of every part, so it becomes one line of what happened.
+fn task_notifications(text: &str) -> (Vec<String>, String) {
+    const OPEN: &str = "<task-notification>";
+    const CLOSE: &str = "</task-notification>";
+    let mut lines = Vec::new();
+    let mut rest = String::new();
+    let mut s = text;
+    while let Some(a) = s.find(OPEN) {
+        let Some(len) = s[a..].find(CLOSE) else { break };
+        let block = &s[a..a + len + CLOSE.len()];
+        rest.push_str(&s[..a]);
+        let summary = tag(block, "summary").map(util::one_line).unwrap_or_else(|| "background task".into());
+        let status =
+            tag(block, "status").filter(|st| !st.is_empty() && *st != "completed").map(|st| format!(" ({st})")).unwrap_or_default();
+        let result = tag(block, "result").map(|r| util::truncate_chars(&util::one_line(r), 240)).filter(|r| !r.is_empty());
+        lines.push(match result {
+            Some(r) => format!("{summary}{status}: {r}"),
+            None => format!("{summary}{status}"),
+        });
+        s = &s[a + len + CLOSE.len()..];
+    }
+    rest.push_str(s);
+    (lines, rest)
+}
+
+/// A user turn of a Claude Code transcript: harness notifications become tool lines, injected
+/// context is dropped, the rest is what the user wrote.
+fn claude_user_text(turns: &mut Vec<Turn>, text: &str) {
+    let (notes, rest) = task_notifications(text);
+    for n in notes {
+        push(turns, Role::Tool, n);
+    }
+    if !injected(&rest) {
+        push(turns, Role::User, strip_blocks(&rest));
+    }
 }
 
 /// Drop `<system-reminder>…</system-reminder>` and similar blocks from a message.
@@ -397,13 +446,13 @@ pub fn parse_claude(text: &str) -> Thread {
         let msg = &e["message"];
         match e["type"].as_str() {
             Some("user") => match &msg["content"] {
-                Value::String(s) if !injected(s) => push(&mut t.turns, Role::User, strip_blocks(s)),
+                Value::String(s) => claude_user_text(&mut t.turns, s),
                 Value::Array(blocks) => {
                     for b in blocks {
                         if b["type"] == "text"
-                            && let Some(s) = b["text"].as_str().filter(|s| !injected(s))
+                            && let Some(s) = b["text"].as_str()
                         {
-                            push(&mut t.turns, Role::User, strip_blocks(s));
+                            claude_user_text(&mut t.turns, s);
                         }
                     }
                 }
@@ -574,6 +623,11 @@ pub fn render(t: &Thread, repo_root: &Path, extra: &[regex::Regex]) -> String {
             s = s.replace(&format!("{p}/"), "");
         }
     }
+    // Claude Code's per-session temp dirs (scratchpads, task output) carry no meaning for a reader
+    static SESSION_TMP: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?:/private)?/tmp/claude-\d+/[^/\s]+/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/").unwrap()
+    });
+    let s = SESSION_TMP.replace_all(&s, "<tmp>/").to_string();
     let s = crate::secrets::redact(&s).0;
     crate::secrets::redact_personal(&s, extra).0
 }
@@ -798,6 +852,30 @@ mod tests {
         assert!(text.contains("User: Page by cursor") && !text.contains("AGENTS.md") && !text.contains("permissions"), "{text}");
         assert!(text.contains("→ $ git commit -m 'fix: page by cursor'") && text.contains("→ kontext.ctx_capture"), "{text}");
         assert!(text.contains("→ edit src/page.ts") && !text.contains("ghp_abcdef"), "{text}");
+    }
+
+    #[test]
+    fn harness_notifications_become_one_line() {
+        let note = "<task-notification>\n<task-id>af8bbe36</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/private/tmp/claude-501/-Users-me-app/d80322cb-9c09-4576-b45e-ed00b3c5f286/tasks/af8bbe36.output</output-file>\n<status>completed</status>\n<summary>Agent \"Batch validator 14/21\" finished</summary>\n<note>A task-notification fires each time this agent stops.</note>\n<result>All 11 batches validated: valid JSON, no duplicate ids.\n\n**Summary**\n- Batch 45: 4 nodes</result>\n<usage><subagent_tokens>168403</subagent_tokens></usage>\n</task-notification>";
+        let jsonl = [
+            serde_json::json!({"type":"user","sessionId":"s1","cwd":"/r/app","message":{"role":"user","content":"Validate every batch."}}).to_string(),
+            serde_json::json!({"type":"user","message":{"role":"user","content":note}}).to_string(),
+            serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"text","text":format!("{note}\nAnd keep going.")}]}}).to_string(),
+            serde_json::json!({"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"node /private/tmp/claude-501/-Users-me-app/d80322cb-9c09-4576-b45e-ed00b3c5f286/scratchpad/check.mjs"}}]}}).to_string(),
+        ]
+        .join("\n");
+        let t = parse_claude(&jsonl);
+        let users: Vec<&str> = t.turns.iter().filter(|x| x.role == Role::User).map(|x| x.text.as_str()).collect();
+        assert_eq!(users, vec!["Validate every batch.", "And keep going."], "{:?}", t.turns);
+        let text = render(&t, Path::new("/r/app"), &[]);
+        assert!(text.contains("→ Agent \"Batch validator 14/21\" finished: All 11 batches validated: valid JSON"), "{text}");
+        for noise in ["task-id", "toolu_01", "subagent_tokens", "fires each time", "claude-501"] {
+            assert!(!text.contains(noise), "{noise} left in: {text}");
+        }
+        assert!(text.contains("$ node <tmp>/scratchpad/check.mjs"), "{text}");
+        let failed =
+            task_notifications("<task-notification><status>failed</status><summary>Shell \"tests\" exited</summary></task-notification>").0;
+        assert_eq!(failed, vec!["Shell \"tests\" exited (failed)".to_string()]);
     }
 
     #[test]

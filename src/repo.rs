@@ -10,6 +10,8 @@ pub struct Repo {
     pub root: PathBuf,
     /// Shared by all worktrees of the clone; kontext's local state lives here.
     pub common_dir: PathBuf,
+    /// This worktree's own git dir (`.git`, or `.git/worktrees/<name>` for a linked worktree).
+    pub git_dir: PathBuf,
     pub remote: Option<String>,
     /// Normalized remote, e.g. `github.com/acme/shop`.
     pub id: String,
@@ -44,7 +46,7 @@ impl Repo {
         let text = String::from_utf8_lossy(&out.stdout);
         let mut lines = text.lines();
         let root = PathBuf::from(lines.next().unwrap_or_default());
-        let _git_dir = lines.next();
+        let git_dir = PathBuf::from(lines.next().unwrap_or_default());
         let common_dir = PathBuf::from(lines.next().unwrap_or_default());
         if root.as_os_str().is_empty() {
             bail!("bare repositories are not supported");
@@ -52,6 +54,7 @@ impl Repo {
         let mut repo = Repo {
             root,
             common_dir,
+            git_dir,
             remote: None,
             id: String::new(),
             slug: String::new(),
@@ -162,21 +165,40 @@ impl Repo {
         self.state_dir().join("worktrees").join(&self.worktree_key)
     }
 
-    /// Remember which worktree a state dir belongs to, and drop state of worktrees that are gone
-    /// (agent orchestrators such as Superset create and delete many of them).
-    /// Branches (local and remote-tracking, most recent first) whose tip has `path`: knowledge that
-    /// exists on another branch but has not reached this one yet. One `for-each-ref`, one `cat-file`.
-    pub fn refs_with(&self, path: &str) -> Vec<String> {
+    /// Branches (local and remote-tracking, most recent first) whose tip has any of `paths`:
+    /// knowledge that exists on another branch but has not reached this one yet. One
+    /// `for-each-ref` and one `cat-file` for all of them.
+    pub fn refs_with_any(&self, paths: &[&str]) -> Vec<String> {
         let refs = self
-            .git_opt(&["for-each-ref", "--sort=-committerdate", "--count=300", "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+            .git_opt(&[
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--count=300",
+                "--format=%(refname)%09%(refname:short)",
+                "refs/heads",
+                "refs/remotes",
+            ])
             .unwrap_or_default();
-        let names: Vec<&str> = refs.lines().filter(|r| !r.is_empty() && !r.ends_with("/HEAD") && !r.contains(' ')).collect();
-        if names.is_empty() {
+        // `refs/remotes/origin/HEAD` is short-named `origin`: a symbolic ref, not a branch
+        let names: Vec<&str> = refs
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .filter(|(full, short)| !full.ends_with("/HEAD") && !short.is_empty() && !short.contains(' '))
+            .map(|(_, short)| short)
+            .collect();
+        if names.is_empty() || paths.is_empty() {
             return Vec::new();
         }
-        let input: String = names.iter().map(|r| format!("{r}:{path}\n")).collect();
+        let input: String = names.iter().flat_map(|r| paths.iter().map(move |p| format!("{r}:{p}\n"))).collect();
         let Ok(out) = self.git_with_stdin(&["cat-file", "--batch-check"], &input) else { return Vec::new() };
-        names.iter().zip(out.lines()).filter(|(_, l)| !l.ends_with(" missing")).map(|(r, _)| r.to_string()).collect()
+        let found: Vec<bool> = out.lines().map(|l| !l.ends_with(" missing")).collect();
+        let n = paths.len();
+        names
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| found.get(i * n..(i + 1) * n).is_some_and(|f| f.iter().any(|x| *x)))
+            .map(|(_, r)| r.to_string())
+            .collect()
     }
 
     /// Roots of every worktree of this clone (the main one first).
@@ -202,6 +224,8 @@ impl Repo {
                 .is_ok_and(|root| std::path::Path::new(root.trim()).exists())
     }
 
+    /// Remember which worktree a state dir belongs to, and drop state of worktrees that are gone
+    /// (agent orchestrators such as Superset create and delete many of them).
     pub fn prune_worktree_state(&self) -> usize {
         let mine = self.worktree_state_dir();
         let _ = std::fs::create_dir_all(&mine);

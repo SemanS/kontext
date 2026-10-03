@@ -445,3 +445,364 @@ fn distill_threads() {
         assert!(current.contains("Rounding fix"), "{current}");
     }
 }
+
+/// A repository that consumes another as a submodule, the way camp-bot and city-bot consume the
+/// shared extractor: the team knowledge lives in the submodule, the agent's session in the outer one.
+#[test]
+fn knowledge_of_the_repository_that_owns_the_paths() {
+    let s = Sandbox::new("nested");
+    let inner = s.root.join("inner");
+    std::fs::create_dir_all(inner.join(".ai/decisions")).unwrap();
+    std::fs::create_dir_all(inner.join("src")).unwrap();
+    std::fs::write(inner.join(".ai/kontext.toml"), "[project]\nname = \"lib\"\n").unwrap();
+    std::fs::write(
+        inner.join(".ai/decisions/2026-09-01-lib-amounts-are-integer-cents.md"),
+        "---\nid: 2026-09-01-lib-amounts-are-integer-cents\nkind: decision\ntitle: Lib amounts are integer cents\nstatus: accepted\ndate: 2026-09-01\nsummary: Every amount in lib is an integer number of cents.\npaths: [src/**]\n---\n\n## Decision\n\nFloats broke rounding, so lib keeps integer cents.\n",
+    )
+    .unwrap();
+    std::fs::write(inner.join("src/money.ts"), "export type Cents = number;\n").unwrap();
+    let git_in = |dir: &Path, args: &[&str]| {
+        let o = s.cmd("git").arg("-C").arg(dir).args(args).output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+    };
+    git_in(&inner, &["init", "-q", "-b", "main"]);
+    git_in(&inner, &["add", "-A"]);
+    git_in(&inner, &["commit", "-q", "-m", "feat: money in cents"]);
+
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write("README.md", "# Outer\n\nAn app that uses lib.\n");
+    s.write("app/main.ts", "import { Cents } from '../lib/src/money';\n");
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "feat: app"]);
+    s.ok_git(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", inner.to_str().unwrap(), "lib"]);
+    s.ok_git(&["commit", "-q", "-m", "chore: add lib"]);
+    assert!(!s.repo.join(".ai").exists() && s.repo.join("lib/.ai/decisions").is_dir());
+
+    // the brief of a repository without knowledge of its own carries its submodule's
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.contains("## lib/ — a nested repository") && brief.contains("Lib amounts are integer cents"), "{brief}");
+    // focus inside the submodule: its brief answers, and its references resolve from here
+    let brief = s.kontext(&["brief", "--no-adapters", "--focus", "lib/src"]);
+    assert!(brief.contains("answered from lib at lib/") && brief.contains("[lib/2026-09-01-lib]"), "{brief}");
+    assert!(!brief.contains("lib-amounts-are-integer-cents]"), "references are short: {brief}");
+    // …also when the agent names it as the submodule's own AGENTS.md would, relative to the submodule
+    let brief = s.kontext(&["brief", "--no-adapters", "--focus", "src/money.ts"]);
+    assert!(brief.contains("answered from lib at lib/") && brief.contains("Lib amounts are integer cents"), "{brief}");
+    let read = s.kontext(&["call", "ctx_read", r#"{"uri":"kx:lib/2026-09-01-lib"}"#]);
+    assert!(read.contains("Floats broke rounding"), "{read}");
+    let read = s.kontext(&["call", "ctx_read", r#"{"uri":"kx:2026-09-01-lib","level":0}"#]);
+    assert!(read.contains("(entry of lib/)"), "an unprefixed id of a submodule entry: {read}");
+    let search = s.kontext(&["search", "integer", "cents"]);
+    assert!(search.contains("kx:lib/2026-09-01-lib-amounts-are-integer-cents") && search.contains("lib/]"), "{search}");
+    let why = s.kontext(&["why", "lib/src/money.ts"]);
+    assert!(why.contains("answered from lib") && why.contains("Lib amounts are integer cents") && why.contains("money in cents"), "{why}");
+
+    // what an agent learns about the submodule's code lands in the submodule's inbox
+    let cap = s.kontext(&[
+        "call",
+        "ctx_capture",
+        r#"{"kind":"learning","title":"Rounding happens last","body":"Round once, after summing cents.","paths":["lib/src/money.ts","lib/src/rounding.ts"]}"#,
+    ]);
+    assert!(cap.contains("Captured in lib (lib/)") && cap.contains(r#"dir: "lib""#), "{cap}");
+    let inbox = s.kontext(&["inbox", "-C", s.repo.join("lib").to_str().unwrap()]);
+    assert!(inbox.contains("Rounding happens last"), "{inbox}");
+    let entry = std::fs::read_dir(s.repo.join(".git/modules/lib/kontext/inbox")).unwrap().flatten().next().unwrap();
+    let text = std::fs::read_to_string(entry.path()).unwrap();
+    assert!(text.contains("paths: [src/money.ts, src/rounding.ts]"), "paths are rewritten for the submodule, new files too: {text}");
+    let cap = s.kontext(&[
+        "call",
+        "ctx_capture",
+        r#"{"kind":"learning","title":"Exports stream CSV","body":"Large exports stream rows instead of building a file.","paths":["reports/export.ts"],"visibility":"private"}"#,
+    ]);
+    assert!(cap.contains("not found in") && cap.contains("reports/export.ts"), "{cap}");
+
+    // a private note in a repository without a store is found again
+    let search = s.kontext(&["search", "stream", "csv", "exports"]);
+    assert!(search.contains("Exports stream CSV") && search.contains("local note, private"), "{search}");
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.contains("Local notes") && brief.contains("Exports stream CSV"), "{brief}");
+
+    // `dir`, and absolute paths into another repository
+    let brief = s.kontext(&["call", "ctx_brief", r#"{"dir":"lib"}"#]);
+    assert!(brief.contains("answered from lib") && brief.contains("Lib amounts are integer cents"), "{brief}");
+    let focus = format!(r#"{{"focus":["{}"]}}"#, inner.join("src").display());
+    let brief = s.kontext(&["call", "ctx_brief", &focus]);
+    assert!(brief.contains("answered from lib at") && brief.contains("Lib amounts are integer cents"), "{brief}");
+
+    // the submodule's clone has no hooks: the report says so instead of promising trailers
+    let id = inbox.split_whitespace().next().unwrap().to_string();
+    let report = s.kontext(&["prepare-commit", "-C", s.repo.join("lib").to_str().unwrap(), "--promote", &id]);
+    assert!(report.contains("Learning: ") && report.contains("hook is not installed in this clone"), "{report}");
+    let brief = s.kontext(&["brief", "-C", s.repo.join("lib").to_str().unwrap(), "--no-adapters"]);
+    assert!(brief.contains("Git hooks are not installed"), "{brief}");
+
+    // `-C` names the repository, not the hooks directory
+    let o = s
+        .cmd(env!("CARGO_BIN_EXE_kontext"))
+        .current_dir(&s.root)
+        .args(["-C", s.repo.to_str().unwrap(), "hooks", "install"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(
+        s.repo.join(".git/hooks/pre-commit").is_file() && !s.repo.join("pre-commit").exists(),
+        "{}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+
+    // the MCP server tells an agent where the knowledge is
+    let instructions = mcp_instructions(&s.repo, &s.config);
+    assert!(instructions.contains("lib/ keeps team knowledge of its own") && instructions.contains("`dir`"), "{instructions}");
+}
+
+fn mcp_instructions(repo: &Path, config: &Path) -> String {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kontext"))
+        .arg("mcp")
+        .current_dir(repo)
+        .env("KONTEXT_CONFIG_DIR", config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{{}},"clientInfo":{{"name":"test","version":"0"}}}}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+    drop(stdin);
+    let _ = child.wait();
+    let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+    v["result"]["instructions"].as_str().unwrap_or("").to_string()
+}
+
+fn git_in(s: &Sandbox, dir: &Path, args: &[&str]) {
+    let o = s.cmd("git").arg("-C").arg(dir).args(args).output().unwrap();
+    assert!(o.status.success(), "git {args:?} in {}: {}", dir.display(), String::from_utf8_lossy(&o.stderr));
+}
+
+/// A repository with `.ai/` holding these decisions (id, title, paths) and one file per path root.
+fn repo_with_store(s: &Sandbox, dir: &Path, name: &str, decisions: &[(&str, &str, &str)]) {
+    std::fs::create_dir_all(dir.join(".ai/decisions")).unwrap();
+    std::fs::write(dir.join(".ai/kontext.toml"), format!("[project]\nname = \"{name}\"\n")).unwrap();
+    for (id, title, paths) in decisions {
+        std::fs::write(
+            dir.join(format!(".ai/decisions/{id}.md")),
+            format!("---\nid: {id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: {}\nsummary: {title}, for the reasons the body gives in some detail so that the line is long.\npaths: [{paths}]\n---\n\nBody.\n", &id[..10]),
+        )
+        .unwrap();
+    }
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/money.ts"), "export type Cents = number;\n").unwrap();
+    git_in(s, dir, &["init", "-q", "-b", "main"]);
+    git_in(s, dir, &["add", "-A"]);
+    git_in(s, dir, &["commit", "-q", "-m", "feat: start"]);
+}
+
+#[test]
+fn routing_edges() {
+    let s = Sandbox::new("edges");
+    let lib = s.root.join("lib-src");
+    repo_with_store(&s, &lib, "lib", &[("2026-09-01-lib-amounts-are-integer-cents", "Lib amounts are integer cents", "src/**")]);
+    let vend = s.root.join("vend-src");
+    std::fs::create_dir_all(vend.join("src")).unwrap();
+    std::fs::write(vend.join("src/x.ts"), "export const x = 1;\n").unwrap();
+    git_in(&s, &vend, &["init", "-q", "-b", "main"]);
+    git_in(&s, &vend, &["add", "-A"]);
+    git_in(&s, &vend, &["commit", "-q", "-m", "feat: vendored"]);
+
+    // an outer repository with plenty of knowledge of its own
+    let outer: Vec<(String, String)> =
+        (0..24).map(|i| (format!("2026-08-{:02}-outer-rule-number-{i}", i % 28 + 1), format!("Outer rule number {i}"))).collect();
+    let refs: Vec<(&str, &str, &str)> = outer.iter().map(|(id, t)| (id.as_str(), t.as_str(), "app/**")).collect();
+    repo_with_store(&s, &s.repo, "outer", &refs);
+    s.write("app/main.ts", "export const app = 1;\n");
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "feat: app"]);
+    s.ok_git(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib.to_str().unwrap(), "lib"]);
+    s.ok_git(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", vend.to_str().unwrap(), "vend"]);
+    s.ok_git(&["commit", "-q", "-m", "chore: submodules"]);
+
+    // focus in the submodule comes first, before the outer repository's unfocused knowledge
+    let brief = s.kontext(&["brief", "--no-adapters", "--focus", "lib/src/money.ts"]);
+    assert!(brief.contains("## lib/ — a nested repository") && brief.contains("Lib amounts are integer cents"), "{brief}");
+    assert!(brief.contains("Outer rule number"), "the outer knowledge still follows: {brief}");
+    // without focus there, the submodule is a pointer
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.contains("- lib/ keeps its own team knowledge (1 decision)") && !brief.contains("Lib amounts are"), "{brief}");
+
+    // a submodule without a store takes no captures: the outer repository keeps them
+    let brief = s.kontext(&["brief", "--no-adapters", "--focus", "vend/src"]);
+    assert!(!brief.contains("vend/ — a nested repository"), "{brief}");
+    let cap = s.kontext(&[
+        "call",
+        "ctx_capture",
+        r#"{"kind":"learning","title":"Vendored code is patched in place","body":"We patch vend directly.","paths":["vend/src/x.ts"]}"#,
+    ]);
+    assert!(cap.starts_with("Captured as inbox:") && cap.contains("vend/ keeps no team knowledge"), "{cap}");
+    let mixed = s.kontext(&[
+        "call",
+        "ctx_capture",
+        r#"{"kind":"learning","title":"Cents cross the app boundary","body":"The app keeps lib's cents.","paths":["lib/src/money.ts","app/main.ts"]}"#,
+    ]);
+    assert!(mixed.starts_with("Captured as inbox:") && mixed.contains("span more than one repository"), "{mixed}");
+    // a file this repository is about to get keeps the capture here too
+    let new_file = s.kontext(&[
+        "call",
+        "ctx_capture",
+        r#"{"kind":"learning","title":"The new feature reads cents","body":"It takes lib's cents.","paths":["lib/src/money.ts","app/new_feature.ts"]}"#,
+    ]);
+    assert!(new_file.starts_with("Captured as inbox:") && new_file.contains("not found in outer: app/new_feature.ts"), "{new_file}");
+    assert!(!cap.contains("with `dir: \"vend\"`") || cap.contains("a private note can go there"), "no advice that fails: {cap}");
+    let kept: Vec<String> = std::fs::read_dir(s.repo.join(".git/kontext/inbox"))
+        .unwrap()
+        .flatten()
+        .filter(|f| f.path().is_file())
+        .map(|f| std::fs::read_to_string(f.path()).unwrap())
+        .collect();
+    assert!(kept.iter().any(|t| t.contains("paths: [vend/src/x.ts]")), "{kept:?}");
+    assert!(kept.iter().any(|t| t.contains("paths: [lib/src/money.ts, app/main.ts]")), "{kept:?}");
+
+    // `.gitmodules` cannot pull in a repository outside this one: an absolute path, a symlink
+    std::os::unix::fs::symlink(&lib, s.repo.join("evil")).unwrap();
+    let mut gm = std::fs::read_to_string(s.repo.join(".gitmodules")).unwrap();
+    gm.push_str(&format!("[submodule \"abs\"]\n\tpath = {}\n[submodule \"evil\"]\n\tpath = evil\n", lib.display()));
+    std::fs::write(s.repo.join(".gitmodules"), gm).unwrap();
+    let search = s.kontext(&["search", "integer", "cents"]);
+    assert!(search.contains("kx:lib/") && !search.contains("kx:evil/") && !search.contains("kx:/"), "{search}");
+    s.ok_git(&["checkout", "-q", "--", ".gitmodules"]);
+    std::fs::remove_file(s.repo.join("evil")).unwrap();
+
+    // the old `hooks install --dir <hooks dir>` now names the repository: refused, with the new flag
+    std::fs::create_dir_all(s.repo.join(".githooks")).unwrap();
+    let o = s.cmd(env!("CARGO_BIN_EXE_kontext")).args(["hooks", "install", "--dir", ".githooks"]).output().unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("--hooks-dir .githooks"), "{err}");
+
+    // a store kept in docs/adr, its config committed, no overview: this branch is not "another branch"
+    let adr = s.root.join("adr");
+    std::fs::create_dir_all(adr.join("docs/adr")).unwrap();
+    std::fs::create_dir_all(adr.join(".ai")).unwrap();
+    std::fs::write(
+        adr.join(".ai/kontext.toml"),
+        "[project]\nname = \"adr\"\n\n[store.kinds.decision]\npath = \"docs/adr\"\nstyle = \"fields\"\nnumbering = \"sequential\"\n\n[hooks]\ntrailers = false\n",
+    )
+    .unwrap();
+    std::fs::write(adr.join("docs/adr/0001-record-decisions.md"), "# 1. Record decisions\n\n**Status:** Accepted\n\nWe keep ADRs.\n")
+        .unwrap();
+    git_in(&s, &adr, &["init", "-q", "-b", "main"]);
+    git_in(&s, &adr, &["add", "-A"]);
+    git_in(&s, &adr, &["commit", "-q", "-m", "docs: adr"]);
+    let a = adr.to_str().unwrap();
+    let brief = s.kontext(&["brief", "-C", a, "--no-adapters"]);
+    assert!(!brief.contains("Team knowledge exists on"), "{brief}");
+    // …and a team that turned trailers off is not told to write them by hand
+    let cap =
+        s.kontext(&["capture", "-C", a, "--kind", "decision", "--title", "Use cents", "--paths", "src/**", "--body", "Integer cents."]);
+    let id = cap.trim().rsplit(':').next().unwrap().trim().to_string();
+    let report = s.kontext(&["prepare-commit", "-C", a, "--promote", &id]);
+    assert!(report.contains("promoted") && !report.contains("Commit trailers"), "{report}");
+}
+
+/// A long-running server sees a submodule that was initialized after it started.
+#[test]
+fn a_running_server_sees_a_submodule_initialized_later() {
+    let s = Sandbox::new("late");
+    let lib = s.root.join("lib-src");
+    repo_with_store(&s, &lib, "lib", &[("2026-09-01-lib-amounts-are-integer-cents", "Lib amounts are integer cents", "src/**")]);
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write("README.md", "# Outer\n");
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "feat: outer"]);
+    s.ok_git(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib.to_str().unwrap(), "lib"]);
+    s.ok_git(&["commit", "-q", "-m", "chore: lib"]);
+    s.ok_git(&["submodule", "deinit", "-q", "-f", "lib"]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kontext"))
+        .arg("mcp")
+        .current_dir(&s.repo)
+        .env("KONTEXT_CONFIG_DIR", &s.config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut call = |id: i64, args: &str| -> String {
+        writeln!(stdin, r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"ctx_brief","arguments":{args}}}}}"#)
+            .unwrap();
+        stdin.flush().unwrap();
+        loop {
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0, "server closed");
+            let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if v["id"] == id {
+                return v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string();
+            }
+        }
+    };
+    let before = call(1, r#"{"dir":"lib"}"#);
+    assert!(!before.contains("Lib amounts are integer cents"), "{before}");
+    s.ok_git(&["-c", "protocol.file.allow=always", "submodule", "update", "-q", "--init"]);
+    let after = call(2, r#"{"dir":"lib"}"#);
+    assert!(after.contains("Lib amounts are integer cents"), "{after}");
+    let outer = call(3, "{}");
+    assert!(outer.contains("## lib/ — a nested repository"), "{outer}");
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Knowledge pushed by a teammate and fetched, not pulled; a worktree kept inside the main one.
+#[test]
+fn upstream_knowledge_and_inner_worktrees() {
+    let s = Sandbox::new("upstream");
+    let up = s.root.join("up");
+    repo_with_store(&s, &up, "shop", &[("2026-09-01-prices-are-integer-cents", "Prices are integer cents", "src/**")]);
+    // the clone's main still points at a commit before the knowledge arrived
+    std::fs::remove_dir_all(&s.repo).unwrap();
+    let o = s.cmd("git").current_dir(&s.root).args(["clone", "-q", up.to_str().unwrap(), "repo"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    std::fs::write(s.repo.join("README.md"), "# Shop\n").unwrap();
+    s.ok_git(&["checkout", "-q", "--orphan", "fresh"]);
+    s.ok_git(&["rm", "-rq", "--cached", "."]);
+    std::fs::remove_dir_all(s.repo.join(".ai")).unwrap();
+    s.ok_git(&["add", "README.md"]);
+    s.ok_git(&["commit", "-q", "-m", "chore: start"]);
+    s.ok_git(&["branch", "-q", "-D", "main"]);
+    s.ok_git(&["branch", "-q", "-m", "main"]);
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.contains("Team knowledge exists on `origin/main`"), "{brief}");
+    s.ok_git(&["remote", "set-head", "origin", "-d"]);
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.contains("Team knowledge exists on `origin/main`"), "without origin/HEAD too: {brief}");
+
+    // a worktree of the same clone kept inside the main one is another worktree, not a submodule
+    s.ok_git(&["reset", "-q", "--hard", "origin/main"]);
+    let inner = s.repo.join(".claude/worktrees/wt2");
+    s.ok_git(&["worktree", "add", "-q", "-b", "wt2", inner.to_str().unwrap()]);
+    let file = inner.join("src/money.ts");
+    let why = s.kontext(&["why", file.to_str().unwrap()]);
+    assert!(why.contains("answered from shop at .claude/worktrees/wt2/") && why.contains("Prices are integer cents"), "{why}");
+    let cap = s.kontext(&[
+        "call",
+        "ctx_capture",
+        &format!(r#"{{"kind":"learning","title":"Cents survive refunds","body":"Refunds stay in cents.","paths":["{}"]}}"#, file.display()),
+    ]);
+    assert!(cap.contains("Captured in shop (.claude/worktrees/wt2/)"), "{cap}");
+    let theirs = s.kontext(&["prepare-commit", "-C", inner.to_str().unwrap()]);
+    let ours = s.kontext(&["prepare-commit"]);
+    std::fs::write(inner.join("src/money.ts"), "export type Cents = number; // refunds too\n").unwrap();
+    let theirs_changed = s.kontext(&["prepare-commit", "-C", inner.to_str().unwrap()]);
+    assert!(
+        theirs_changed.contains("Cents survive refunds") && !ours.contains("## Inbox candidates"),
+        "{theirs}\n---\n{ours}\n---\n{theirs_changed}"
+    );
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(!brief.contains("a nested repository"), "{brief}");
+}

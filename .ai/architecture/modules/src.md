@@ -16,6 +16,7 @@ deepened_fingerprint: e415f6c1f688
 
 - `main.rs` is the clap CLI; `mcp.rs` serves the same operations over stdio JSON-RPC, concurrently, reopening the repo context when config files change. `tools.rs` defines the agent tool surface shared by both.
 - `app.rs` ties a discovered `Repo`, the layered `Config` (defaults → user → user-per-repo → shared `.ai/kontext.toml` → clone-local), the lazily built adapter `Registry` and the throttled index refresh together.
+- `route.rs` decides which repository a path belongs to (this one, a submodule, another worktree or repository) for `dir` and for paths in focus, `ctx_why` and captures; `app::open_shared` keeps those other repositories' contexts.
 - `store.rs` parses/writes entries in two styles (front matter, or classic ADR `**Status:**` fields) and renders `.ai/README.md`; `inbox.rs` keeps local candidates in the git common dir.
 - `ops.rs` implements the behaviour; `hooks.rs` installs guarded hook blocks and runs pre-commit (validate + secret scan + staged index), prepare-commit-msg (trailers) and post-* (sync events).
 - Invariants: nothing under `.git/kontext` is authoritative (index, caches, snapshots, outbox are rebuildable); repo-declared adapters never run without `kontext trust`; hooks never block on the network.

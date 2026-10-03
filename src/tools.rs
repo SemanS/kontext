@@ -11,14 +11,31 @@ pub const INSTRUCTIONS: &str = "kontext is this repository's shared, reviewed te
 Start each task with ctx_brief (pass `focus` with the paths or topic you will work on). Use ctx_search / ctx_read for detail and ctx_why to learn why code is the way it is. \
 When you and the user settle something durable (a decision, a convention, a non-obvious pitfall), record it with ctx_capture — short: what, why, consequences, and the paths it governs. \
 Before committing, run ctx_prepare_commit and promote the candidates that belong to the change so they are reviewed together with it. \
-Shared knowledge changes only through commits and review; supersede a decision instead of rewriting it.";
+Shared knowledge changes only through commits and review; supersede a decision instead of rewriting it. \
+Another worktree, submodule or repository? Pass `dir` (a path inside it).";
 
 /// Instructions for a repository without a knowledge store (kontext registered for every
-/// repository of a user, but set up only in some).
-pub const NOT_SET_UP_INSTRUCTIONS: &str = "kontext is not set up in this repository: it has no team knowledge store. \
-ctx_brief, ctx_search, ctx_read and ctx_why still work over its docs and commit history. \
-Do not capture team knowledge or bootstrap it (ctx_capture, ctx_init) unless the user asks for it — that would add files the team has not agreed to. \
-Private notes (ctx_capture with visibility private) stay local and are fine.";
+/// repository of a user, but set up only in some). In every session's prompt: keep it short.
+pub const NOT_SET_UP_INSTRUCTIONS: &str = "kontext is not set up in this repository (no team knowledge store). \
+ctx_brief with focus, ctx_search and ctx_why still answer from its docs, history and private notes. \
+Capture team knowledge or bootstrap it (ctx_capture, ctx_init) only when the user asks; private notes (visibility private) are fine. \
+Another worktree, submodule or repository? Pass `dir` (a path inside it).";
+
+/// The server's instructions for `app`: what it has, and the submodules that keep team knowledge
+/// of their own (an agent in camp-bot works in `extractor/` and its decisions live there).
+pub fn instructions(app: &App) -> String {
+    let mut s = if app.is_set_up() { INSTRUCTIONS.to_string() } else { NOT_SET_UP_INSTRUCTIONS.to_string() };
+    let nested: Vec<String> = crate::route::nested_stores(app).into_iter().map(|n| format!("{}/", n.rel)).collect();
+    if !nested.is_empty() {
+        s.push_str(&format!(
+            " {} keep{} team knowledge of {}: start with ctx_brief and focus paths there.",
+            nested.join(", "),
+            if nested.len() == 1 { "s" } else { "" },
+            if nested.len() == 1 { "its own" } else { "their own" }
+        ));
+    }
+    s
+}
 
 const NOT_SET_UP: &str = "kontext is not set up in this repository (no knowledge store), so nothing is written into it. \
 Ask the user: `kontext init` sets it up (or ctx_init with bootstrap=true when they asked you to). Private notes (visibility: private) still work.";
@@ -60,11 +77,17 @@ fn annotations(name: &str) -> Value {
     a
 }
 
+/// Tools that act on one repository and take `dir` for another (every `ctx_` tool accepts it).
+const TAKES_DIR: &[&str] = &["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_log", "ctx_capture", "ctx_inbox", "ctx_prepare_commit"];
+
 pub fn definitions() -> Vec<Value> {
     let mut defs = tool_list();
     for d in &mut defs {
         let name = d["name"].as_str().unwrap_or("").to_string();
         d["annotations"] = annotations(&name);
+        if TAKES_DIR.contains(&name.as_str()) {
+            d["inputSchema"]["properties"]["dir"] = s("Path inside another worktree, submodule or repo to act on");
+        }
     }
     defs
 }
@@ -82,7 +105,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_search",
-            "description": "Search team knowledge (decisions, conventions, learnings, incidents, module docs), repository docs and commit history, plus connected memory systems. Returns compact hits with URIs — open one with ctx_read.",
+            "description": "Search team knowledge (decisions, conventions, learnings, incidents, module docs), repository docs, commit history, local inbox notes, submodules with their own knowledge and connected memory systems. Compact hits with URIs; open one with ctx_read.",
             "inputSchema": {"type": "object", "properties": {
                 "query": s("What you are looking for, in plain words or identifiers"),
                 "kinds": arr("Restrict local results: decision, convention, learning, incident, architecture, doc, commit"),
@@ -101,7 +124,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_capture",
-            "description": "Record something durable: a decision made, a convention, a non-obvious learning or pitfall, an incident. Keep it short (what, why, consequences) and list the paths it governs. It lands in the local inbox (not shared) until promoted into a commit; promote=true writes it into the repo's knowledge store right away. visibility=private keeps it personal (mirrored only to personal memory adapters).",
+            "description": "Record something durable: a decision, a convention, a non-obvious learning or pitfall, an incident. Short (what, why, consequences), with the paths it governs: it goes to the repository that owns them. It waits in the local inbox until promoted into a commit (promote=true writes it into the store now); visibility=private keeps it personal.",
             "inputSchema": {"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["decision", "convention", "learning", "incident"], "description": "What it is (pitfalls are learnings)"},
                 "title": s("Short statement, e.g. 'Use Tantivy for local recall'"),
@@ -110,9 +133,9 @@ fn tool_list() -> Vec<Value> {
                 "paths": arr("Repo paths or globs this governs, e.g. apps/api/src/billing/**"),
                 "tags": arr("Optional tags"),
                 "visibility": {"type": "string", "enum": ["team", "private"]},
-                "supersedes": arr("Ids of entries this replaces (they get marked superseded)"),
-                "commits": arr("Short shas of the commits it came from (e.g. when distilled from a thread)"),
-                "source": s("Where it was found, e.g. a thread from ctx_threads such as claude:4f1c2a9b (kept in the inbox only)"),
+                "supersedes": arr("Ids of entries it replaces (marked superseded)"),
+                "commits": arr("Commits it came from (short shas)"),
+                "source": s("Where it was found, e.g. thread claude:4f1c2a9b (kept in the inbox only)"),
                 "status": s("Decisions: proposed | accepted (default)"),
                 "promote": {"type": "boolean", "description": "Write into the repo store now instead of the inbox"}
             }, "required": ["kind", "title", "body"]}
@@ -136,11 +159,11 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_threads",
-            "description": "Agent threads of this repository on this machine — Claude Code and Codex sessions, also grouped by Superset workspace — as compact, redacted transcripts, to distill durable knowledge from (see the kontext-distill prompt). Without `thread` it lists the recent ones; with `thread` it returns that transcript in parts.",
+            "description": "This repository's agent threads on this machine (Claude Code, Codex, by Superset workspace) as compact, redacted transcripts to distill knowledge from (prompt kontext-distill). Without `thread`: the recent ones; with it: that transcript, in parts.",
             "inputSchema": {"type": "object", "properties": {
                 "thread": s("claude:<id>, codex:<id>, superset:<workspace id or worktree name> (every thread of that workspace), a transcript file, or `last`"),
                 "part": {"type": "integer", "description": "Part of a long transcript to return (1-based, default 1)"},
-                "budget_chars": {"type": "integer", "description": "Characters per part (default 40000)"}
+                "budget_chars": {"type": "integer", "description": "Characters per part (default 20000, at most 80000)"}
             }}
         }),
         json!({
@@ -153,7 +176,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_prepare_commit",
-            "description": "Run before committing. Summarises the staged change, lists recorded knowledge it touches, inbox candidates to promote into this commit (promote=[ids] writes and stages them; drop=[ids] discards), validation and secret-scan results for knowledge files, module docs to refresh, and the commit trailers the hook will add.",
+            "description": "Run before committing: the staged change, recorded knowledge it touches, inbox candidates to ship with it (promote=[ids] writes and stages them, drop=[ids] discards), checks of knowledge files, module docs to refresh, and the commit trailers (and whether a hook adds them).",
             "inputSchema": {"type": "object", "properties": {
                 "promote": arr("Inbox ids to promote and stage"),
                 "drop": arr("Inbox ids to discard")
@@ -161,7 +184,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_init",
-            "description": "Step-by-step knowledge bootstrap for this repository. Returns progress and the next task(s): describe the project, summarise a module, or distill decisions from git history. Do the task by reading what it lists, then call ctx_init_submit. Repeat until complete; stopping any time is fine — progress is kept. In a repository without a knowledge store it starts one only with bootstrap=true — use that only when the user asked to set kontext up.",
+            "description": "Knowledge bootstrap, one task at a time: progress and the next task(s) (describe the project, summarise a module, distill decisions from history). Do it, then ctx_init_submit; stopping keeps progress. Without a knowledge store it starts one only with bootstrap=true, and only when the user asked to set kontext up.",
             "inputSchema": {"type": "object", "properties": {
                 "count": {"type": "integer", "description": "How many tasks to return (default 1, max 5)"},
                 "bootstrap": {"type": "boolean", "description": "Start the knowledge store (.ai/) if the repository has none — only when the user asked for it"}
@@ -206,6 +229,19 @@ fn int_arg(args: &Value, key: &str) -> Option<usize> {
 }
 
 pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String> {
+    // `dir`: the tool runs in another worktree, submodule or repository
+    if let Some(dir) = str_arg(args, "dir") {
+        let target = crate::route::open_dir(app, &dir)?;
+        let mut rest = args.clone();
+        if let Some(o) = rest.as_object_mut() {
+            o.remove("dir");
+        }
+        if target.repo.root == app.repo.root {
+            return call(app, name, &rest, origin);
+        }
+        let out = call(&target, name, &rest, origin)?;
+        return Ok(format!("{}\n{out}", crate::route::banner(app, &target)));
+    }
     match name {
         "ctx_brief" => {
             let focus = list_arg(args, "focus");
@@ -234,6 +270,12 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             ops::read(app, &uri, level)
         }
         "ctx_capture" => {
+            // knowledge belongs to the repository that owns the paths it governs: a capture about
+            // `extractor/…` made from camp-bot goes into the extractor's inbox
+            let routing = crate::route::owner_of(app, &list_arg(args, "paths"));
+            let (target, paths, path_notes) = (routing.owner, routing.paths, routing.notes);
+            let home = app;
+            let app: &App = target.as_deref().unwrap_or(app);
             if !app.is_set_up() && str_arg(args, "visibility").as_deref() != Some("private") {
                 bail!("{NOT_SET_UP}");
             }
@@ -242,7 +284,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 title: str_arg(args, "title").ok_or_else(|| anyhow!("title is required"))?,
                 body: str_arg(args, "body").unwrap_or_default(),
                 summary: str_arg(args, "summary"),
-                paths: list_arg(args, "paths"),
+                paths,
                 tags: list_arg(args, "tags"),
                 visibility: str_arg(args, "visibility"),
                 supersedes: list_arg(args, "supersedes"),
@@ -263,7 +305,20 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                     out.location
                 )
             };
-            for n in out.notes {
+            if target.is_some() {
+                let dir = crate::route::dir_arg(home, app);
+                let commit = if out.visibility == "private" {
+                    String::new()
+                } else {
+                    format!("\nIt ships with a commit there: ctx_prepare_commit with `dir: \"{dir}\"`.")
+                };
+                text = format!(
+                    "Captured in {} ({}), the repository that owns these paths. {text}{commit}",
+                    app.project_name(),
+                    crate::route::label(home, app)
+                );
+            }
+            for n in out.notes.into_iter().chain(path_notes) {
                 text.push_str(&format!("\nnote: {n}"));
             }
             Ok(text)
@@ -322,7 +377,8 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 text.push_str(&threads::render(&t, &app.repo.root, &extra));
                 text.push_str("\n\n");
             }
-            let budget = int_arg(args, "budget_chars").unwrap_or(40_000).clamp(4_000, 80_000);
+            // a part has to fit one tool result: clients cut long ones (Codex at about 10k tokens)
+            let budget = int_arg(args, "budget_chars").unwrap_or(20_000).clamp(4_000, 80_000);
             let parts = threads::parts(&text, budget);
             let n = parts.len().max(1);
             let i = int_arg(args, "part").unwrap_or(1).clamp(1, n);
@@ -481,7 +537,7 @@ When finished (or when I stop you), summarise what was written and suggest commi
 2. For each inbox candidate that belongs to this change, confirm with me, then promote it (ctx_prepare_commit promote=[ids]); drop stale ones.\n\
 3. If the change embodies a decision or a non-obvious lesson that is not recorded, draft it with ctx_capture (short: what, why, consequences, paths) and promote it.\n\
 4. Fix any validation or secret-scan errors it reports.\n\
-5. Propose the commit message; the prepare-commit-msg hook adds the knowledge trailers."
+5. Propose the commit message with the knowledge trailers the report lists (the prepare-commit-msg hook adds them when it is installed)."
                 .into(),
         ),
         "kontext-reflect" => (

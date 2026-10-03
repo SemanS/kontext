@@ -115,8 +115,8 @@ Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich 
 
 | Príkaz | Význam |
 | --- | --- |
-| `kontext hooks install [--dir <dir>]` | nainštaluje do `core.hooksPath`, `.git/hooks` alebo `<dir>` |
-| `kontext hooks uninstall [--dir <dir>]` | odstráni bloky kontextu, obnoví zreťazené originály |
+| `kontext hooks install [--hooks-dir <dir>]` | nainštaluje do `core.hooksPath`, `.git/hooks` alebo `<dir>` |
+| `kontext hooks uninstall [--hooks-dir <dir>]` | odstráni bloky kontextu, obnoví zreťazené originály |
 | `kontext hooks status` | ktoré hooky obsahujú blok |
 | `kontext hook <name> [args…]` | vstupný bod, ktorý volajú hooky (`pre-commit`, `prepare-commit-msg`, `post-commit`, `post-merge`, `post-rewrite`) |
 

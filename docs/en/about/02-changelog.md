@@ -2,6 +2,30 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+From watching how agents used kontext across Superset workspaces: most of the time they called it, it had nothing to give, because the knowledge was in a submodule, another worktree or the local inbox.
+
+**The repository that owns the paths**
+- Every repository-scoped tool takes `dir`: a path inside another worktree, a submodule or a sibling repository. Answers from another repository start with where they came from.
+- Focus paths, `ctx_why` targets and `ctx_capture` paths inside a submodule are answered from the submodule. Captures go into its inbox with the paths rewritten, when it keeps team knowledge. A brief of a repository without knowledge of its own carries its submodules'. Search covers them too (`kx:extractor/<id>`), and `ctx_read` opens their entries and commits.
+- A path relative to a submodule (`apps/pipeline-runner`, as the submodule's `AGENTS.md` names it) counts as the submodule's when only one submodule has it. Absolute paths into another repository or worktree are answered from there. A capture with paths that exist nowhere says so.
+- A branch without the team knowledge is told which branch, and which local worktree, has it. The server's instructions name submodules with their own knowledge.
+
+**Local notes come back**
+- `ctx_search` finds inbox notes (team candidates and private notes), and the brief lists the ones matching its focus. Private captures in a repository without a store were written and never found again.
+- In a repository without a store, a brief with a focus lists the related docs and commits, once a search has built the local index (a brief does not build it).
+
+**Smaller answers**
+- Brief references are the shortest unique prefix of an id (`[2026-09-28-adapters]`), and a dated reference drops the repeated date: decision lines are about 20% shorter, and `ctx_read` resolves the prefix.
+- `ctx_threads` renders Claude Code's `<task-notification>` (a finished background agent: ids, output file, note, usage, the whole result) as one line, and shortens per-session temp paths. On a thread that fanned out work, the transcript went from about 81,000 to 30,000 characters. Parts default to 20,000 characters, so that one fits a tool result (Codex cut 40,000-character parts and the agent read them twice).
+- The server's instructions for a repository without a store are shorter. The tool descriptions are tighter, which pays for `dir`.
+
+**Commits**
+- `ctx_prepare_commit` says whether the prepare-commit-msg hook adds the trailers. A fresh clone has no hooks, and the report used to promise them anyway. The brief warns when a clone with a knowledge store has no hooks.
+- `kontext hooks install` / `uninstall` take `--hooks-dir` instead of `--dir`, which collided with the global `-C/--dir`: `kontext -C <repo> hooks install` wrote the hooks into the repository root. The old `hooks install --dir .githooks` is refused with a pointer to `--hooks-dir`.
+- The `AGENTS.md` block written by `kontext connect agents-md` mentions `dir`.
+
 ## 0.1.5 (2026-09-29)
 
 **Autopilot**

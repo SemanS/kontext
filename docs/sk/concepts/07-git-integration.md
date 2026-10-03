@@ -22,7 +22,7 @@ Jednorazovo obídeš cez `KONTEXT_SKIP=1 git commit …` alebo `git commit --no-
 - Hook, ktorý nie je shellový (napr. Node skript), sa premenuje na `<hook>.kontext-chained` a zavolá sa po bloku kontextu.
 - Každý blok hľadá `kontext` v `PATH`, v `~/.local/bin` a `~/.cargo/bin` a bez neho neurobí nič. Zdieľané adresáre hookov teda nerozbijú kolegov, ktorí kontext nemajú.
 - Ak je adresár hookov sledovaný (napr. `.githooks/`), zmena sa ukáže v `git status`: commitni ju, aby hooky zdieľal celý tím.
-- Ak sledovaný adresár hookov existuje, ale ešte nie je aktívny (napríklad `core.hooksPath` nastaví až `npm install`), kontext ťa na to upozorní a `kontext hooks install --dir .githooks` ho pokryje.
+- Ak sledovaný adresár hookov existuje, ale ešte nie je aktívny (napríklad `core.hooksPath` nastaví až `npm install`), kontext ťa na to upozorní a `kontext hooks install --hooks-dir .githooks` ho pokryje.
 - Správcovia hookov, ktorí súbory hookov generujú znova (lefthook, pre-commit), sa rozpoznajú; namiesto toho pridaj `kontext hook <name>` do ich konfigurácie.
 
 `kontext hooks status` ukáže, čo je nainštalované; `kontext hooks uninstall` bloky odstráni a obnoví zreťazené originály.

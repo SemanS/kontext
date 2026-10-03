@@ -77,9 +77,34 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
                 },
             }
         }
-        let opts = SearchOpts { limit, kinds, sources: Vec::new() };
+        let opts = SearchOpts { limit, kinds: kinds.clone(), sources: Vec::new() };
         let hits = app.with_index(|idx| idx.search(&req.query, &opts))?;
         groups.push(HitGroup { source: "local".into(), weight: 1.0, hits });
+        let mut local_notes = inbox_hits(app, &req.query, &kinds, limit);
+        // a submodule's team knowledge belongs to the work done here too (camp-bot's `extractor/`),
+        // and so do the notes captured into its inbox from here
+        for n in crate::route::nested_stores(app).into_iter().take(3) {
+            let label = format!("{}/", n.rel);
+            match n.app.with_index(|idx| idx.search(&req.query, &opts)) {
+                Ok(mut hits) => {
+                    for h in &mut hits {
+                        h.uri = crate::route::prefix_uri(&n.rel, &h.uri);
+                        h.source = label.clone();
+                    }
+                    groups.push(HitGroup { source: label.clone(), weight: 0.95, hits });
+                }
+                Err(e) => notes.push(format!("{label}: {}", util::truncate_chars(&format!("{e:#}"), 200))),
+            }
+            for mut h in inbox_hits(&n.app, &req.query, &kinds, limit) {
+                h.uri = crate::route::prefix_uri(&n.rel, &h.uri);
+                h.status = h.status.map(|st| format!("{st} in {label}"));
+                local_notes.push(h);
+            }
+        }
+        if !local_notes.is_empty() {
+            local_notes.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            groups.push(HitGroup { source: "inbox".into(), weight: 0.9, hits: local_notes });
+        }
     }
     let external: Vec<String> = req.sources.iter().filter(|s| *s != "local").cloned().collect();
     if req.sources.is_empty() || !external.is_empty() {
@@ -99,10 +124,86 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
     Ok((model::merge(groups, limit), notes))
 }
 
+/// Inbox notes that match a query. The inbox is a handful of files outside the repository, so it
+/// is scanned rather than indexed. Without this, a private capture in a repository without a store
+/// was written once and never found again.
+fn inbox_hits(app: &App, query: &str, kinds: &[String], limit: usize) -> Vec<Hit> {
+    let terms: Vec<String> = format!("{query} {}", crate::index::expand_identifiers(query))
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let mut hits: Vec<Hit> = Vec::new();
+    for e in Inbox::open(&app.repo).list() {
+        if !kinds.is_empty() && !kinds.contains(&e.kind) {
+            continue;
+        }
+        let title = e.title.to_lowercase();
+        let meta = format!("{} {} {}", e.summary.as_deref().unwrap_or(""), e.tags.join(" "), e.paths.join(" ")).to_lowercase();
+        let body = e.body.to_lowercase();
+        let (mut score, mut matched) = (0.0f32, 0usize);
+        for t in &terms {
+            let s = [(title.contains(t.as_str()), 3.0), (meta.contains(t.as_str()), 2.0), (body.contains(t.as_str()), 1.0)]
+                .iter()
+                .filter(|(hit, _)| *hit)
+                .map(|(_, w)| w)
+                .sum::<f32>();
+            if s > 0.0 {
+                matched += 1;
+                score += s;
+            }
+        }
+        // most of the query, not one common word
+        if matched * 2 < terms.len() || score < 2.0 {
+            continue;
+        }
+        let private = e.visibility.as_deref() == Some("private");
+        hits.push(Hit {
+            source: "inbox".into(),
+            uri: format!("inbox:{}", e.id),
+            title: e.title.clone(),
+            snippet: e.summary_text(200),
+            kind: Some(e.kind.clone()),
+            score,
+            date: e.date.clone(),
+            status: Some(if private { "local note, private".into() } else { "local note".into() }),
+        });
+    }
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(limit);
+    hits
+}
+
 // -------------------------------------------------------------------------------------- read
+
+fn show_commit(app: &App, sha: &str, level: u8) -> Result<String> {
+    Ok(match level {
+        0 => app.repo.git(&["show", "-s", "--format=%h %ad %an: %s", "--date=short", sha])?,
+        1 => app.repo.git(&["show", "--stat", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?,
+        _ => {
+            util::truncate_chars(&app.repo.git(&["show", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?, 60_000)
+        }
+    })
+}
 
 pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
     let uri = uri.trim();
+    // a nested repository's entry, commit or note, as search and the brief name them: kx:<nested>/<id>
+    for scheme in ["kx:", "git:", "inbox:"] {
+        if let Some(rest) = uri.strip_prefix(scheme)
+            && rest.contains('/')
+            && let Some((root, inner, n)) = crate::route::nested_of(app, rest)
+            && !inner.is_empty()
+        {
+            return read(&n, &format!("{scheme}{inner}"), level).map(|t| nested_refs(&t, &root));
+        }
+    }
     if let Some(id) = uri.strip_prefix("inbox:") {
         let e = Inbox::open(&app.repo).get(id).ok_or_else(|| anyhow!("no inbox entry '{id}'"))?;
         return Ok(e.markdown());
@@ -112,14 +213,14 @@ pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
         if !sha.chars().all(|c| c.is_ascii_hexdigit()) || sha.len() < 4 {
             bail!("'{sha}' is not a commit id");
         }
-        return Ok(match level {
-            0 => app.repo.git(&["show", "-s", "--format=%h %ad %an: %s", "--date=short", sha])?,
-            1 => app.repo.git(&["show", "--stat", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?,
-            _ => util::truncate_chars(
-                &app.repo.git(&["show", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?,
-                60_000,
-            ),
-        });
+        return match show_commit(app, sha, level) {
+            Ok(text) => Ok(text),
+            // a commit of a submodule, named as `ctx_why` lists it there
+            Err(e) => crate::route::nested_repos(app)
+                .iter()
+                .find_map(|n| show_commit(&n.app, sha, level).ok().map(|t| format!("(commit in {}/)\n{t}", n.rel)))
+                .ok_or(e),
+        };
     }
     if uri.contains("://") {
         let reg = app.registry();
@@ -136,6 +237,23 @@ pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
         if let Some(e) = Store::find(&entries, key) {
             return Ok(render_entry(e, level));
         }
+        if uri.starts_with("kx:") {
+            // an entry of a nested repository named without its path
+            let nested = crate::route::nested_stores(app);
+            let mut several: Vec<String> = entries.iter().filter(|e| e.id.starts_with(key)).map(|e| e.id.clone()).collect();
+            for n in &nested {
+                let (theirs, _) = n.app.entries();
+                if let Some(e) = Store::find(&theirs, key) {
+                    return Ok(format!("(entry of {}/)\n{}", n.rel, nested_refs(&render_entry(e, level), &n.rel)));
+                }
+                several.extend(theirs.iter().filter(|e| e.id.starts_with(key)).map(|e| format!("{}/{}", n.rel, e.id)));
+            }
+            if several.len() > 1 {
+                several.truncate(6);
+                bail!("'{key}' names several entries: {}", several.join(", "));
+            }
+            bail!("no entry '{key}' (`ctx_log` lists them, `ctx_search` finds them)");
+        }
     }
     let raw = uri.strip_prefix("file:").unwrap_or(uri);
     let (path, anchor) = match raw.split_once('#') {
@@ -143,6 +261,11 @@ pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
         None => (raw, None),
     };
     read_file(app, path, anchor, level)
+}
+
+/// A nested repository's answer with its references as the outer repository names them.
+fn nested_refs(text: &str, root: &str) -> String {
+    text.replace("<kx:", &format!("<kx:{root}/")).replace("<git:", &format!("<git:{root}/"))
 }
 
 fn render_entry(e: &Entry, level: u8) -> String {
@@ -474,10 +597,124 @@ fn relevance(e: &Entry, f: &Focus) -> f32 {
     s
 }
 
+/// How a brief refers to entries: an ADR keeps its number, any other id the shortest prefix, cut
+/// before a `-`, that no other id starts with, which is what `Store::find` resolves alone (a dated
+/// id keeps the date and a word, a slug two words). Ids sharing a prefix sit next to each other
+/// once sorted, so only an id's neighbours are compared.
+pub struct Refs {
+    sorted: Vec<String>,
+}
+
+impl Refs {
+    pub fn new<'a>(ids: impl IntoIterator<Item = &'a str>) -> Refs {
+        // duplicates stay: an id two entries share has no unique prefix and keeps its full form
+        let mut sorted: Vec<String> = ids.into_iter().map(str::to_string).collect();
+        sorted.sort();
+        Refs { sorted }
+    }
+
+    pub fn of(&self, e: &Entry) -> String {
+        let short = e.short_id();
+        if short != e.id { short } else { self.prefix(&e.id) }
+    }
+
+    pub fn prefix(&self, id: &str) -> String {
+        let Ok(i) = self.sorted.binary_search_by(|x| x.as_str().cmp(id)) else { return id.to_string() };
+        let prev = i.checked_sub(1).map(|j| self.sorted[j].as_str());
+        let next = self.sorted.get(i + 1).map(String::as_str);
+        let dated = id.get(..10).is_some_and(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok());
+        // a slug keeps two words: `batch-concurrency` reads, `batch` does not
+        for (k, _) in id.match_indices('-').skip(if dated { 3 } else { 1 }) {
+            let cand = &id[..k];
+            if !prev.is_some_and(|p| p.starts_with(cand)) && !next.is_some_and(|n| n.starts_with(cand)) {
+                return cand.to_string();
+            }
+        }
+        id.to_string()
+    }
+}
+
+/// Which part of a brief is written: a whole brief, or a nested repository's section of an outer
+/// one. `prefix` (`extractor/`) goes before its references so they resolve from the outer repository.
+#[derive(Clone, Copy)]
+struct Part<'a> {
+    prefix: &'a str,
+    section: bool,
+}
+
+type Elsewhere = (std::sync::Arc<App>, Option<String>, Vec<String>);
+
 pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) -> String {
+    let split = crate::route::split_focus(app, focus);
+    // every focus path lies in one other repository (another worktree, a sibling project, or a
+    // submodule of a repository without team knowledge of its own): that repository's brief answers
+    if split.here_paths == 0
+        && let [(other, nested, paths)] = split.elsewhere.as_slice()
+        && (nested.is_none() || !app.is_set_up())
+    {
+        let mut f = paths.clone();
+        f.extend(split.words.iter().cloned());
+        let prefix = nested.as_ref().map(|n| format!("{n}/")).unwrap_or_default();
+        let inner = brief_in(other, &f, budget, with_adapters, Part { prefix: &prefix, section: false }, &[]);
+        // the outer repository's own agent rules still apply to work inside its submodule
+        let rules: Vec<&str> = if nested.is_some() {
+            ["AGENTS.md", "CLAUDE.md"].into_iter().filter(|r| app.repo.abs(r).is_file()).collect()
+        } else {
+            Vec::new()
+        };
+        let also =
+            if rules.is_empty() { String::new() } else { format!("\nRules of {} itself: read {}", app.project_name(), rules.join(", ")) };
+        return format!("{}{also}\n{inner}", crate::route::banner(app, other));
+    }
+    brief_in(app, &split.here, budget, with_adapters, Part { prefix: "", section: false }, &split.elsewhere)
+}
+
+/// One line about a nested repository's own team knowledge and how to reach it.
+fn nested_pointer(a: &App, rel: &str) -> String {
+    let (entries, _) = a.entries();
+    let what: Vec<String> = ["decision", "convention", "learning", "incident"]
+        .iter()
+        .filter_map(|k| {
+            let n = entries.iter().filter(|e| e.kind == *k && e.is_active()).count();
+            (n > 0).then(|| format!("{n} {k}{}", if n == 1 { "" } else { "s" }))
+        })
+        .collect();
+    format!(
+        "- {rel}/ keeps its own team knowledge ({}): ctx_brief with focus paths under {rel}/, the other tools with `dir: \"{rel}\"`",
+        if what.is_empty() { "a module map".to_string() } else { what.join(", ") }
+    )
+}
+
+/// This clone's inbox notes that bear on the focus (without one, the newest): captured, not yet
+/// reviewed or shared, and in a repository without a store the only knowledge there is.
+fn local_notes(app: &App, focus: &Focus, h2: &str, prefix: &str) -> String {
+    let notes = Inbox::open(&app.repo).list();
+    let focused = !focus.paths.is_empty() || !focus.words.is_empty();
+    let mut ranked: Vec<(&Entry, f32)> = notes.iter().map(|e| (e, relevance(e, focus))).filter(|(_, r)| !focused || *r > 0.0).collect();
+    if ranked.is_empty() {
+        return String::new();
+    }
+    // stable: the newest first among equals
+    ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let refs = Refs::new(notes.iter().map(|e| e.id.as_str()));
+    let max = if focused { 4 } else { 3 };
+    let mut s = format!("\n{h2} Local notes (this clone's inbox: not reviewed, not shared)\n");
+    for (e, _) in ranked.iter().take(max) {
+        let private = if e.visibility.as_deref() == Some("private") { ", private" } else { "" };
+        let _ = writeln!(s, "- [{}{private}] {} <inbox:{prefix}{}>", e.kind, e.l0(140), refs.prefix(&e.id));
+    }
+    if ranked.len() > max {
+        let _ = writeln!(s, "- … {} more: `ctx_search` finds them", ranked.len() - max);
+    }
+    s
+}
+
+fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, part: Part, elsewhere: &[Elsewhere]) -> String {
     let cfg = app.cfg();
     let (entries, errors) = app.entries();
     let focus = parse_focus(app, focus);
+    let focused = !focus.paths.is_empty() || !focus.words.is_empty();
+    let h2 = if part.section { "###" } else { "##" };
     let mut budget_left = budget.max(300) as isize;
     let mut out = String::new();
     let add = |out: &mut String, text: &str, budget_left: &mut isize| -> bool {
@@ -491,9 +728,16 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     };
 
     let overview = entries.iter().find(|e| e.kind == "architecture" && e.id == "overview");
-    let mut head = format!("# {} — team context\n{}", app.project_name(), app.repo.id);
+    let mut head = if part.section {
+        format!("\n## {} — a nested repository with its own team knowledge\n{}", part.prefix, app.repo.id)
+    } else {
+        format!("# {} — team context\n{}", app.project_name(), app.repo.id)
+    };
     if let Some(b) = &app.repo.branch {
         let _ = write!(head, " · branch {b}");
+    }
+    if part.section {
+        let _ = write!(head, " · its tools: `dir: \"{}\"`", part.prefix.trim_end_matches('/'));
     }
     head.push('\n');
     if let Some(o) = overview {
@@ -538,10 +782,64 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     }
     nested_rules.truncate(8);
     if !rules.is_empty() || !nested_rules.is_empty() {
-        let mut all: Vec<String> = rules.iter().map(|s| s.to_string()).collect();
-        all.extend(nested_rules);
+        let mut all: Vec<String> = rules.iter().map(|s| format!("{}{s}", part.prefix)).collect();
+        all.extend(nested_rules.iter().map(|s| format!("{}{s}", part.prefix)));
         add(&mut out, &format!("Rules for agents: read {}\n", all.join(", ")), &mut budget_left);
     }
+
+    // the repositories this work reaches into: a submodule's team knowledge gets its own section,
+    // anything further a pointer
+    let own = app.is_set_up() && !entries.is_empty();
+    let mut nested_parts: Vec<(std::sync::Arc<App>, String, Vec<String>)> = Vec::new();
+    let mut pointers: Vec<String> = Vec::new();
+    if !part.section {
+        for (other, nested, paths) in elsewhere {
+            match nested {
+                Some(rel) => {
+                    let mut f = paths.clone();
+                    f.extend(focus.words.iter().cloned());
+                    nested_parts.push((other.clone(), rel.clone(), f));
+                }
+                None => pointers.push(format!(
+                    "- {} at {}: the focus paths there — ctx_brief with `dir: \"{}\"`",
+                    other.project_name(),
+                    other.repo.root.display(),
+                    other.repo.root.display()
+                )),
+            }
+        }
+        for n in crate::route::nested_stores(app) {
+            if nested_parts.iter().any(|(a, _, _)| a.repo.root == n.app.repo.root) {
+                continue;
+            }
+            if own {
+                pointers.push(nested_pointer(&n.app, &n.rel));
+            } else {
+                // nothing of its own to say: its submodules' team knowledge is what applies here
+                nested_parts.push((n.app.clone(), n.rel.clone(), focus.words.clone()));
+            }
+        }
+        while nested_parts.len() > 2 {
+            let (a, rel, _) = nested_parts.pop().unwrap();
+            pointers.push(nested_pointer(&a, &rel));
+        }
+    }
+
+    // submodules' team knowledge first: focus paths in a submodule ask for it, and a repository
+    // without knowledge of its own has nothing else to say
+    if !nested_parts.is_empty() {
+        let pct = if own { 55 } else { 85 };
+        let share = ((budget_left.max(0) as usize) * pct / 100 / nested_parts.len()).max(300);
+        for (a, rel, f) in &nested_parts {
+            let prefix = format!("{rel}/");
+            let text = brief_in(a, f, share, false, Part { prefix: &prefix, section: true }, &[]);
+            if !add(&mut out, &text, &mut budget_left) {
+                pointers.push(nested_pointer(a, rel));
+            }
+        }
+    }
+    let refs = Refs::new(entries.iter().map(|e| e.id.as_str()));
+    let reference = |e: &Entry| format!("{}{}", part.prefix, refs.of(e));
 
     // decisions
     let mut decisions: Vec<(&Entry, f32)> =
@@ -549,19 +847,18 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     decisions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
     if !decisions.is_empty() {
         let total = decisions.len();
-        let mut sec = format!(
-            "\n## Decisions ({total} active{})\n",
-            if focus.paths.is_empty() && focus.words.is_empty() { ", newest first" } else { ", most relevant first" }
-        );
+        let mut sec = format!("\n{h2} Decisions ({total} active{})\n", if focused { ", most relevant first" } else { ", newest first" });
         let mut shown = 0;
         for (e, _) in decisions.iter().take(cfg.brief.max_decisions) {
-            let line = format!(
-                "- [{}] {} — {}{}\n",
-                e.short_id(),
-                e.title,
-                e.summary_text(150),
-                e.date.as_deref().map(|d| format!(" ({d})")).unwrap_or_default()
-            );
+            let r = reference(e);
+            // a dated reference already says when
+            let date = e
+                .date
+                .as_deref()
+                .filter(|d| !r.trim_start_matches(part.prefix).starts_with(*d))
+                .map(|d| format!(" ({d})"))
+                .unwrap_or_default();
+            let line = format!("- [{r}] {} — {}{date}\n", e.title, e.summary_text(150));
             if util::est_tokens(&(sec.clone() + &line)) as isize > budget_left * 6 / 10 {
                 break;
             }
@@ -569,7 +866,12 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
             shown += 1;
         }
         if shown < total {
-            let _ = writeln!(sec, "- … {} more: `ctx_log` or `ctx_search kinds=[decision]`", total - shown);
+            let how = if part.prefix.is_empty() {
+                "`ctx_log` or `ctx_search kinds=[decision]`".to_string()
+            } else {
+                format!("`ctx_search kinds=[decision]`, or `ctx_log` with `dir: \"{}\"`", part.prefix.trim_end_matches('/'))
+            };
+            let _ = writeln!(sec, "- … {} more: {how}", total - shown);
         }
         add(&mut out, &sec, &mut budget_left);
     }
@@ -582,9 +884,9 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
             continue;
         }
         list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
-        let mut sec = format!("\n## {heading}\n");
+        let mut sec = format!("\n{h2} {heading}\n");
         for (e, _) in list.iter().take(max) {
-            let _ = writeln!(sec, "- {} <kx:{}>", e.l0(140), e.id);
+            let _ = writeln!(sec, "- {} <kx:{}>", e.l0(140), reference(e));
         }
         add(&mut out, &sec, &mut budget_left);
     }
@@ -602,7 +904,7 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
                     .cmp(&b.0.get_extra("rank").unwrap_or_default().parse::<u32>().unwrap_or(999))
             })
         });
-        let mut sec = String::from("\n## Modules\n");
+        let mut sec = format!("\n{h2} Modules\n");
         // a focused module without a doc of its own (outside init.max_module_docs) still gets its facts
         let documented: Vec<&str> = mods.iter().filter_map(|e| e.paths.first()).map(|p| p.trim_end_matches("/**")).collect();
         let uncovered: Vec<&String> =
@@ -626,13 +928,13 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
                 let what =
                     m.description.as_deref().map(|d| util::truncate_chars(d, 110)).unwrap_or_else(|| format!("{} {}", m.language, m.kind));
                 let docs = if m.docs.is_empty() { String::new() } else { format!("; read {}", m.docs.join(", ")) };
-                let _ = writeln!(sec, "- {} — {what} ({} files, no module doc yet{docs})", m.path, m.files);
+                let _ = writeln!(sec, "- {}{} — {what} ({} files, no module doc yet{docs})", part.prefix, m.path, m.files);
             }
         }
         let mut bare: Vec<String> = Vec::new();
         let mut shown = 0;
         for (e, rel) in ranked.iter() {
-            let path = e.paths.first().map(|p| p.trim_end_matches("/**").to_string()).unwrap_or_else(|| e.title.clone());
+            let path = e.paths.first().map(|p| format!("{}{}", part.prefix, p.trim_end_matches("/**"))).unwrap_or_else(|| e.title.clone());
             let summary = e.summary_text(110);
             if summary.is_empty() {
                 bare.push(path);
@@ -661,6 +963,37 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
         add(&mut out, &sec, &mut budget_left);
     }
 
+    if !pointers.is_empty() {
+        add(&mut out, &format!("\n{h2} Elsewhere\n{}\n", pointers.join("\n")), &mut budget_left);
+    }
+
+    let notes = local_notes(app, &focus, h2, part.prefix);
+    if !notes.is_empty() {
+        add(&mut out, &notes, &mut budget_left);
+    }
+
+    // without team knowledge, what the docs and the history say about the focus
+    // (only over an index a search already built: a brief does not build one, nor write it here)
+    let warm = app.repo.worktree_state_dir().join("index").join("manifest.json").is_file();
+    if !part.section && !app.is_set_up() && nested_parts.is_empty() && focused && warm {
+        let mut q = focus.words.clone();
+        for p in &focus.paths {
+            q.extend(p.split(['/', '.', '-', '_']).filter(|s| s.len() > 2).map(str::to_string));
+        }
+        let req = SearchReq { query: q.join(" "), kinds: vec!["doc".into(), "commit".into()], sources: vec!["local".into()], limit: 5 };
+        let room = ((budget_left.max(0) as usize) / 2).min(450);
+        if room >= 80
+            && let Ok((hits, _)) = search(app, &req)
+            && !hits.is_empty()
+        {
+            add(&mut out, &format!("\n## Related docs and history\n{}", model::render(&hits, room)), &mut budget_left);
+        }
+    }
+
+    if part.section {
+        return out;
+    }
+
     // external adapters that can brief
     if with_adapters {
         let q = focus.words.join(" ") + " " + &focus.paths.join(" ");
@@ -681,14 +1014,14 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     // local state
     let mut state = String::new();
     let inbox = Inbox::open(&app.repo).list();
-    let (ours, elsewhere): (Vec<&Entry>, Vec<&Entry>) = inbox.iter().partition(|e| Origin::of(&app.repo, e).is_ours());
+    let (ours, elsewhere_wt): (Vec<&Entry>, Vec<&Entry>) = inbox.iter().partition(|e| Origin::of(&app.repo, e).is_ours());
     if !ours.is_empty() {
         let team = ours.iter().filter(|e| e.visibility.as_deref() != Some("private")).count();
         let _ = writeln!(
             state,
             "- Local inbox: {team} team candidate(s), {} private — not shared until promoted and committed (`ctx_prepare_commit`).{}",
             ours.len() - team,
-            if elsewhere.is_empty() { String::new() } else { format!(" ({} more belong to other worktrees.)", elsewhere.len()) }
+            if elsewhere_wt.is_empty() { String::new() } else { format!(" ({} more belong to other worktrees.)", elsewhere_wt.len()) }
         );
     }
     let (done, total) = init_progress(&entries);
@@ -696,6 +1029,13 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
         let _ = writeln!(state, "- {}", no_knowledge_hint(app));
     } else if done < total {
         let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
+    }
+    // a fresh clone (a Superset project, a CI checkout) runs none of the commit-time checks
+    if app.is_set_up() && !crate::hooks::opted_out(&app.repo) && !crate::hooks::installed(app, "pre-commit") {
+        let _ = writeln!(
+            state,
+            "- Git hooks are not installed in this clone, so commits get no knowledge checks, secret scan or trailers: `kontext hooks install`."
+        );
     }
     if !errors.is_empty() {
         let _ = writeln!(state, "- {} store file(s) could not be read.", errors.len());
@@ -706,7 +1046,7 @@ pub fn brief(app: &App, focus: &[String], budget: usize, with_adapters: bool) ->
     if !state.is_empty() {
         add(&mut out, &format!("\n## State\n{state}"), &mut budget_left);
     }
-    out.push_str("\nMore: `ctx_search` (decisions, docs, history, adapters) · `ctx_read <uri>` (L0/L1/L2) · `ctx_why <path>` · record with `ctx_capture` · before committing `ctx_prepare_commit`.\n");
+    out.push_str("\nMore: `ctx_search` (decisions, docs, history, adapters) · `ctx_read kx:<id>` (L0/L1/L2) · `ctx_why <path>` · record with `ctx_capture` · before committing `ctx_prepare_commit`.\n");
     out
 }
 
@@ -755,6 +1095,19 @@ pub fn why(app: &App, target: &str, limit: usize) -> Result<String> {
         bail!("target is required (a path, path:line, commit or symbol)");
     }
     let limit = limit.clamp(3, 40);
+    // a path in a submodule or another worktree: its knowledge and its history live there
+    let (path_part, line_part) = match target.rsplit_once(':') {
+        Some((p, l)) if !l.is_empty() && l.chars().all(|c| c.is_ascii_digit() || c == '-') => (p, Some(l)),
+        _ => (target, None),
+    };
+    if let crate::route::Place::Other { app: other, rel, .. } = crate::route::locate(app, path_part) {
+        let inner = match (rel.is_empty(), line_part) {
+            (true, _) => ".".to_string(),
+            (false, Some(l)) => format!("{rel}:{l}"),
+            (false, None) => rel,
+        };
+        return Ok(format!("{}\n{}", crate::route::banner(app, &other), why(&other, &inner, limit)?));
+    }
     let (entries, _) = app.entries();
     let mut out = String::new();
 
@@ -1109,17 +1462,33 @@ pub struct PrepareReq {
     pub drop: Vec<String>,
 }
 
+/// Another worktree of this clone that has the team knowledge checked out (on a branch or detached).
+fn worktree_with_store(app: &App, markers: &[&str]) -> Option<String> {
+    app.repo
+        .worktree_roots()
+        .into_iter()
+        .filter(|w| std::path::Path::new(w) != app.repo.root)
+        .find(|w| markers.iter().any(|f| std::path::Path::new(w).join(f).is_file()))
+}
+
 /// What to say when this branch has no team knowledge: bootstrap it — unless another branch already
 /// has it (a bootstrap waiting for review), where a second bootstrap would only conflict with it.
 pub fn no_knowledge_hint(app: &App) -> String {
     let overview = format!("{}/overview.md", app.cfg().kind_path("architecture"));
-    let elsewhere = app.repo.refs_with(&overview);
+    // a store kept in an ADR directory may have no overview: its shared config marks it too, but
+    // only where this worktree has none (here it is this branch's own config)
+    let config = format!("{}/kontext.toml", app.cfg().store.dir.trim_end_matches('/'));
+    let markers: Vec<&str> = if app.is_set_up() { vec![overview.as_str()] } else { vec![overview.as_str(), config.as_str()] };
+    // this branch is not "another branch"; its upstream may well be (pushed, fetched, not pulled)
+    let elsewhere: Vec<String> = app.repo.refs_with_any(&markers).into_iter().filter(|r| Some(r) != app.repo.branch.as_ref()).collect();
     match elsewhere.first() {
         Some(r) => format!(
-            "Team knowledge exists on `{r}`{} but not on this branch yet — merge or rebase to get it; do not bootstrap it again here.",
-            if elsewhere.len() > 1 { format!(" (and {} more branch(es))", elsewhere.len() - 1) } else { String::new() }
+            "Team knowledge exists on `{r}`{} but not on this branch yet — merge or rebase to get it; do not bootstrap it again here.{}",
+            if elsewhere.len() > 1 { format!(" (and {} more branch(es))", elsewhere.len() - 1) } else { String::new() },
+            // an agent that works in a worktree that has it reads it from there
+            worktree_with_store(app, &markers).map(|w| format!(" A worktree that has it: {w} (tools take `dir: \"{w}\"`).")).unwrap_or_default()
         ),
-        None => "kontext is not set up in this repository (no team knowledge yet) — nothing to record here unless the user asks; `kontext init` sets it up.".to_string(),
+        None => "No team knowledge here yet: `ctx_search` and `ctx_why <path>` answer from the docs and history, and private notes (`ctx_capture` with visibility private) come back in this brief and in search. `kontext init` sets it up when the user asks for it.".to_string(),
     }
 }
 
@@ -1261,12 +1630,16 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
             trailers.push(format!("{key}: {}", e.id));
         }
     }
-    if !trailers.is_empty() {
-        let _ = writeln!(
-            out,
-            "\n## Commit trailers (added automatically by the prepare-commit-msg hook)\n{}",
-            trailers.iter().map(|t| format!("    {t}")).collect::<Vec<_>>().join("\n")
-        );
+    // a team that turned trailers off gets none; a fresh clone has no hooks, and an agent told
+    // "added automatically" would ship the commit without them
+    if !trailers.is_empty() && app.cfg().hooks.trailers {
+        let how = if crate::hooks::installed(app, "prepare-commit-msg") {
+            "added automatically by the prepare-commit-msg hook"
+        } else {
+            "add them to the commit message: the prepare-commit-msg hook is not installed in this clone (`kontext hooks install` adds them from then on)"
+        };
+        let _ =
+            writeln!(out, "\n## Commit trailers ({how})\n{}", trailers.iter().map(|t| format!("    {t}")).collect::<Vec<_>>().join("\n"));
     }
 
     // nudges
@@ -1306,4 +1679,40 @@ pub fn staged_trailers_since(app: &App, base: Option<&str>) -> Result<Vec<String
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_references_resolve_to_one_entry() {
+        let ids = [
+            "2026-09-28-adapters-are-configuration-the-core-never-names-a-product",
+            "2026-09-28-captures-become-shared-only-by-being-promoted-into-a-commit",
+            "2026-09-28-commits-take-only-the-candidates-their-own-worktree-captured",
+            "2026-09-30-keep-reviewed-labeling-datasets",
+            "2026-09-30-keep-project-integration-outside",
+            "batch-concurrency-is-not-capped",
+            "batch-size-follows-the-provider",
+            "overview",
+        ];
+        let refs = Refs::new(ids);
+        assert_eq!(refs.prefix(ids[0]), "2026-09-28-adapters");
+        assert_eq!(refs.prefix(ids[1]), "2026-09-28-captures");
+        assert_eq!(refs.prefix(ids[3]), "2026-09-30-keep-reviewed", "the date and one word are not enough here");
+        assert_eq!(refs.prefix(ids[5]), "batch-concurrency");
+        assert_eq!(refs.prefix("overview"), "overview");
+        let entries: Vec<Entry> =
+            ids.iter().map(|id| Entry { id: id.to_string(), kind: "decision".into(), ..Default::default() }).collect();
+        for e in &entries {
+            let r = refs.of(e);
+            assert_eq!(Store::find(&entries, &r).map(|x| x.id.as_str()), Some(e.id.as_str()), "{r}");
+        }
+        let adr = Entry { id: "0010-pay-by-link-reads-the-deposit-summary".into(), ..Default::default() };
+        assert_eq!(Refs::new([adr.id.as_str()]).of(&adr), "0010", "ADR numbers stay as they are");
+        // an id two entries share (a decision and a learning) has no unique prefix: it stays whole
+        let twice = Refs::new(["2026-09-28-use-cents", "2026-09-28-use-cents", "2026-09-28-ship-weekly"]);
+        assert_eq!(twice.prefix("2026-09-28-use-cents"), "2026-09-28-use-cents");
+    }
 }

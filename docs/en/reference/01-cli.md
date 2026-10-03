@@ -115,8 +115,8 @@ Validate all entries (or exactly what is staged) and scan them for secrets. Exit
 
 | Command | Meaning |
 | --- | --- |
-| `kontext hooks install [--dir <dir>]` | install into `core.hooksPath`, `.git/hooks`, or `<dir>` |
-| `kontext hooks uninstall [--dir <dir>]` | remove kontext's blocks, restore chained originals |
+| `kontext hooks install [--hooks-dir <dir>]` | install into `core.hooksPath`, `.git/hooks`, or `<dir>` |
+| `kontext hooks uninstall [--hooks-dir <dir>]` | remove kontext's blocks, restore chained originals |
 | `kontext hooks status` | which hooks carry the block |
 | `kontext hook <name> [args…]` | entry point called by the hooks (`pre-commit`, `prepare-commit-msg`, `post-commit`, `post-merge`, `post-rewrite`) |
 

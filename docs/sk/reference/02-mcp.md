@@ -6,6 +6,15 @@ Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom.
 
 Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Všetky majú `openWorldHint: false`.
 
+### Iný repozitár: `dir` {#dir}
+
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo susedného repozitára (absolútnu, alebo relatívnu ku koreňu tohto repozitára). Nástroj beží tam a jeho odpoveď začína repozitárom, z ktorého prišla.
+
+Aj bez `dir` kontext ide za cestami, ktoré dostane:
+
+- Na cesty vo `focus`, cieľ `ctx_why` a `paths` v `ctx_capture` vnútri submodulu odpovedá submodul a zachytenie ide do jeho inboxu, ak má tímové znalosti. Cesta, ktorá existuje len vnútri jedného submodulu, relatívne k nemu (`apps/runner` pre `extractor/apps/runner`, tak ako cesty pomenúva vlastné `AGENTS.md` submodulu), sa počíta za cestu submodulu. Na absolútne cesty do iného repozitára alebo worktree odpovedá ten.
+- Submodul s vlastnými tímovými znalosťami dostane v briefe vlastnú sekciu a jeho výsledky vyhľadávania nesú jeho cestu: `kx:extractor/<id>`, `git:extractor/<sha>`, `file:extractor/<path>`. `ctx_read` ich otvorí tak, ako sú.
+
 ### `ctx_brief`
 
 | Parameter | Typ | Predvolene | |
@@ -13,6 +22,8 @@ Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo tr
 | `focus` | string[] | | cesty alebo slová k téme, ktoré sa uprednostnia |
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | približná veľkosť |
 | `adapters` | boolean | true | zahrnie sekcie `brief` z adaptérov |
+
+Odkazy v hranatých zátvorkách sú najkratšia jednoznačná predpona id záznamu (`[2026-09-28-adapters]`), ktorú `ctx_read` rozpozná. Okrem tímových znalostí brief uvádza *Local notes* (inbox tohto klonu) a v repozitári bez úložiska aj *Related docs and history* k focusu. Pozri [Vrstvy kontextu](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -25,6 +36,8 @@ Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo tr
 | `budget_tokens` | integer | 1200 | približná veľkosť odpovede |
 
 Každý výsledok: `N. title — snippet [kind · status · date · source] <uri>`.
+
+Lokálny zdroj zahŕňa aj poznámky v inboxe tohto klonu (`inbox:<id>`, označené *local note*) a submoduly s vlastnými tímovými znalosťami (označené ich cestou).
 
 ### `ctx_read`
 
@@ -71,9 +84,9 @@ Každý výsledok: `N. title — snippet [kind · status · date · source] <uri
 | --- | --- | --- | --- |
 | `thread` | string | | `claude:<id>`, `codex:<id>`, `superset:<workspace>` (všetky jeho vlákna), súbor s prepisom alebo `last`; bez neho vypíše posledné vlákna |
 | `part` | integer | 1 | časť dlhého prepisu |
-| `budget_chars` | integer | 40000 | znakov na časť (najviac 80000) |
+| `budget_chars` | integer | 20000 | znakov na časť (najviac 80000) |
 
-Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto počítači. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
+Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto počítači. Notifikácia prostredia (`<task-notification>` v Claude Code o dokončenej úlohe na pozadí) sa zmení na jeden riadok a cesty do dočasného adresára relácie agenta sa skrátia na `<tmp>/`. Časť sa zmestí do jedného výsledku nástroja, dlhšie klienti orezávajú. Pozri [Znalosti z vlákien agentov](../guides/08-distill-threads.md).
 
 ### `ctx_inbox`
 
@@ -89,7 +102,7 @@ Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto po�
 | `promote` | string[] | ID z inboxu, ktoré sa zapíšu do úložiska a stagnú |
 | `drop` | string[] | ID z inboxu, ktoré sa zahodia |
 
-Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit).
+Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). Uvedie trailery commitu a či ich pridá hook prepare-commit-msg: v klone bez hookov kontextu (čerstvý klon, projekt v Superset) ich treba dopísať ručne, alebo spustiť `kontext hooks install`.
 
 ### `ctx_init`
 
@@ -101,6 +114,8 @@ Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-re
 Keď repozitár ešte nemá `.ai/` a `bootstrap` je true, `ctx_init` najprv spustí scan, history a render (bez hookov) a potom vráti prvú úlohu; bez neho vysvetlí, ako kontext zaviesť. Vetvu nikdy nezavádza, keď tímové znalosti už má iná vetva.
 
 V repozitári bez úložiska znalostí prijme `ctx_capture` len `visibility: private` a `ctx_inbox` / `ctx_prepare_commit` nepovyšujú.
+
+Zachytenie, ktorého cesty všetky ležia v submodule alebo inom repozitári s tímovými znalosťami, ide do inboxu toho repozitára a cesty sa prepíšu relatívne k nemu. Inak zostane tu a poznámka povie prečo (zmiešané cesty, submodul bez úložiska, cesty, ktoré neexistujú nikde).
 
 ### `ctx_init_submit`
 

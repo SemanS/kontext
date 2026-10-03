@@ -21,6 +21,7 @@ mod model;
 mod ops;
 mod presets;
 mod repo;
+mod route;
 mod secrets;
 mod signals;
 mod store;
@@ -336,19 +337,21 @@ enum InboxCmd {
     Drop { ids: Vec<String> },
 }
 
+// `--hooks-dir`, not `--dir`: the global `-C/--dir` shares its id with a subcommand's `dir`, so
+// `kontext -C <repo> hooks install` used to write the hooks into the repository root
 #[derive(Subcommand)]
 enum HooksCmd {
     /// Install hooks (into core.hooksPath if set, else .git/hooks)
     Install {
         /// Target directory, e.g. a tracked `.githooks`
-        #[arg(long)]
-        dir: Option<PathBuf>,
+        #[arg(long, value_name = "DIR")]
+        hooks_dir: Option<PathBuf>,
     },
     /// Remove kontext's hook blocks (restores chained originals)
     Uninstall {
         /// Target directory, e.g. a tracked `.githooks`
-        #[arg(long)]
-        dir: Option<PathBuf>,
+        #[arg(long, value_name = "DIR")]
+        hooks_dir: Option<PathBuf>,
     },
     /// Show which hooks carry the kontext block
     Status,
@@ -631,16 +634,26 @@ fn run(cli: Cli) -> Result<i32> {
             println!("{}", ops::read(&app, &uri, level.min(2))?);
         }
         Cmd::Capture(a) => {
-            let app = open(&dir)?;
+            let home = open(&dir)?;
             let body = read_body(a.body, a.file)?;
+            // like ctx_capture: the repository that owns the paths (a submodule, another worktree) gets it
+            let routing = route::owner_of(&home, &a.paths);
+            let (target, paths, notes) = (routing.owner, routing.paths, routing.notes);
+            let app: &App = target.as_deref().unwrap_or(&home);
+            if target.is_some() {
+                println!("in {} ({})", app.project_name(), route::label(&home, app));
+            }
+            for n in notes {
+                println!("note: {n}");
+            }
             let out = ops::capture(
-                &app,
+                app,
                 ops::CaptureReq {
                     kind: a.kind,
                     title: a.title,
                     summary: a.summary,
                     body,
-                    paths: a.paths,
+                    paths,
                     tags: a.tags,
                     visibility: Some(if a.private { "private".into() } else { "team".into() }),
                     supersedes: a.supersedes,
@@ -753,15 +766,28 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Cmd::Hooks { action } => {
             let app = open(&dir)?;
+            // `hooks install --dir .githooks` meant a hooks directory before `--hooks-dir`; it now
+            // parses as `-C .githooks` and would install somewhere else without a word
+            if matches!(action, HooksCmd::Install { .. } | HooksCmd::Uninstall { .. })
+                && let Some(d) = &dir
+                && let (Ok(d), Ok(root)) = (d.canonicalize(), app.repo.root.canonicalize())
+                && d != root
+                && d.starts_with(&root)
+            {
+                bail!(
+                    "`--dir` / `-C` names the repository; for a hooks directory inside it use `--hooks-dir {}`",
+                    d.strip_prefix(&root).unwrap_or(&d).display()
+                );
+            }
             match action {
-                HooksCmd::Install { dir } => {
+                HooksCmd::Install { hooks_dir } => {
                     // installing by hand is the explicit choice that `init --no-hooks` waited for
-                    let report = hooks::install(&app, dir)?;
+                    let report = hooks::install(&app, hooks_dir)?;
                     hooks::set_opted_out(&app.repo, false)?;
                     println!("{}", report.summary());
                 }
-                HooksCmd::Uninstall { dir } => {
-                    let removed = hooks::uninstall(&app, dir)?;
+                HooksCmd::Uninstall { hooks_dir } => {
+                    let removed = hooks::uninstall(&app, hooks_dir)?;
                     println!(
                         "{}",
                         if removed.is_empty() { "nothing to remove".to_string() } else { format!("removed: {}", removed.join(", ")) }
@@ -1018,6 +1044,10 @@ fn status(app: &App) -> Result<()> {
         if active.is_empty() { "none".into() } else { active.join(", ") },
         if skipped.is_empty() { String::new() } else { format!(" · inactive: {}", skipped.join(", ")) }
     );
+    let nested: Vec<String> = route::nested_stores(app).iter().map(|n| format!("{}/", n.rel)).collect();
+    if !nested.is_empty() {
+        println!("nested    {} (submodules with their own team knowledge; tools take `dir`)", nested.join(", "));
+    }
     print!("hooks     {}", hooks::status(app).unwrap_or_default().replace('\n', "\n          "));
     println!("\noutbox    {} queued", events::Outbox::open(&app.repo).list().len());
     for w in app.warnings() {
