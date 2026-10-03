@@ -44,6 +44,6 @@ Not natively (hooks are POSIX shell). WSL works.
 
 `kontext hooks uninstall`, delete `.ai/` if you do not want it, and remove `.git/kontext/`. There is no other state.
 
-## How is this different from AGENTS.md / CLAUDE.md?
+## How is this different from CLAUDE.md, AGENTS.md or Claude Code's memory?
 
-Those files are rules for agents, written by people, loaded whole. kontext keeps many small entries with paths, statuses and history, ranks them for the task at hand, links them to commits and keeps them valid. It also adds a short block to `AGENTS.md` that tells agents to use it.
+CLAUDE.md and AGENTS.md are prose that every session loads whole. Claude Code's auto memory is written by the model and stays on one machine. kontext keeps many small entries with paths, statuses and authors, approved in pull requests, ranked for the task at hand and linked to commits. Keep the few instructions every session needs in CLAUDE.md; kontext also adds a short block to `AGENTS.md` that tells agents to use it. See [Why not something else?](../getting-started/01-introduction.md#why-not)

@@ -44,6 +44,6 @@ Natívne nie (hooky sú POSIX shell). WSL funguje.
 
 `kontext hooks uninstall`, zmaž `.ai/`, ak ho nechceš, a odstráň `.git/kontext/`. Žiadny iný stav neexistuje.
 
-## Čím sa to líši od AGENTS.md / CLAUDE.md?
+## Čím sa to líši od CLAUDE.md, AGENTS.md alebo pamäte Claude Code?
 
-Tieto súbory sú pravidlá pre agentov, ktoré píšu ľudia a ktoré sa načítavajú celé. kontext drží veľa malých záznamov s cestami, stavmi a históriou, zoraďuje ich pre konkrétnu úlohu, prepája ich s commitmi a udržiava ich platné. Do `AGENTS.md` pridá krátky blok, ktorý agentom povie, aby ho používali.
+CLAUDE.md a AGENTS.md sú próza, ktorú každá session načíta celú. Automatickú pamäť Claude Code píše model a zostáva na jednom stroji. kontext drží veľa malých záznamov s cestami, stavmi a autormi, schválených v pull requestoch, zoradených pre konkrétnu úlohu a prepojených s commitmi. Pár pokynov, ktoré potrebuje každá session, nechaj v CLAUDE.md; kontext navyše pridá do `AGENTS.md` krátky blok, ktorý agentom povie, aby ho používali. Pozri [Prečo nie niečo iné?](../getting-started/01-introduction.md#why-not)

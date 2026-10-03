@@ -33,6 +33,14 @@ K záznamom pristupuj ako ku kódu:
 - **Je stručný?** Kontext, rozhodnutie, dôsledky (každé na pár riadkov).
 - **Nahrádza niečo?** Potom by mal starý záznam nahradiť cez `supersede`, a nie mu potichu odporovať.
 
+Urči, kto schvaľuje. S riadkom v CODEOWNERS, napríklad
+
+```text
+/.ai/  @acme/architects
+```
+
+a s povinným review od vlastníkov kódu na hlavnej vetve sa žiadna zmena toho, čím sa riadia agenti, nezlúči bez tohto tímu. Ak rozhodnutia žijú v adresári s ADR, uveď ten namiesto `/.ai/`.
+
 ## Keď zmeníš názor
 
 Rozhodnutia sa kvôli zvráteniu neupravujú. Zaznamenaj nové, ktoré nahradí to staré:

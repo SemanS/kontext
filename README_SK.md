@@ -4,7 +4,7 @@
   <img alt="kontext" src="docs/images/logo.svg" width="128" height="128">
 </a>
 
-### kontext: tímový kontext pre coding agentov
+### kontext: deklaratívne tímové znalosti pre coding agentov
 
 [English](README.md) / Slovenčina
 
@@ -27,38 +27,54 @@
 
 ## Čo je kontext
 
-kontext dá každému coding agentovi, ktorého používaš (Claude Code, Codex, Cursor, OpenCode, čomukoľvek, čo hovorí MCP), rovnakú krátku, **posúdenú** pamäť toho, *prečo je kód taký, aký je*, a cez bežné commity premení „agent na niečo prišiel“ na „tím to vie“.
+kontext je deklaratívny most medzi tvojimi coding agentmi a gitom. Rozhodnutia, konvencie a úskalia, ktorými sa agenti riadia, sú krátke Markdown súbory v repozitári. Agenti počas práce navrhujú nové, ľudia ich schvaľujú v pull requeste danej zmeny a každý agent (Claude Code, Codex, Cursor, OpenCode, akýkoľvek MCP klient) dostane výsledok v krátkom briefe pre cesty, na ktoré sa chystá siahnuť.
 
-Je to jedna rýchla Rust binárka s tromi tvárami: **MCP server** (`kontext mcp`), **CLI** a sada **git hookov**. Znalosti tímu žijú v repozitári ako krátke Markdown súbory. Všetko ostatné (sémantická pamäť, archívy sessions, inteligencia kódu, LLM) sa zapája ako **nakonfigurovaný adaptér**; kód kontextu nikdy nemenuje žiadny produkt.
+Je to jedna Rust binárka s tromi tvárami: **MCP server** (`kontext mcp`), **CLI** a sada **git hookov**.
 
 ```text
-                 Claude Code · Codex · Cursor · OpenCode · any MCP client
-                                         │  MCP (stdio)
-                                ┌────────┴────────┐
-                                │     kontext     │  ctx_brief · ctx_search · ctx_read · ctx_why
-                                │  (Rust, 1 bin)  │  ctx_capture · ctx_prepare_commit · ctx_init …
-                                └──┬─────┬─────┬──┘
-             adapters (config) ────┘     │     └──── git hooks
-   ┌──────────────┬──────────────┐       │       pre-commit: validate + secret-scan + index
-   │ mcp driver   │ http driver  │       │       prepare-commit-msg: `Decision: <id>` trailers
-   │ CodeGraph    │ OpenViking   │       │       post-commit/merge/rewrite: `sync` events
-   │ Serena       │ Ollama       │       │
-   │ Agent LCM    │ Slack hook   │       ▼
-   │ sessions     │ …            │   TEAM TRUTH (git)                LOCAL, DERIVED, PRIVATE
-   │ command drv  │              │   .ai/decisions/*.md   ◄─ PR ──   .git/kontext/inbox (candidates)
-   │ claude -p    │              │   .ai/conventions/…               .git/kontext/…/index (Tantivy)
-   │ codex exec   │              │   .ai/learnings/…                 outbox (adapter deliveries)
-   └──────────────┴──────────────┘   .ai/architecture/…              init cache, sync snapshots
+          Claude Code · Codex · Cursor · OpenCode · any MCP client
+                                 │  MCP (stdio) or CLI
+                        ┌────────┴────────┐
+                        │     kontext     │  ctx_brief · ctx_why · ctx_search · ctx_read
+                        │  (Rust, 1 bin)  │  ctx_capture · ctx_prepare_commit · ctx_init …
+                        └────────┬────────┘
+                                 │  git hooks: validate + secret scan · Decision: trailers · index
+                                 ▼
+   TEAM KNOWLEDGE (git, reviewed)                   LOCAL, DERIVED (.git/kontext/)
+   .ai/decisions/*.md   ◄── commit + pull request ── inbox: candidates agents captured
+   .ai/conventions/ · learnings/ · incidents/       search index (Tantivy), caches
+   .ai/architecture/                                 deleted any time, rebuilt from git
 ```
 
 ## Prečo kontext
 
-- **Zdrojom pravdy je git a agenti ho nikdy sami nemenia.** Zachytenie skončí v lokálnom inboxe; znalosťou tímu sa stane, až keď ho povýšiš *do commitu* a posúdi sa v pull requeste vedľa kódu, ktorý vysvetľuje. → [Zachytávanie a review](https://semans.github.io/kontext/sk/concepts/03-capture-and-review)
-- **Jeden brief s rozpočtom.** `ctx_brief` vráti aktívne rozhodnutia, konvencie, úskalia a mapu modulov v ~1–2k tokenoch, zoradené podľa ciest, na ktoré sa agent chystá siahnuť; detaily prídu na požiadanie v úrovniach L0/L1/L2. → [Vrstvy kontextu](https://semans.github.io/kontext/sk/concepts/04-context-layers)
-- **„Prečo je to takto?“ priamo z gitu.** `ctx_why path[:line]` spojí rozhodnutia, ktoré cestu pokrývajú, zhrnutie jej modulu, commity v tvare rozhodnutí, `git blame` a tvoje adaptéry histórie sessions; commity nesú trailery `Decision: <id>`. → [Vyhľadávanie](https://semans.github.io/kontext/sk/concepts/05-retrieval)
-- **Zavedenie krok za krokom.** `kontext init` prejde repozitár, vyťaží z histórie commity v tvare rozhodnutí a výmeny závislostí a za pár sekúnd zapíše fakty; tvoj agent ho potom prehlbuje po malých úlohách, ktoré sa dajú prerušiť a obnoviť. → [Inicializačný pipeline](https://semans.github.io/kontext/sk/concepts/06-init-pipeline)
-- **Adaptéry, nie integrácie.** OpenViking, CodeGraph, Serena, Agent LCM, sessions a LLM CLI sú každý pár riadkov TOML nad generickými drivermi MCP, HTTP a command, s naväzovaním argumentov zo schémy, mapovaním výsledkov a udalosťami. → [Adaptéry](https://semans.github.io/kontext/sk/adapters/01-overview)
-- **Rýchly, lokálny, bezpečný.** Zabudovaný index Tantivy, brief za ~50 ms, hooky za ~0,1 s, skenovanie tajných údajov pri každom commite, dôvera naviazaná na hash pre adaptéry deklarované v repozitári. → [Bezpečnosť](https://semans.github.io/kontext/sk/concepts/08-security)
+- **Deklarované, nie zapamätané.** Rozhodnutie je súbor, ktorý hovorí, čo platí, odkedy a pre ktoré cesty. Brief, vyhľadávanie a `kontext why` sa odvodzujú z týchto súborov a z histórie gitu, takže agenti vedia to, čo hovorí repozitár. Checkoutni minuloročné vydanie a uvidia rozhodnutia, ktoré platili vtedy. → [Úložisko znalostí](https://semans.github.io/kontext/sk/concepts/02-knowledge-store)
+- **Agenti navrhujú, ľudia schvaľujú.** Zachytenie čaká v lokálnom inboxe, kým sa nepovýši do commitu a nezlúči cez pull request, pod tými istými CODEOWNERS a CI ako kód. → [Zachytávanie a review](https://semans.github.io/kontext/sk/concepts/03-capture-and-review)
+- **Dohľadateľné ku commitom.** Commit, ktorý rozhodnutie prináša, nesie trailer `Decision:` a `kontext why src/billing/round.ts:40` spojí rozhodnutia, ktoré riadok pokrývajú, s jeho blame a históriou. Zrušené rozhodnutie nahradí nové, nezmaže sa. → [Integrácia s gitom](https://semans.github.io/kontext/sk/concepts/07-git-integration)
+- **Jeden brief pre každého agenta.** `ctx_brief` vráti rozhodnutia, konvencie a úskalia pre cesty, na ktoré sa agent chystá siahnuť, v ~1–2k tokenoch, s detailmi na požiadanie. → [Vrstvy kontextu](https://semans.github.io/kontext/sk/concepts/04-context-layers)
+- **Neaktuálne rozhodnutia vyplávajú.** Rozhodnutie, ktorého cesty od prijatia zasiahlo 20+ commitov, sa označí v briefe aj v `kontext status`. → [Aktuálnosť](https://semans.github.io/kontext/sk/concepts/04-context-layers#freshness)
+- **Zavedenie krok za krokom.** `kontext init` za pár sekúnd prejde repozitár a vyťaží z histórie commity v tvare rozhodnutí; tvoj agent ho potom prehlbuje po malých úlohách, ktoré sa dajú prerušiť a obnoviť. → [Inicializačný pipeline](https://semans.github.io/kontext/sk/concepts/06-init-pipeline)
+
+## Prečo nie pamäť Claude Code alebo CLAUDE.md?
+
+| | CLAUDE.md, AGENTS.md | Automatická pamäť Claude Code | Služby pamäte | kontext |
+| --- | --- | --- | --- | --- |
+| Píše ju | ľudia, ako prózu | model, sám od seba | model, zo sessions | agenti navrhujú, ľudia schvaľujú |
+| Zdieľaná a posúdená | v pull requestoch | nie: jeden používateľ, jeden stroj | podľa nasadenia, bez review | v pull requeste danej zmeny |
+| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | podľa ciest, ktoré mení |
+| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora, commity |
+| Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po 20 commitoch na jeho cestách |
+| Funguje s | Claude Code; ostatní čítajú AGENTS.md | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
+
+kontext CLAUDE.md nenahrádza: nechaj v ňom pár pokynov, ktoré potrebuje každá session. Rozhodnutí je priveľa na to, aby sa načítavali celé, a sú pridôležité na to, aby zostali neposúdené. → [Prečo nie niečo iné?](https://semans.github.io/kontext/sk/getting-started/01-introduction#why-not)
+
+## Pod tvojou kontrolou
+
+- **Schvaľovanie.** Znalosti sa menia len cez commity. S `/.ai/ @acme/architects` v CODEOWNERS a povinným review od vlastníkov kódu žiadny agent nezmení to, čím sa riadia všetci agenti, bez súhlasu tohto tímu.
+- **Auditná stopa.** `git log -- .ai` a `kontext log` ukážu, kto čo rozhodol a kedy. `git log --grep "Decision: <id>"` nájde commit, ktorý rozhodnutie priniesol.
+- **Pravidlá v CI.** `kontext check` zastaví pull request s chybným záznamom, duplicitným id alebo uniknutým tajným údajom. → [Validácia znalostí v CI](https://semans.github.io/kontext/sk/guides/07-ci)
+- **Lokálny a súkromný.** Žiadny účet ani server; brief za ~50 ms, hooky za ~0,1 s. Nič neopustí počítač, kým to nenastavíš. → [Bezpečnosť](https://semans.github.io/kontext/sk/concepts/08-security)
+- **Bez uzamknutia.** Úložisko je obyčajný Markdown a dá sa čítať aj bez kontextu.
 
 ## Rýchly štart
 
@@ -100,25 +116,9 @@ Celý postup: [Rýchly štart](https://semans.github.io/kontext/sk/getting-start
 
 Nástroje agenta: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompty `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
 
-## Adaptéry
+## Voliteľné adaptéry
 
-| Preset | Driver | Prináša |
-| --- | --- | --- |
-| [OpenViking](https://github.com/volcengine/OpenViking) | http | sémantické vybavovanie v `ctx_search`, čítanie `viking://`, zlúčené rozhodnutia zrkadlené do `resources/`, súkromné poznámky do `memories/` |
-| CodeGraph | mcp | vyhľadanie symbolu pre `ctx_why <symbol>`, voliteľné federovanie nástrojov |
-| [Serena](https://github.com/oraios/serena) | mcp | vyhľadávanie symbolov cez LSP |
-| [Agent LCM](https://github.com/Team-Volt/agent-lcm) | mcp | história sessions naprieč prostrediami agentov vo vyhľadávaní, why a briefe |
-| [sessions](https://github.com/nicknisi/sessions) | mcp | `why_did_this_change`, vyhľadávanie v sessions, primery |
-| `llm-claude` / `llm-codex` / `llm-ollama` | command / http | LLM na prehĺbenie autopilotom |
-| `slack-webhook` | http | oznamuje zlúčené rozhodnutia |
-
-```sh
-kontext presets
-kontext adapters add openviking --var user=alice
-kontext adapters test
-```
-
-Vlastný adaptér je pár riadkov TOML: [Vlastný adaptér](https://semans.github.io/kontext/sk/adapters/04-writing-an-adapter).
+kontext funguje aj bez nich. Ak už používaš sémantickú pamäť (OpenViking), graf kódu (CodeGraph, Serena) alebo archív sessions, adaptér ich pripojí pár riadkami TOML a `claude -p`, `codex exec` či lokálny model v Ollame vedia navrhnúť zavedenie. → [Adaptéry](https://semans.github.io/kontext/sk/adapters/01-overview)
 
 ## Výkon
 

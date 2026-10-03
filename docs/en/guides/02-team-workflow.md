@@ -33,6 +33,14 @@ Treat entries like code:
 - **Is it brief?** Context, decision, consequences: a few lines each.
 - **Does it replace something?** Then it should `supersede` the old entry rather than contradict it silently.
 
+Make the approvers explicit. With a CODEOWNERS line such as
+
+```text
+/.ai/  @acme/architects
+```
+
+and code-owner review required on the default branch, no change to what agents follow is merged without that team. Use your ADR directory instead of `/.ai/` if decisions live there.
+
 ## Changing your mind
 
 Decisions are not edited to reverse them. Record a new one that supersedes the old:

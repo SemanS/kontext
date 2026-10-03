@@ -4,7 +4,7 @@
   <img alt="kontext" src="docs/images/logo.svg" width="128" height="128">
 </a>
 
-### kontext: the team context bridge for coding agents
+### kontext: declarative team knowledge for coding agents
 
 English / [Slovenčina](README_SK.md)
 
@@ -27,38 +27,54 @@ English / [Slovenčina](README_SK.md)
 
 ## What is kontext
 
-kontext gives every coding agent you run (Claude Code, Codex, Cursor, OpenCode, anything that speaks MCP) the same short, **reviewed** memory of *why the code is the way it is*, and turns "the agent figured something out" into "the team knows it" through ordinary commits.
+kontext is a declarative bridge between your coding agents and git. The decisions, conventions and pitfalls your agents follow are short Markdown files in the repository. Agents propose new ones while they work, people approve them in the pull request of the change, and every agent (Claude Code, Codex, Cursor, OpenCode, any MCP client) gets the result in a short brief for the paths it is about to touch.
 
-It is one fast Rust binary with three faces: an **MCP server** (`kontext mcp`), a **CLI**, and a set of **git hooks**. Team knowledge lives in the repository as short Markdown files. Everything else (semantic memory, session archives, code intelligence, LLMs) plugs in as a **configured adapter**; kontext's code never names a product.
+It is one Rust binary with three faces: an **MCP server** (`kontext mcp`), a **CLI** and a set of **git hooks**.
 
 ```text
-                 Claude Code · Codex · Cursor · OpenCode · any MCP client
-                                         │  MCP (stdio)
-                                ┌────────┴────────┐
-                                │     kontext     │  ctx_brief · ctx_search · ctx_read · ctx_why
-                                │  (Rust, 1 bin)  │  ctx_capture · ctx_prepare_commit · ctx_init …
-                                └──┬─────┬─────┬──┘
-             adapters (config) ────┘     │     └──── git hooks
-   ┌──────────────┬──────────────┐       │       pre-commit: validate + secret-scan + index
-   │ mcp driver   │ http driver  │       │       prepare-commit-msg: `Decision: <id>` trailers
-   │ CodeGraph    │ OpenViking   │       │       post-commit/merge/rewrite: `sync` events
-   │ Serena       │ Ollama       │       │
-   │ Agent LCM    │ Slack hook   │       ▼
-   │ sessions     │ …            │   TEAM TRUTH (git)                LOCAL, DERIVED, PRIVATE
-   │ command drv  │              │   .ai/decisions/*.md   ◄─ PR ──   .git/kontext/inbox (candidates)
-   │ claude -p    │              │   .ai/conventions/…               .git/kontext/…/index (Tantivy)
-   │ codex exec   │              │   .ai/learnings/…                 outbox (adapter deliveries)
-   └──────────────┴──────────────┘   .ai/architecture/…              init cache, sync snapshots
+          Claude Code · Codex · Cursor · OpenCode · any MCP client
+                                 │  MCP (stdio) or CLI
+                        ┌────────┴────────┐
+                        │     kontext     │  ctx_brief · ctx_why · ctx_search · ctx_read
+                        │  (Rust, 1 bin)  │  ctx_capture · ctx_prepare_commit · ctx_init …
+                        └────────┬────────┘
+                                 │  git hooks: validate + secret scan · Decision: trailers · index
+                                 ▼
+   TEAM KNOWLEDGE (git, reviewed)                   LOCAL, DERIVED (.git/kontext/)
+   .ai/decisions/*.md   ◄── commit + pull request ── inbox: candidates agents captured
+   .ai/conventions/ · learnings/ · incidents/       search index (Tantivy), caches
+   .ai/architecture/                                 deleted any time, rebuilt from git
 ```
 
 ## Why kontext
 
-- **Git is the source of truth, and agents never change it on their own.** A capture lands in a local inbox; it becomes team knowledge only when it is promoted *into a commit* and reviewed in the pull request next to the code it explains. → [Capture and review](https://semans.github.io/kontext/concepts/03-capture-and-review)
-- **One brief, budgeted.** `ctx_brief` returns the active decisions, conventions, pitfalls and module map in ~1–2k tokens, ranked for the paths the agent is about to touch; details come on demand at L0/L1/L2. → [Context layers](https://semans.github.io/kontext/concepts/04-context-layers)
-- **"Why is this like this?" from git itself.** `ctx_why path[:line]` combines the decisions that cover the path, its module summary, decision-shaped commits, `git blame` and your session-history adapters; commits carry `Decision: <id>` trailers. → [Retrieval](https://semans.github.io/kontext/concepts/05-retrieval)
-- **Step-by-step bootstrap.** `kontext init` scans the repository, mines history for decision-shaped commits and dependency swaps, and writes the facts in seconds; your agent then deepens it one small, resumable task at a time. → [Init pipeline](https://semans.github.io/kontext/concepts/06-init-pipeline)
-- **Adapters, not integrations.** OpenViking, CodeGraph, Serena, Agent LCM, sessions and LLM CLIs are a few lines of TOML each, over generic MCP, HTTP and command drivers, with schema-based argument binding, result mapping and events. → [Adapters](https://semans.github.io/kontext/adapters/01-overview)
-- **Fast, local, safe.** Embedded Tantivy index, briefs in ~50 ms, hooks in ~0.1 s, secret scanning on every commit, trust pinning for repository-declared adapters. → [Security](https://semans.github.io/kontext/concepts/08-security)
+- **Declared, not remembered.** A decision is a file that says what holds, since when and for which paths. Briefs, search and `kontext why` are derived from these files and the git history, so agents know what the repository says. Check out last year's release and they see the decisions that held then. → [Knowledge store](https://semans.github.io/kontext/concepts/02-knowledge-store)
+- **Agents propose, people approve.** A capture waits in a local inbox until it is promoted into a commit and merged through a pull request, under the same CODEOWNERS and CI as the code. → [Capture and review](https://semans.github.io/kontext/concepts/03-capture-and-review)
+- **Traceable to commits.** The commit that ships a decision carries a `Decision:` trailer, and `kontext why src/billing/round.ts:40` combines the decisions covering a line with its blame and history. A reversed decision is superseded, not deleted. → [Git integration](https://semans.github.io/kontext/concepts/07-git-integration)
+- **One brief, every agent.** `ctx_brief` returns the decisions, conventions and pitfalls for the paths an agent is about to touch, in ~1–2k tokens, with details on demand. → [Context layers](https://semans.github.io/kontext/concepts/04-context-layers)
+- **Stale decisions surface.** A decision whose paths saw 20+ commits since it was made is flagged in the brief and in `kontext status`. → [Freshness](https://semans.github.io/kontext/concepts/04-context-layers#freshness)
+- **Step-by-step bootstrap.** `kontext init` scans the repository and mines its history for decision-shaped commits in seconds; your agent then deepens it one small, resumable task at a time. → [Init pipeline](https://semans.github.io/kontext/concepts/06-init-pipeline)
+
+## Why not Claude Code's memory or CLAUDE.md?
+
+| | CLAUDE.md, AGENTS.md | Claude Code auto memory | Memory services | kontext |
+| --- | --- | --- | --- | --- |
+| Written by | people, as prose | the model, on its own | the model, from sessions | agents propose, people approve |
+| Shared and reviewed | in pull requests | no: one user, one machine | per deployment, no review | in the pull request of the change |
+| Reaches the agent | the whole file, every session | first 200 lines of its index, every session | by similarity to the query | by the paths it is changing |
+| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author, commits |
+| When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after 20 commits on its paths |
+| Works with | Claude Code; others read AGENTS.md | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
+
+kontext does not replace CLAUDE.md: keep the few instructions every session needs there. Decisions are too many to load whole and too important to leave unreviewed. → [Why not something else?](https://semans.github.io/kontext/getting-started/01-introduction#why-not)
+
+## Under your control
+
+- **Approval.** Knowledge changes only through commits. With `/.ai/ @acme/architects` in CODEOWNERS and code-owner review required, no agent changes what every agent follows without that team's approval.
+- **Audit trail.** `git log -- .ai` and `kontext log` show who decided what and when. `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
+- **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or leaked secrets. → [Validate knowledge in CI](https://semans.github.io/kontext/guides/07-ci)
+- **Local and private.** No account and no server; briefs in ~50 ms, hooks in ~0.1 s. Nothing leaves the machine unless you configure it. → [Security](https://semans.github.io/kontext/concepts/08-security)
+- **No lock-in.** The store is plain Markdown and stays readable without kontext.
 
 ## Quick start
 
@@ -100,25 +116,9 @@ Full walkthrough: [Quick start](https://semans.github.io/kontext/getting-started
 
 Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
 
-## Adapters
+## Optional adapters
 
-| Preset | Driver | Brings |
-| --- | --- | --- |
-| [OpenViking](https://github.com/volcengine/OpenViking) | http | semantic recall in `ctx_search`, `viking://` reads, merged decisions mirrored to `resources/`, private notes to `memories/` |
-| CodeGraph | mcp | symbol lookup for `ctx_why <symbol>`, optional tool federation |
-| [Serena](https://github.com/oraios/serena) | mcp | LSP-backed symbol search |
-| [Agent LCM](https://github.com/Team-Volt/agent-lcm) | mcp | cross-harness session history in search, why and brief |
-| [sessions](https://github.com/nicknisi/sessions) | mcp | `why_did_this_change`, session search, primers |
-| `llm-claude` / `llm-codex` / `llm-ollama` | command / http | LLMs for autopilot deepening |
-| `slack-webhook` | http | announce merged decisions |
-
-```sh
-kontext presets
-kontext adapters add openviking --var user=alice
-kontext adapters test
-```
-
-Writing your own takes a few lines of TOML: [Writing an adapter](https://semans.github.io/kontext/adapters/04-writing-an-adapter).
+kontext works without any. If you already run a semantic memory (OpenViking), a code graph (CodeGraph, Serena) or a session archive, an adapter connects it in a few lines of TOML, and `claude -p`, `codex exec` or a local Ollama model can draft the bootstrap. → [Adapters](https://semans.github.io/kontext/adapters/01-overview)
 
 ## Performance
 

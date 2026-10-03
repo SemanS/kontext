@@ -1,49 +1,85 @@
 # Introduction
 
-kontext is a **team context bridge for coding agents**. It is one Rust binary that works as three things at once:
+kontext is **declarative team knowledge for coding agents**. The decisions, conventions and pitfalls your agents follow are files in the repository, approved in pull requests like code. kontext serves them to every agent and links them to the commits they govern.
+
+It is one Rust binary that works as three things at once:
 
 - an **MCP server** (`kontext mcp`) that Claude Code, Codex, Cursor, OpenCode and any other MCP client can call,
 - a **CLI** for people (`kontext brief`, `kontext why`, `kontext log`, …),
-- a set of **git hooks** that keep shared knowledge valid, linked to commits and in sync.
-
-Its job is narrow and important: give every agent you run the same short, reviewed memory of *why the code is the way it is*, and turn "the agent figured something out" into "the team knows it" through ordinary commits.
+- a set of **git hooks** that validate knowledge, link it to commits and keep the search index current.
 
 ## The problem
 
-Coding agents forget everything between sessions, and each harness remembers differently. Teams answer that with memory tools (vector stores, session archives, knowledge graphs) and quickly end up with three new problems:
+Coding agents now keep their own memory, and none of it is built for a team:
 
-1. **Nobody reviews what the agent "learned".** A wrong conclusion stored once is recalled forever, for everyone.
-2. **Memory is per machine and per tool.** What Claude Code knows on your laptop, Codex on your colleague's does not.
-3. **Every tool wants to be the center.** Wiring five memory systems into five agents is a mesh nobody maintains.
+- **Claude Code's auto memory** is written by the model on its own and kept per user in `~/.claude/projects/<project>/memory/`. The first 200 lines of its index are loaded into every session. Teammates' agents never see it, and nobody approves it.
+- **CLAUDE.md and AGENTS.md** are shared, but each is prose loaded whole into every session. A rule has no owner, date or status, and an outdated one stays until someone notices.
+- **Memory services** such as mem0, claude-mem or Zep have a model extract facts from sessions and recall them by similarity. A wrong conclusion stored once is recalled for everyone, and nobody signed off on it.
 
-## The idea
+None of them can answer what a tech lead or an auditor asks: *which decisions do our agents follow in the billing code, who made them, and when?*
 
-Split context into layers and let each layer do what it is good at:
+## Declared, approved, traceable
 
-| Layer | Typical systems | kontext's role |
-| --- | --- | --- |
-| Raw history (sessions, transcripts) | Agent LCM, sessions, your harness | read through a `history`/`search`/`brief` adapter; never copied into git |
-| Code intelligence | CodeGraph, Serena (LSP) | read through a `code` adapter, used by `ctx_why <symbol>` |
-| Long-term / semantic memory | OpenViking, any HTTP or MCP store | federated into `ctx_search`; receives `sync` and private `capture` events |
-| **Team truth** | **Markdown in the repository** | **owned by kontext**: capture → inbox → promote → commit → review → pull |
+kontext treats team knowledge the way Nix treats a system: the desired state is declared in files, and everything else is derived from them.
 
-The first three layers are **adapters**: configuration, not code. The fourth is the part that has to be trustworthy, so it lives where the team already reviews things: in git.
+```markdown
+---
+id: 2026-09-28-prices-are-integer-cents
+kind: decision
+title: Prices are integer cents
+status: accepted
+date: 2026-09-28
+paths: [src/billing/**]
+author: Jane Doe
+---
+Floats broke VAT rounding on invoices with many lines.
+Every amount is stored and computed as an integer number of cents.
+```
+
+- **Declared.** The file says what holds, since when and for which paths. Briefs, search and `kontext why` are derived from these files and the git history; the index and caches can be deleted at any time. Check out last year's release and agents see the decisions that held then.
+- **Approved.** Agents capture into a local inbox. A capture becomes team knowledge only when it is promoted into a commit and merged through a pull request, so the people who review the code also review what agents will follow.
+- **Traceable.** The commit that ships a decision carries a `Decision:` trailer. A decision is reversed by a newer one that supersedes it, and `kontext log --all` shows the chain. After 20 commits on its paths it is flagged for a check.
+
+## Why not something else? {#why-not}
+
+| | CLAUDE.md, AGENTS.md | Claude Code auto memory | Memory services | kontext |
+| --- | --- | --- | --- | --- |
+| Written by | people, as prose | the model, on its own | the model, from sessions | agents propose, people approve |
+| Shared and reviewed | in pull requests | no: one user, one machine | per deployment, no review | in the pull request of the change |
+| Reaches the agent | the whole file, every session | first 200 lines of its index, every session | by similarity to the query | by the paths it is changing |
+| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author, commits |
+| When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after 20 commits on its paths |
+| Works with | Claude Code; others read AGENTS.md | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
+
+- **Path-scoped rules.** Claude Code's `.claude/rules/` can limit a rule to paths. The rule still has no status, owner or history, and other agents do not read it.
+- **An ADR folder.** Keep it. kontext reads existing ADRs where they are and serves them to agents by path: see [Bootstrap an existing repository](../guides/01-bootstrap-an-existing-repository.md#existing-adrs).
+- **A wiki.** It lives outside the repository, so it is not reviewed with the code it describes, and an agent cannot tell which page still holds.
+
+kontext does not replace CLAUDE.md. Keep there the few instructions every session needs. Decisions are too many to load whole and too important to leave unreviewed; `kontext connect claude-hooks` puts the brief at the start of every Claude Code session.
+
+## Under your control
+
+- **Approval.** Knowledge changes only through commits. With `/.ai/ @acme/architects` in CODEOWNERS and code-owner review required, no agent changes what every agent follows without that team's approval.
+- **Audit trail.** `git log -- .ai` and `kontext log` show who decided what and when. `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
+- **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or leaked secrets: see [Validate knowledge in CI](../guides/07-ci.md).
+- **Data stays local.** No account and no server. Nothing leaves the machine unless you configure it, and adapters declared in a repository run only after `kontext trust`: see [Security and privacy](../concepts/08-security.md).
+- **No lock-in.** The store is plain Markdown and stays readable without kontext. Removing kontext leaves the files.
+
+## A day with kontext
+
+1. An agent starts a task and calls `ctx_brief` with the paths it will touch. It gets the decisions and pitfalls that govern them.
+2. While working it calls `ctx_search`, `ctx_read` and `ctx_why` instead of rediscovering history.
+3. When something durable is settled (a decision, a convention, a gotcha), it calls `ctx_capture`.
+4. Before committing it calls `ctx_prepare_commit`, which promotes the relevant candidates into the change. The hook validates them, scans them for secrets and adds `Decision: <id>` trailers.
+5. The pull request carries code and knowledge together. After the merge, every teammate's agents get the new decision in their next brief.
 
 ## Principles
 
 - **Git + Markdown is the source of truth; everything else is derived.** The search index, caches, sync snapshots and the event outbox can be deleted at any time and are rebuilt from files and history.
 - **Agents never change shared truth on their own.** A capture lands in a local inbox. It becomes team knowledge only when it is promoted *into a commit*, so it shows up in the diff and is reviewed with the code it explains.
 - **Brief beats complete.** Every agent-facing answer has a token budget. Details are available on demand through levels (L0 one line, L1 overview, L2 full).
-- **Adapters are configuration.** The core knows capabilities (`search`, `read`, `store`, `history`, `code`, `brief`, `llm`), events (`capture`, `promote`, `sync`) and three drivers (`mcp`, `http`, `command`). A product is a preset you can edit.
-- **Hooks never wait on the network.** Commits stay instant; deliveries to adapters go through an outbox that retries in the background.
-
-## What a day with kontext looks like
-
-1. An agent starts a task and calls `ctx_brief` with the paths it will touch. It gets the decisions and pitfalls that govern them.
-2. While working it calls `ctx_search`, `ctx_read` and `ctx_why` instead of rediscovering history.
-3. When something durable is settled (a decision, a convention, a gotcha), it calls `ctx_capture`.
-4. Before committing it calls `ctx_prepare_commit`, which promotes the relevant candidates into the change. The hook validates them, scans them for secrets and adds `Decision: <id>` trailers.
-5. The pull request carries code and knowledge together. After merge, teammates' hooks deliver the new knowledge to their own memory adapters.
+- **Hooks never wait on the network.** Commits stay instant.
+- **Everything else is optional.** Session archives, code graphs and semantic memory can be connected as [adapters](../adapters/01-overview.md), a few lines of configuration each. kontext works without any.
 
 ## Where to go next
 

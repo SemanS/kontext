@@ -123,7 +123,7 @@ function nav(lang: 'en' | 'sk'): DefaultTheme.NavItem[] {
 
 export default defineConfig({
   title: 'kontext',
-  description: 'Team context bridge for coding agents: git-native decision memory, one MCP server, pluggable adapters.',
+  description: 'Declarative team knowledge for coding agents: decisions in git, approved in pull requests, served to every agent over MCP.',
   base: '/kontext/',
   cleanUrls: true,
   lastUpdated: true,
@@ -141,8 +141,8 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/kontext/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#4338ca' }],
-    ['meta', { property: 'og:title', content: 'kontext: team context bridge for coding agents' }],
-    ['meta', { property: 'og:description', content: 'Git-native decision memory for Claude Code, Codex, Cursor and every MCP client.' }],
+    ['meta', { property: 'og:title', content: 'kontext: declarative team knowledge for coding agents' }],
+    ['meta', { property: 'og:description', content: 'Decisions in git, approved in pull requests, served to Claude Code, Codex, Cursor and every MCP client.' }],
   ],
   themeConfig: {
     logo: '/logo.svg',
@@ -180,7 +180,7 @@ export default defineConfig({
       label: 'Slovenčina',
       lang: 'sk',
       link: '/sk/',
-      description: 'Tímový kontext pre coding agentov: rozhodnutia v gite, jeden MCP server, zásuvné adaptéry.',
+      description: 'Deklaratívne tímové znalosti pre coding agentov: rozhodnutia v gite, schválené v pull requestoch, pre každého agenta cez MCP.',
       themeConfig: {
         nav: nav('sk'),
         sidebar: sidebar('sk'),
