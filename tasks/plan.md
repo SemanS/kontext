@@ -16,8 +16,8 @@ JSON is never extracted from human prose, clipped or prefixed with repository ba
 
 Operations: `status`, `setup`, `entries.list`, `entries.get`, `entries.search`, `entries.governing`,
 `entries.export`, `inbox.list`, `inbox.drop`, `drafts.capture`, `drafts.stage`, `drafts.extract`,
-`drafts.formalize`, `guidance.propose`. Entry metadata includes structured paths, tags, supersession
-and provenance. Publication evidence is distinct from decision status.
+`drafts.formalize`, `guidance.propose`, `operations.get`. Entry metadata includes structured paths,
+tags, supersession and provenance. Publication evidence is distinct from decision status.
 
 ## Ownership and order
 
