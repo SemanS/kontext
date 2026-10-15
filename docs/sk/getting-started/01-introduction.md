@@ -20,7 +20,7 @@ Ani jedna nevie odpovedať na to, na čo sa pýta tech lead alebo audítor: *kto
 
 ## Deklaratívne, reprodukovateľné, posúdené
 
-kontext narába so znalosťami tímu tak, ako Nix so systémom: želaný stav je deklarovaný v súboroch a všetko ostatné sa z nich odvodí.
+kontext narába so znalosťami tímu tak, ako Nix so systémom: želaný zdieľaný stav je deklarovaný v súboroch a jeho vyhľadávacie indexy sa z nich odvodia.
 
 ```markdown
 ---
@@ -92,7 +92,7 @@ kontext CLAUDE.md nenahrádza. Nechaj v ňom pár pokynov, ktoré potrebuje kaž
 
 ## Princípy
 
-- **Git + Markdown je zdroj pravdy; všetko ostatné je odvodené.** Vyhľadávací index, cache, snapshoty synchronizácie a outbox udalostí sa dajú kedykoľvek zmazať a znova sa zostavia zo súborov a histórie.
+- **Git + Markdown je zdieľaná pravda.** Indexy, cache a snapshoty sú odvodené. Počas čakajúcej práce ponechajte inbox/históriu, čakajúce doručenia adaptérom a potvrdenia operácií; držia lokálny workflow a identitu opakovania.
 - **Agenti nikdy sami nemenia zdieľanú pravdu.** Zachytenie skončí v lokálnom inboxe. Znalosťou tímu sa stane, až keď ho povýšiš *do commitu*. Vtedy sa objaví v diffe a posudzuje sa spolu s kódom, ktorý vysvetľuje.
 - **Stručné je lepšie než úplné.** Každá odpoveď pre agenta má tokenový rozpočet. Detaily sú dostupné na požiadanie cez úrovne (L0 jeden riadok, L1 prehľad, L2 celé).
 - **Hooky nikdy nečakajú na sieť.** Commity zostávajú okamžité.

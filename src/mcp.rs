@@ -189,12 +189,21 @@ fn call_tool(st: &State, params: &Value) -> Value {
     let app = match st.app() {
         Ok(a) => a,
         Err(e) => {
+            if name == "ctx_api" {
+                let value = crate::api::failure(e);
+                return json!({"content": [{"type": "text", "text": value.to_string()}], "structuredContent": value, "isError": true});
+            }
             return text_result(Err(e.context(
                 "kontext needs to run inside a git repository (start the MCP server from the project directory, or pass -C <dir>)",
             )));
         }
     };
     if name.starts_with("ctx_") {
+        if name == "ctx_api" {
+            let value = tools::api_call(&app, &args);
+            let is_error = value["ok"] != true;
+            return json!({"content": [{"type": "text", "text": value.to_string()}], "structuredContent": value, "isError": is_error});
+        }
         return text_result(tools::call(&app, name, &args, "agent"));
     }
     let target = {

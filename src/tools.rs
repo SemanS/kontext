@@ -51,6 +51,7 @@ fn arr(desc: &str) -> Value {
 /// read-only tools without asking and asks (or, with `approval_policy = "never"`, refuses) the rest.
 fn annotations(name: &str) -> Value {
     let (title, read_only, destructive) = match name {
+        "ctx_api" => ("Structured knowledge API", false, false),
         "ctx_brief" => ("Team brief", true, false),
         "ctx_search" => ("Search team context", true, false),
         "ctx_read" => ("Read a context URI", true, false),
@@ -66,7 +67,7 @@ fn annotations(name: &str) -> Value {
         "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
         _ => ("", false, false),
     };
-    let mut a = json!({"readOnlyHint": read_only, "openWorldHint": false});
+    let mut a = json!({"readOnlyHint": read_only, "openWorldHint": name == "ctx_api"});
     if !title.is_empty() {
         a["title"] = json!(title);
     }
@@ -94,6 +95,17 @@ pub fn definitions() -> Vec<Value> {
 
 fn tool_list() -> Vec<Value> {
     vec![
+        json!({
+            "name": "ctx_api",
+            "description": "Versioned structured knowledge API for applications. Read, query, extract and stage knowledge through the same operations as kontext api. Inspect status for capabilities. Knowledge files and staging stay local; configured LLM and event adapters may access external services. Staging does not prove review or publish knowledge.",
+            "inputSchema": {"type": "object", "properties": {
+                "operation": {"type": "string", "enum": crate::api::OPERATIONS},
+                "input": {"type": "object", "description": "Operation-specific input object"},
+                "dir": s("Path inside the target repository or worktree")
+            }, "required": ["operation"]},
+            "outputSchema": crate::api::output_schema(),
+            "annotations": {"title": "Structured knowledge API", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
+        }),
         json!({
             "name": "ctx_brief",
             "description": "Team context for this repository in one small, token-budgeted block: active decisions, conventions, learnings and pitfalls, the module map, agent rules and pending knowledge work. Call at the start of a task; pass `focus` (paths you will touch, or a topic) to rank what matters.",
@@ -229,6 +241,9 @@ fn int_arg(args: &Value, key: &str) -> Option<usize> {
 }
 
 pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String> {
+    if name == "ctx_api" {
+        return Ok(api_call(app, args).to_string());
+    }
     // `dir`: the tool runs in another worktree, submodule or repository
     if let Some(dir) = str_arg(args, "dir") {
         let target = crate::route::open_dir(app, &dir)?;
@@ -503,6 +518,21 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
         }
         other => bail!("unknown tool '{other}'"),
     }
+}
+
+/// Structured tool transport deliberately bypasses text clipping and routing banners.
+pub fn api_call(app: &App, args: &Value) -> Value {
+    let Some(operation) = args.get("operation").and_then(Value::as_str) else {
+        return crate::api::failure(crate::api::error("invalid_input", "operation is required"));
+    };
+    let mut input = args.get("input").cloned().unwrap_or_else(|| json!({}));
+    if let Some(dir) = args.get("dir") {
+        let Some(object) = input.as_object_mut() else {
+            return crate::api::failure(crate::api::error("invalid_input", "input must be a JSON object"));
+        };
+        object.insert("dir".into(), dir.clone());
+    }
+    crate::api::execute(app, operation, &input)
 }
 
 pub fn prompts() -> Vec<Value> {

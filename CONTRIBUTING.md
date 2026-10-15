@@ -44,7 +44,9 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 
 | Path | What |
 | --- | --- |
-| `src/main.rs` | CLI |
+| `src/main.rs`, `src/cli.rs` | thin binary entry and CLI |
+| `src/lib.rs`, `src/application.rs` | private engine modules and stable embedding facade |
+| `src/api.rs`, `src/api_read.rs`, `src/api_write.rs` | versioned application service shared by CLI, MCP and library |
 | `src/mcp.rs`, `src/tools.rs` | MCP server and the agent tool surface |
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | `src/route.rs` | which repository a path belongs to: submodules, other worktrees, `dir` |

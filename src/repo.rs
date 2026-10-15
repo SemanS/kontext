@@ -84,8 +84,7 @@ impl Repo {
         }
         repo.slug = repo.id.replace('/', "-");
         repo.branch = repo.git_opt(&["symbolic-ref", "--short", "-q", "HEAD"]).filter(|s| !s.is_empty());
-        let base = repo.root.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
-        repo.worktree_key = format!("{}-{}", crate::util::slugify(&base, 32), &crate::util::short_hash(&repo.root.to_string_lossy())[..8]);
+        repo.worktree_key = worktree_key(&repo.root);
         Ok(repo)
     }
 
@@ -93,6 +92,7 @@ impl Repo {
         let mut c = Command::new("git");
         c.arg("-C").arg(&self.root).args(["-c", "core.quotePath=false"]);
         c.env("GIT_OPTIONAL_LOCKS", "0");
+        c.env("GIT_NO_LAZY_FETCH", "1");
         c
     }
 
@@ -217,11 +217,19 @@ impl Repo {
         roots
     }
 
-    /// Whether the worktree with this key still exists (its state dir records its root).
+    /// Git is authoritative for ownership; derived state may have been deleted or never created.
     pub fn worktree_alive(&self, key: &str) -> bool {
-        key == self.worktree_key
-            || std::fs::read_to_string(self.state_dir().join("worktrees").join(key).join("path"))
-                .is_ok_and(|root| std::path::Path::new(root.trim()).exists())
+        if key == self.worktree_key {
+            return true;
+        }
+        let Ok(listing) = self.git_bytes(&["worktree", "list", "--porcelain", "-z"]) else {
+            // A transient Git failure must not authorize adopting another live agent's candidate.
+            return true;
+        };
+        listing.split(|byte| *byte == 0).filter_map(|record| record.strip_prefix(b"worktree ")).any(|root| {
+            let path = PathBuf::from(String::from_utf8_lossy(root).as_ref());
+            path.is_dir() && worktree_key(&path.canonicalize().unwrap_or(path)) == key
+        })
     }
 
     /// Remember which worktree a state dir belongs to, and drop state of worktrees that are gone
@@ -403,6 +411,11 @@ impl Repo {
     }
 }
 
+fn worktree_key(root: &Path) -> String {
+    let base = root.file_name().map(|s| s.to_string_lossy()).unwrap_or_default();
+    format!("{}-{}", crate::util::slugify(&base, 32), &crate::util::short_hash(&root.to_string_lossy())[..8])
+}
+
 fn main_worktree_dir(common_dir: &Path, root: &Path) -> String {
     let name = |p: &Path| p.file_name().map(|s| s.to_string_lossy().to_string());
     if name(common_dir).as_deref() == Some(".git")
@@ -446,6 +459,24 @@ pub fn normalize_remote(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_worktree_ownership_survives_deleted_derived_state() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("kontext-worktree-owner-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(Command::new("git").args(["init", "-q"]).arg(&root).status().unwrap().success());
+        let main = Repo::discover(&root).unwrap();
+        main.git(&["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+        let sibling = root.join("sibling");
+        main.git(&["worktree", "add", "-qb", "feature/sibling", sibling.to_str().unwrap()]).unwrap();
+        let other = Repo::discover(&sibling).unwrap();
+        assert!(!other.worktree_state_dir().exists());
+        assert!(main.worktree_alive(&other.worktree_key), "a derived cache must not determine worktree ownership");
+        main.git(&["worktree", "remove", sibling.to_str().unwrap()]).unwrap();
+        assert!(!main.worktree_alive(&other.worktree_key));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn remotes() {

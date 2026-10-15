@@ -8,6 +8,9 @@ kontext [-C <dir>] <command> [options]
 
 ## Zavedenie
 
+Aplikácie používajú [`kontext api <operation> [JSON|-]`](./05-application-api.md) pre verzované JSON
+výsledky a chyby: dotazy na znalosti, extrakciu, idempotentný staging a overený export.
+
 ### `kontext init`
 
 Spustí scan → history → render → wire → deepen. Opakované spustenie je bezpečné.

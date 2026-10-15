@@ -8,6 +8,9 @@ kontext [-C <dir>] <command> [options]
 
 ## Bootstrap
 
+Applications use [`kontext api <operation> [JSON|-]`](./05-application-api.md) for versioned JSON
+results and errors, including knowledge queries, extraction, idempotent staging and reviewed export.
+
 ### `kontext init`
 
 Runs scan → history → render → wire → deepen. Safe to re-run.

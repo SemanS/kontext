@@ -1,10 +1,14 @@
 # MCP nástroje, prompty a zdroje
 
-Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom. Verzie protokolu 2024-11-05, 2025-03-26, 2025-06-18 a 2025-11-25 (verzia klienta sa zopakuje, ak je podporovaná). Schopnosti: `tools`, `prompts`, `resources`, `logging`. Výsledky nástrojov sú text; chyby sa vracajú ako výsledky s `isError: true`.
+Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom. Verzie protokolu 2024-11-05, 2025-03-26, 2025-06-18 a 2025-11-25 (verzia klienta sa zopakuje, ak je podporovaná). Schopnosti: `tools`, `prompts`, `resources`, `logging`. Existujúce nástroje vracajú text; `ctx_api` navyše štruktúrované dáta. Chyby sa vracajú ako výsledky s `isError: true`.
 
 ## Nástroje
 
-Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Všetky majú `openWorldHint: false`.
+[`ctx_api`](./05-application-api.md) sprístupňuje verzovanú aplikačnú službu cez `operation`, `input`
+a voliteľné `dir`. Vracia `structuredContent` a `outputSchema` aj úplnú textovú JSON kópiu.
+Existujúce nástroje nižšie si zachovávajú textové výsledky.
+
+Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
 
 ### Iný repozitár: `dir` {#dir}
 

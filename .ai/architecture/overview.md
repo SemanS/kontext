@@ -13,6 +13,8 @@ deepened: 2026-09-28
 
 kontext is one Rust binary with three faces: an MCP server (`kontext mcp`) for Claude Code, Codex, Cursor, OpenCode and Superset agents; a CLI; and git hooks.
 
+Applications use one versioned JSON service through CLI, structured MCP or the Rust `application` facade. Verifying services can embed `KnowledgePolicy` to parse independently proven committed blobs with the same formats and lifecycle rules, including custom ADR stores. Application UI, shared queues, authorization and agent delivery stay in their clients.
+
 - **Team truth** is short Markdown in the repository (`.ai/` or an existing ADR directory), changed only through commits. Agent captures land in a local inbox (`.git/kontext/inbox`) and become shared only when promoted into a commit, so they are reviewed with the code they explain.
 - **Recall** is a derived Tantivy index over entries, repo docs and commit history, plus fan-out to adapters.
 - **Adapters** (mcp / http / command drivers) implement capability ops (search, read, store, history, code, brief, llm) and subscribe to events (capture, promote, sync). Products such as OpenViking or CodeGraph exist only as TOML presets.

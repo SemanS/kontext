@@ -2,6 +2,13 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+Applications can use a shared knowledge engine through the [application API](../reference/05-application-api.md):
+versioned JSON CLI and structured MCP, configured-store queries, path applicability, read-only extraction,
+idempotent draft staging and committed exports pinned to an explicit review ref. Existing human CLI
+commands and agent tools remain compatible.
+
 ## 0.2.1 (2026-10-03)
 
 **Agents act on the decisions that govern a change.** In a test thread, an agent was given the brief injected at session start, which lists only the newest decisions, and made a change that contradicted an older one. It learned of the conflict only at commit time, from a one-line summary that left the rule out, and recorded nothing. Now:

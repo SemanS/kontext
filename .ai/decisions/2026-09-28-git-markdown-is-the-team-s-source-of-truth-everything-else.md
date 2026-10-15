@@ -2,10 +2,11 @@
 id: 2026-09-28-git-markdown-is-the-team-s-source-of-truth-everything-else
 kind: decision
 title: Git + Markdown is the team's source of truth; everything else is derived
-status: accepted
+status: superseded
 date: 2026-09-28
 summary: Shared knowledge is short Markdown in the repository; the index, caches, snapshots and outbox under .git/kontext can be deleted anytime.
 paths: [src/store.rs, src/index.rs, .ai/**]
+superseded_by: [2026-10-15-git-is-shared-truth-inbox-history-and-receipts-preserve]
 commits: [8c35950]
 origin: init
 ---

@@ -209,6 +209,8 @@ pub struct Routing {
     pub owner: Option<Arc<App>>,
     pub paths: Vec<String>,
     pub notes: Vec<String>,
+    /// Another repository was found, but ownership could not be resolved to one initialized target.
+    pub ambiguous: bool,
 }
 
 /// Where a capture with these paths belongs. It moves to another repository only when every path
@@ -287,7 +289,8 @@ pub fn owner_of(app: &App, paths: &[String]) -> Routing {
         ));
     }
     let paths = if owner.is_some() { there_paths } else { here_paths };
-    Routing { owner, paths, notes }
+    let ambiguous = other.is_some() && owner.is_none();
+    Routing { owner, paths, notes, ambiguous }
 }
 
 /// `rel/tail` without stray slashes; the whole repository when both are empty.

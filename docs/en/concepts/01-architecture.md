@@ -22,7 +22,8 @@
 
 | Component | Source | Responsibility |
 | --- | --- | --- |
-| CLI | `src/main.rs` | every command; `kontext mcp` starts the server |
+| CLI | `src/main.rs`, `src/cli.rs` | thin binary wrapper and every command; `kontext mcp` starts the server |
+| Application service | `src/api*.rs`, `src/application.rs`, `src/lib.rs` | JSON CLI, structured MCP, embedded requests and pure committed-knowledge inspection |
 | MCP server | `src/mcp.rs`, `src/tools.rs` | JSON-RPC over stdio, concurrent requests, tool/prompt/resource surface |
 | Operations | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | Store | `src/store.rs` | entries in the repository: parse, validate, allocate ids, render the index |
@@ -43,12 +44,13 @@
 | Per-repository personal overrides | `~/.config/kontext/repos/<slug>.toml` | no | – |
 | Clone-local config | `<git-common-dir>/kontext/config.toml` | no | yes |
 | Inbox (candidates) | `<git-common-dir>/kontext/inbox/` | no | yes |
+| Write receipts | `<git-common-dir>/kontext/worktrees/<worktree>/operations/` | no | no (retry identity per worktree) |
 | Outbox (adapter deliveries) | `<git-common-dir>/kontext/outbox.jsonl` | no | yes |
 | Bootstrap progress | `<git-common-dir>/kontext/init-done.json` + the entries themselves | partly (entries) | yes |
 | Search index, init cache, sync snapshot, freshness cache | `<git-common-dir>/kontext/worktrees/<worktree>/` | no | no (per worktree) |
 | Adapter logs (MCP servers' stderr) | `<git-common-dir>/kontext/logs/` | no | yes |
 
-`<git-common-dir>` is `$(git rev-parse --git-common-dir)`, normally `.git`. Everything under `.git/kontext/` is derived or local and can be deleted.
+`<git-common-dir>` is `$(git rev-parse --git-common-dir)`, normally `.git`. Search caches and snapshots are derived. Inbox/history, pending deliveries, local configuration and operation receipts are local workflow state: deleting them discards that work and its retry identity. See the [application API](../reference/05-application-api.md).
 
 ## Repository identity
 

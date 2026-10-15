@@ -12,10 +12,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin }
-          - { os: macos-14, target: x86_64-apple-darwin }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-14, target: aarch64-apple-darwin, artifact_target: mac-arm64, binary: kontext }
+          - { os: macos-14, target: x86_64-apple-darwin, artifact_target: mac-x64, binary: kontext }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, artifact_target: linux-x64, binary: kontext }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, artifact_target: linux-arm64, binary: kontext }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, artifact_target: win-x64, binary: kontext.exe }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -23,8 +24,23 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
-      - run: tar -czf kontext-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release kontext
+      - name: Describe the exact standalone engine artifact
+        shell: python
+        run: |
+          import hashlib, json, os, pathlib
+          binary = pathlib.Path('target/${{ matrix.target }}/release/${{ matrix.binary }}')
+          manifest = {
+              'api_version': 1,
+              'target': '${{ matrix.artifact_target }}',
+              'sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+              'source_revision': os.environ['GITHUB_SHA'],
+          }
+          pathlib.Path('kontext-${{ matrix.target }}.manifest.json').write_text(json.dumps(manifest) + '\n')
+      - run: tar -czf kontext-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.binary }}
+        shell: bash
       - uses: softprops/action-gh-release@v2
         with:
-          files: kontext-${{ matrix.target }}.tar.gz
+          files: |
+            kontext-${{ matrix.target }}.tar.gz
+            kontext-${{ matrix.target }}.manifest.json
           generate_release_notes: true

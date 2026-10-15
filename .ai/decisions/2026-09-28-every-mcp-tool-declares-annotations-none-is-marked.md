@@ -2,10 +2,11 @@
 id: 2026-09-28-every-mcp-tool-declares-annotations-none-is-marked
 kind: decision
 title: Every MCP tool declares annotations; none is marked destructive
-status: accepted
+status: superseded
 date: 2026-09-28
 tags: [mcp, codex]
 paths: [src/tools.rs, src/connect.rs]
+superseded_by: [2026-10-15-mcp-annotations-distinguish-the-application-apis-external]
 author: SemanS
 origin: cli
 ---

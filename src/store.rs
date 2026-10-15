@@ -213,7 +213,7 @@ impl Entry {
         let mut out = format!("{heading}\n\n");
         let mut field = |k: &str, v: String| {
             if !v.is_empty() {
-                out.push_str(&format!("**{k}:** {v}\n"));
+                out.push_str(&format!("**{k}:** {}\n", v.replace(['\r', '\n'], " ")));
             }
         };
         field("Status", self.status.clone().unwrap_or_default());
@@ -225,6 +225,25 @@ impl Entry {
         field("Superseded by", self.superseded_by.join(", "));
         field("Commits", self.commits.join(", "));
         field("Author", self.author.clone().unwrap_or_default());
+        let mut metadata = serde_json::Map::new();
+        if let Some(origin) = &self.origin {
+            metadata.insert("origin".into(), serde_json::json!(origin));
+        }
+        if let Some(visibility) = &self.visibility {
+            metadata.insert("visibility".into(), serde_json::json!(visibility));
+        }
+        for (key, value) in &self.extra {
+            metadata.insert(
+                key.clone(),
+                match value {
+                    FmValue::Str(s) => serde_json::json!(s),
+                    FmValue::List(v) => serde_json::json!(v),
+                },
+            );
+        }
+        if !metadata.is_empty() {
+            field("Kontext metadata", serde_json::Value::Object(metadata).to_string());
+        }
         out.push('\n');
         out.push_str(self.body.trim_start_matches('\n'));
         if !out.ends_with('\n') {
@@ -354,11 +373,13 @@ fn needs_quotes(s: &str) -> bool {
 }
 
 fn fm_scalar(s: &str) -> String {
-    let s = s.replace('\n', " ");
+    let s = s.replace(['\r', '\n'], " ");
     if needs_quotes(&s) { format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")) } else { s }
 }
 
 fn fm_list_item(s: &str) -> String {
+    let s = s.replace(['\r', '\n'], " ");
+    let s = s.as_str();
     if needs_quotes(s) || s.contains([',', '[', ']']) {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
@@ -375,6 +396,7 @@ static FIELD: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 const FIELD_KEYS: &[&str] = &[
+    "kontext metadata",
     "status",
     "date",
     "tags",
@@ -528,6 +550,21 @@ impl Entry {
                 Some(c) if FIELD_KEYS.contains(&c[1].trim().to_lowercase().as_str()) => {
                     let key = c[1].trim().to_lowercase();
                     let val = c[2].trim().trim_end_matches("**").trim().to_string();
+                    if key == "kontext metadata" {
+                        if let Ok(serde_json::Value::Object(metadata)) = serde_json::from_str(&val) {
+                            for (key, value) in metadata {
+                                match value {
+                                    serde_json::Value::String(s) => self.apply_field(&key, FmValue::Str(s)),
+                                    serde_json::Value::Array(v) if v.iter().all(serde_json::Value::is_string) => self
+                                        .apply_field(&key, FmValue::List(v.iter().filter_map(|s| s.as_str().map(String::from)).collect())),
+                                    _ => {}
+                                }
+                            }
+                        }
+                        saw_field = true;
+                        consumed += line.len();
+                        continue;
+                    }
                     let v = if matches!(key.as_str(), "tags" | "paths" | "supersedes" | "superseded by" | "superseded-by" | "commits") {
                         FmValue::List(split_inline_list(&val.replace('`', "")))
                     } else {
@@ -685,15 +722,62 @@ impl<'a> Store<'a> {
         if e.date.is_none() {
             e.date = Some(date);
         }
-        util::write_atomic(&self.repo.abs(&rel), &e.markdown())?;
+        self.write_reserved(e)?;
         Ok(rel)
+    }
+
+    /// Write a preallocated entry, allowing safe journal recovery but never overwriting other content.
+    pub fn write_reserved(&self, e: &Entry) -> Result<()> {
+        self.validate_reserved(e)?;
+        let abs = self.repo.abs(&e.rel_path);
+        let text = e.markdown();
+        if abs.exists() {
+            if std::fs::read_to_string(&abs)? != text {
+                bail!("entry path already contains different content: {}", e.rel_path);
+            }
+            return Ok(());
+        }
+        util::write_atomic(&abs, &text)
+    }
+
+    pub(crate) fn validate_reserved(&self, e: &Entry) -> Result<()> {
+        if !self.cfg.store.kinds.contains_key(&e.kind) {
+            bail!("unknown kind '{}'", e.kind);
+        }
+        let dir = self.cfg.kind_path(&e.kind);
+        let path = std::path::Path::new(&e.rel_path);
+        if e.rel_path.contains(['\r', '\n'])
+            || e.id.contains(['\r', '\n'])
+            || e.id.is_empty()
+            || !path.starts_with(&dir)
+            || path.extension().and_then(|s| s.to_str()) != Some("md")
+            || path.components().any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            bail!("entry path must be Markdown inside configured kind directory {dir}");
+        }
+        let mut parent = self.repo.root.clone();
+        for component in path.components() {
+            parent.push(component);
+            if std::fs::symlink_metadata(&parent).is_ok_and(|m| m.file_type().is_symlink()) {
+                bail!("entry path contains a symlink: {}", e.rel_path);
+            }
+        }
+        Ok(())
     }
 
     /// Mark `old` as superseded by `new_id`, editing the file in place.
     pub fn mark_superseded(&self, old: &Entry, new_id: &str) -> Result<()> {
         let abs = self.repo.abs(&old.rel_path);
         let text = std::fs::read_to_string(&abs)?;
-        let updated = match old.style {
+        let updated = Self::superseded_text(old, new_id, &text);
+        if updated != text {
+            util::write_atomic(&abs, &updated)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn superseded_text(old: &Entry, new_id: &str, text: &str) -> String {
+        match old.style {
             Style::Frontmatter => {
                 let mut e = old.clone();
                 e.status = Some("superseded".into());
@@ -706,17 +790,13 @@ impl<'a> Store<'a> {
                 static STATUS_LINE: LazyLock<Regex> = LazyLock::new(|| {
                     Regex::new(r"(?mi)^(\s*(?:[-*+]\s+)?(?:\*\*|__)?status(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*).*$").unwrap()
                 });
-                if STATUS_LINE.is_match(&text) {
-                    STATUS_LINE.replace(&text, format!("${{1}}superseded by {new_id}")).into_owned()
+                if STATUS_LINE.is_match(text) {
+                    STATUS_LINE.replace(text, format!("${{1}}superseded by {new_id}")).into_owned()
                 } else {
-                    text.clone()
+                    text.to_string()
                 }
             }
-        };
-        if updated != text {
-            util::write_atomic(&abs, &updated)?;
         }
-        Ok(())
     }
 
     pub fn validate(&self, e: &Entry, known_ids: &HashSet<String>, tracked: Option<&[String]>) -> Vec<Issue> {

@@ -20,7 +20,7 @@ None of them can answer what a tech lead or an auditor asks: *which decisions do
 
 ## Declarative, reproducible, reviewed
 
-kontext treats team knowledge the way Nix treats a system: the desired state is declared in files, and everything else is derived from them.
+kontext treats team knowledge the way Nix treats a system: the desired shared state is declared in files, and its search indexes are derived from them.
 
 ```markdown
 ---
@@ -92,7 +92,7 @@ kontext does not replace CLAUDE.md. Keep there the few instructions every sessio
 
 ## Principles
 
-- **Git + Markdown is the source of truth; everything else is derived.** The search index, caches, sync snapshots and the event outbox can be deleted at any time and are rebuilt from files and history.
+- **Git + Markdown is shared truth.** Search indexes, caches and sync snapshots are derived. Retain inbox/history, pending adapter deliveries and operation receipts while work is pending; those hold local workflow and retry identity.
 - **Agents never change shared truth on their own.** A capture lands in a local inbox. It becomes team knowledge only when it is promoted *into a commit*, so it shows up in the diff and is reviewed with the code it explains.
 - **Brief beats complete.** Every agent-facing answer has a token budget. Details are available on demand through levels (L0 one line, L1 overview, L2 full).
 - **Hooks never wait on the network.** Commits stay instant.

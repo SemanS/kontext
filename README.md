@@ -40,16 +40,16 @@ It is one Rust binary with three faces: an **MCP server** (`kontext mcp`), a **C
                         └────────┬────────┘
                                  │  git hooks: validate + secret scan · Decision: trailers · index
                                  ▼
-   TEAM KNOWLEDGE (git, reviewed)                   LOCAL, DERIVED (.git/kontext/)
+   TEAM KNOWLEDGE (git, reviewed)                   LOCAL (.git/kontext/)
    .ai/decisions/*.md   ◄── commit + pull request ── inbox: candidates agents captured
    .ai/conventions/ · learnings/ · incidents/       search index (Tantivy), caches
-   .ai/architecture/                                 deleted any time, rebuilt from git
+   .ai/architecture/                               workflow receipts; disposable search caches
 ```
 
 ## Why kontext
 
 - **Declarative.** What agents follow is declared in the repository: one Markdown file per decision says what holds, since when and for which paths, and `.ai/kontext.toml` says how it is served (brief budget, freshness threshold, trailers, secret scanning). Nothing lives in a service or a UI. → [Knowledge store](https://semans.github.io/kontext/concepts/02-knowledge-store)
-- **Reproducible.** The same commit gives every teammate and every agent the same team knowledge. The local index is derived: delete `.git/kontext/` and the next call rebuilds it. Check out an older commit and agents see the decisions that held at that commit. → [Architecture](https://semans.github.io/kontext/concepts/01-architecture)
+- **Reproducible.** The same commit gives every teammate and every agent the same team knowledge. Search indexes and caches are derived and rebuilt on demand; retain local inbox/history and write receipts during pending work. Check out an older commit and agents see the decisions that held at that commit. → [Architecture](https://semans.github.io/kontext/concepts/01-architecture)
 - **Reviewed and reversible.** A capture waits in a local inbox until it is promoted into a commit and merged through a pull request, under the same CODEOWNERS and CI as the code. A reversed decision is superseded, not deleted; the commit that ships a decision carries a `Decision:` trailer. → [Capture and review](https://semans.github.io/kontext/concepts/03-capture-and-review)
 - **One brief, every agent.** `ctx_brief` returns the decisions, conventions and pitfalls for the paths an agent is about to touch, in ~1–2k tokens, with details on demand. → [Context layers](https://semans.github.io/kontext/concepts/04-context-layers)
 - **Stale decisions surface.** A decision whose paths saw 20+ commits since it was made is flagged in the brief and in `kontext status`. → [Freshness](https://semans.github.io/kontext/concepts/04-context-layers#freshness)
@@ -115,6 +115,10 @@ Full walkthrough: [Quick start](https://semans.github.io/kontext/getting-started
 | **Any MCP client** | command `kontext`, args `["mcp"]` | [MCP reference](https://semans.github.io/kontext/reference/02-mcp) |
 
 Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
+
+Applications use the [versioned application API](docs/en/reference/05-application-api.md): `kontext api`
+or structured MCP `ctx_api` for queries, extraction, safe retries, staging and reviewed Git exports.
+The application keeps its UI and collaboration workflow; kontext owns the knowledge rules and formats.
 
 ## Optional adapters
 

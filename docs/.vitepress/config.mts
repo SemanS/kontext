@@ -79,6 +79,7 @@ const sections: Section[] = [
       ['02-mcp', 'MCP tools, prompts and resources', 'MCP nástroje, prompty a zdroje'],
       ['03-configuration', 'Configuration', 'Konfigurácia'],
       ['04-templates', 'Templates and result mapping', 'Šablóny a mapovanie výsledkov'],
+      ['05-application-api', 'Application API', 'Aplikačné API'],
     ],
   },
   {

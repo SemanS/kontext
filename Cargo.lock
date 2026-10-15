@@ -822,6 +822,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "fs4",
  "regex",
  "serde",
  "serde_json",

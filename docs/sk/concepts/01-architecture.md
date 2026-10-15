@@ -22,7 +22,8 @@
 
 | Komponent | Zdroják | Zodpovednosť |
 | --- | --- | --- |
-| CLI | `src/main.rs` | všetky príkazy; `kontext mcp` spustí server |
+| CLI | `src/main.rs`, `src/cli.rs` | tenký obal binárky a všetky príkazy; `kontext mcp` spustí server |
+| Aplikačná služba | `src/api*.rs`, `src/application.rs`, `src/lib.rs` | JSON CLI, štruktúrované MCP, vložené požiadavky a čisté overenie commitnutých znalostí |
 | MCP server | `src/mcp.rs`, `src/tools.rs` | JSON-RPC cez stdio, súbežné požiadavky, nástroje, prompty a zdroje |
 | Operácie | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | Úložisko | `src/store.rs` | záznamy v repozitári: parsovanie, validácia, prideľovanie ID, generovanie indexu |
@@ -43,12 +44,13 @@
 | Osobné nastavenia pre jeden repozitár | `~/.config/kontext/repos/<slug>.toml` | nie | – |
 | Konfigurácia pre tento klon | `<git-common-dir>/kontext/config.toml` | nie | áno |
 | Inbox (kandidáti) | `<git-common-dir>/kontext/inbox/` | nie | áno |
+| Potvrdenia zápisov | `<git-common-dir>/kontext/worktrees/<worktree>/operations/` | nie | nie (identita opakovania pre worktree) |
 | Outbox (doručenia adaptérom) | `<git-common-dir>/kontext/outbox.jsonl` | nie | áno |
 | Postup zavádzania | `<git-common-dir>/kontext/init-done.json` + samotné záznamy | čiastočne (záznamy) | áno |
 | Vyhľadávací index, cache initu, snapshot synchronizácie, cache aktuálnosti | `<git-common-dir>/kontext/worktrees/<worktree>/` | nie | nie (pre každý worktree zvlášť) |
 | Logy adaptérov (stderr MCP serverov) | `<git-common-dir>/kontext/logs/` | nie | áno |
 
-`<git-common-dir>` je `$(git rev-parse --git-common-dir)`, zvyčajne `.git`. Všetko v `.git/kontext/` je odvodené alebo lokálne a dá sa zmazať.
+`<git-common-dir>` je `$(git rev-parse --git-common-dir)`, zvyčajne `.git`. Cache a snapshoty sú odvodené. Inbox/história, čakajúce doručenia, lokálna konfigurácia a potvrdenia operácií sú lokálny stav workflow: zmazanie zahodí túto prácu aj identitu opakovania. Pozri [aplikačné API](../reference/05-application-api.md).
 
 ## Identita repozitára
 

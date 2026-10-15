@@ -8,7 +8,7 @@ use crate::ops::{self, CaptureReq};
 use crate::threads::{self, Found};
 use crate::util;
 use anyhow::{Result, anyhow, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Transcript characters per model call.
@@ -20,7 +20,7 @@ struct Answer {
     entries: Vec<Candidate>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Candidate {
     pub kind: String,
     pub title: String,
@@ -30,6 +30,8 @@ pub struct Candidate {
     pub paths: Vec<String>,
     #[serde(default, deserialize_with = "crate::init::deepen::string_or_vec")]
     pub commits: Vec<String>,
+    #[serde(default, deserialize_with = "crate::init::deepen::string_or_vec")]
+    pub tags: Vec<String>,
 }
 
 pub struct Options {
@@ -77,6 +79,70 @@ fn pick_llm(app: &App, explicit: Option<&str>) -> Result<String> {
         [] => bail!("no adapter with an `llm` op — add one, e.g. `kontext adapters add llm-codex`"),
         many => bail!("choose the model with --llm ({})", many.join(", ")),
     }
+}
+
+/// Invoke a configured LLM without capturing or staging anything. Both directions are redacted.
+pub fn generate_json(app: &App, explicit: Option<&str>, prompt: &str) -> Result<serde_json::Value> {
+    let name = pick_llm(app, explicit).map_err(|e| crate::api::error("llm_unavailable", e.to_string()))?;
+    let adapter = app
+        .registry()
+        .get(&name)
+        .filter(|a| a.has_op("llm"))
+        .ok_or_else(|| crate::api::error("llm_unavailable", format!("no active llm adapter '{name}'")))?;
+    let output = adapter.llm(&mask_text(app, prompt))?;
+    crate::init::deepen::extract_json_object(&mask_text(app, &output))
+        .ok_or_else(|| crate::api::error("invalid_model_output", "LLM response must contain a JSON object"))
+}
+
+pub fn mask_text(app: &App, text: &str) -> String {
+    crate::secrets::redact_personal(&crate::secrets::redact(text).0, &crate::secrets::patterns(&app.cfg().secrets.redact)).0
+}
+
+/// Extract from arbitrary text. Caller controls the source URI; no thread-provider assumptions.
+/// Unlike `distill`, this operation never writes candidates or deduplicates a selected finding.
+pub fn extract_text(app: &App, text: &str, source: Option<&str>, llm: Option<&str>, max: usize) -> Result<Vec<Candidate>> {
+    if text.len() > 2_000_000 {
+        return Err(crate::api::error("invalid_input", "text exceeds 2 MB; submit smaller documents"));
+    }
+    let known: String = app.entries().0.iter().filter(|e| e.is_active()).take(200).map(|e| format!("- {}\n", e.title)).collect();
+    let parts = threads::parts(&mask_text(app, text), PART_CHARS);
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        let prompt = PROMPT
+            .replace("{repo}", &app.repo.id)
+            .replace("{part}", &(i + 1).to_string())
+            .replace("{parts}", &parts.len().to_string())
+            .replace("{known}", &known)
+            .replace("{thread}", source.unwrap_or("provided text"))
+            .replace("{text}", part);
+        let answer: Answer = serde_json::from_value(generate_json(app, llm, &prompt)?)?;
+        for mut c in answer.entries {
+            let Some((kind, implied_tag)) = ops::normalize_kind(app, &c.kind) else { continue };
+            if c.title.trim().is_empty() || c.body.trim().is_empty() {
+                continue;
+            }
+            c.kind = kind;
+            if let Some(tag) = implied_tag {
+                c.tags.push(tag.to_string());
+            }
+            c.title = mask_text(app, &c.title);
+            c.body = mask_text(app, &c.body);
+            // Future files and globs are meaningful metadata; reject traversal, not absence on disk.
+            c.paths.retain(|p| {
+                !p.is_empty()
+                    && !std::path::Path::new(p).is_absolute()
+                    && !std::path::Path::new(p).components().any(|c| matches!(c, std::path::Component::ParentDir))
+            });
+            if !candidates.iter().any(|kept| ops::title_similarity(&kept.title, &c.title) >= 0.6) {
+                candidates.push(c);
+            }
+        }
+        if candidates.len() >= max {
+            break;
+        }
+    }
+    candidates.truncate(max);
+    Ok(candidates)
 }
 
 /// Up to `max` parts, spread evenly over the whole thread when it has more.

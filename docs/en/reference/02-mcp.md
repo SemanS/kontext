@@ -1,10 +1,14 @@
 # MCP tools, prompts and resources
 
-Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 (the client's version is echoed when supported). Capabilities: `tools`, `prompts`, `resources`, `logging`. Tool results are text; errors are returned as `isError: true` results.
+Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 (the client's version is echoed when supported). Capabilities: `tools`, `prompts`, `resources`, `logging`. Existing agent tools return text; `ctx_api` also returns structured data. Errors are returned as `isError: true` results.
 
 ## Tools
 
-Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. All are `openWorldHint: false`.
+[`ctx_api`](./05-application-api.md) exposes the versioned application service with `operation`,
+`input` and optional `dir`. It returns `structuredContent` and `outputSchema` as well as a complete
+JSON text copy. Existing tools below retain their text results.
+
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
 
 ### Another repository: `dir` {#dir}
 

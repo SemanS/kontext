@@ -40,16 +40,16 @@ Je to jedna Rust binárka s tromi tvárami: **MCP server** (`kontext mcp`), **CL
                         └────────┬────────┘
                                  │  git hooks: validate + secret scan · Decision: trailers · index
                                  ▼
-   TEAM KNOWLEDGE (git, reviewed)                   LOCAL, DERIVED (.git/kontext/)
+   TEAM KNOWLEDGE (git, reviewed)                   LOCAL (.git/kontext/)
    .ai/decisions/*.md   ◄── commit + pull request ── inbox: candidates agents captured
    .ai/conventions/ · learnings/ · incidents/       search index (Tantivy), caches
-   .ai/architecture/                                 deleted any time, rebuilt from git
+   .ai/architecture/                               workflow receipts; disposable search caches
 ```
 
 ## Prečo kontext
 
 - **Deklaratívne.** To, čím sa agenti riadia, je deklarované v repozitári: jeden Markdown súbor na rozhodnutie hovorí, čo platí, odkedy a pre ktoré cesty, a `.ai/kontext.toml` hovorí, ako sa to podáva (rozpočet briefu, prah aktuálnosti, trailery, skenovanie tajných údajov). Nič nežije v službe ani v UI. → [Úložisko znalostí](https://semans.github.io/kontext/sk/concepts/02-knowledge-store)
-- **Reprodukovateľné.** Ten istý commit dá každému kolegovi aj agentovi tie isté tímové znalosti. Lokálny index je odvodený: zmaž `.git/kontext/` a ďalšie volanie ho zostaví znova. Checkoutni starší commit a agenti uvidia rozhodnutia, ktoré platili v tom commite. → [Architektúra](https://semans.github.io/kontext/sk/concepts/01-architecture)
+- **Reprodukovateľné.** Ten istý commit dá každému kolegovi aj agentovi tie isté tímové znalosti. Indexy a cache sú odvodené a obnovia sa; počas čakajúcej práce ponechaj inbox/históriu a potvrdenia zápisov. Checkoutni starší commit a agenti uvidia rozhodnutia, ktoré platili v tom commite. → [Architektúra](https://semans.github.io/kontext/sk/concepts/01-architecture)
 - **Posúdené a vratné.** Zachytenie čaká v lokálnom inboxe, kým sa nepovýši do commitu a nezlúči cez pull request, pod tými istými CODEOWNERS a CI ako kód. Zrušené rozhodnutie nahradí nové, nezmaže sa; commit, ktorý rozhodnutie prináša, nesie trailer `Decision:`. → [Zachytávanie a review](https://semans.github.io/kontext/sk/concepts/03-capture-and-review)
 - **Jeden brief pre každého agenta.** `ctx_brief` vráti rozhodnutia, konvencie a úskalia pre cesty, na ktoré sa agent chystá siahnuť, v ~1–2k tokenoch, s detailmi na požiadanie. → [Vrstvy kontextu](https://semans.github.io/kontext/sk/concepts/04-context-layers)
 - **Neaktuálne rozhodnutia vyplávajú.** Rozhodnutie, ktorého cesty od prijatia zasiahlo 20+ commitov, sa označí v briefe aj v `kontext status`. → [Aktuálnosť](https://semans.github.io/kontext/sk/concepts/04-context-layers#freshness)
@@ -115,6 +115,10 @@ Celý postup: [Rýchly štart](https://semans.github.io/kontext/sk/getting-start
 | **Akýkoľvek MCP klient** | príkaz `kontext`, argumenty `["mcp"]` | [Referencia MCP](https://semans.github.io/kontext/sk/reference/02-mcp) |
 
 Nástroje agenta: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompty `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
+
+Aplikácie používajú [verzované aplikačné API](docs/sk/reference/05-application-api.md): `kontext api`
+alebo štruktúrované MCP `ctx_api` pre dotazy, extrakciu, bezpečné opakovanie, staging a overené Git exporty.
+Aplikácii zostáva rozhranie a spolupráca; kontext vlastní pravidlá a formáty znalostí.
 
 ## Voliteľné adaptéry
 

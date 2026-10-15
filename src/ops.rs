@@ -41,7 +41,7 @@ pub fn normalize_kind(app: &App, raw: &str) -> Option<(String, Option<&'static s
     None
 }
 
-fn kick_outbox(app: &App) {
+pub(crate) fn kick_outbox(app: &App) {
     if cfg!(test) {
         return;
     }
@@ -344,6 +344,20 @@ fn find_section(text: &str, anchor: &str) -> Option<String> {
 
 // ------------------------------------------------------------------------- capture & promote
 
+/// All capture clients serialize allocation and writes across processes and worktrees.
+pub(crate) fn write_guard(app: &App) -> Result<std::fs::File> {
+    std::fs::create_dir_all(app.repo.state_dir())?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(app.repo.state_dir().join("application-writes.lock"))?;
+    fs4::fs_std::FileExt::lock_exclusive(&file)?;
+    app.repo.prune_worktree_state();
+    Ok(file)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CaptureReq {
     pub kind: String,
@@ -373,7 +387,8 @@ pub struct CaptureOut {
     pub notes: Vec<String>,
 }
 
-pub fn capture(app: &App, mut req: CaptureReq) -> Result<CaptureOut> {
+/// Canonical validation, normalization and redaction for every capture client.
+pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, usize, Vec<String>)> {
     // `--paths a,` or an agent's [""] must not become an entry's paths, tags or supersedes
     for list in [&mut req.paths, &mut req.tags, &mut req.supersedes] {
         list.iter_mut().for_each(|v| *v = v.trim().to_string());
@@ -432,13 +447,20 @@ pub fn capture(app: &App, mut req: CaptureReq) -> Result<CaptureOut> {
         author: app.repo.user_name(),
         visibility: Some(visibility.clone()),
         origin: Some(req.origin.clone()),
-        commits: req.commits.iter().map(|c| c.trim().chars().take(12).collect::<String>()).filter(|c| !c.is_empty()).collect(),
+        commits: req.commits.iter().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect(),
         body,
         ..Default::default()
     };
     if let Some(src) = req.source.as_deref().filter(|s| !s.is_empty()) {
         entry.set_extra("source", crate::store::FmValue::Str(src.to_string()));
     }
+    Ok((entry, redactions, notes))
+}
+
+pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
+    let (mut entry, redactions, mut notes) = prepare_capture(app, req.clone())?;
+    let visibility = entry.visibility.clone().unwrap_or_else(|| "team".into());
+    let kind = entry.kind.clone();
     // similar entries already in the store?
     if let Ok(hits) =
         app.with_index(|idx| idx.search(&entry.title, &SearchOpts { limit: 3, kinds: vec![kind.clone()], sources: vec!["entry".into()] }))
@@ -449,6 +471,7 @@ pub fn capture(app: &App, mut req: CaptureReq) -> Result<CaptureOut> {
             }
         }
     }
+    let _file = write_guard(app)?;
     let _lock = app.write_lock.lock().unwrap();
     let outbox = Outbox::open(&app.repo);
     if req.promote {
@@ -506,6 +529,7 @@ pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, St
     let inbox = Inbox::open(&app.repo);
     let store = app.store();
     let outbox = Outbox::open(&app.repo);
+    let _file = write_guard(app)?;
     let _lock = app.write_lock.lock().unwrap();
     let mut done = Vec::new();
     for id in ids {
