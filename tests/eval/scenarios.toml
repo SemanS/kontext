@@ -379,7 +379,6 @@ expect = ["## Changed in the last 14 days", "Amounts carry a currency"]
 [[scenario]]
 name = "challenge: brief marks it, prepare-commit offers retire, retire deprecates"
 item = "2.3"
-pending = "2.3"
 [[scenario.step]]
 run = ["call", "ctx_challenge", '{"id":"2026-01-10-orders-live-in-postgresql","why":"Orders moved to the order service with its own store in September."}']
 expect = ["challenge"]
@@ -399,7 +398,6 @@ expect = ["status: deprecated", "## Retired", "order service"]
 [[scenario]]
 name = "retire refuses a changed revision and a dirty file"
 item = "2.3"
-pending = "2.3"
 [[scenario.step]]
 run = ["api", "drafts.retire", '{"operation_id":"rt-1","entry_id":"log-with-request-ids","entry_revision":"0000000000000000000000000000000000000000","reason":"Tracing replaced it."}']
 expect = ["operation_conflict"]
@@ -420,7 +418,6 @@ expect = ["operation_conflict"]
 [[scenario]]
 name = "retire and supersede work for every kind"
 item = "2.3"
-pending = "2.3"
 [[scenario.step]]
 run = ["api", "drafts.retire", '{"operation_id":"rt-3","entry_id":"idempotency-keys-expire-after-a-day","entry_revision":"{head}","reason":"The provider keeps keys for a week now."}']
 expect = ['"ok":true', '"status":"deprecated"']

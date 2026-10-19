@@ -813,6 +813,34 @@ impl<'a> Store<'a> {
         }
     }
 
+    /// The text of `old` retired without a replacement: status `deprecated` and a `## Retired` note
+    /// with the date and the reason, appended so the history of the claim stays readable.
+    pub(crate) fn retired_text(old: &Entry, reason: &str, date: &str, text: &str) -> String {
+        let note = format!("\n## Retired\n\n{date}: {}\n", reason.trim());
+        match old.style {
+            Style::Frontmatter => {
+                let mut e = old.clone();
+                e.status = Some("deprecated".into());
+                e.body = format!("{}\n{note}", e.body.trim_end());
+                e.markdown()
+            }
+            Style::Fields => {
+                static STATUS_LINE: LazyLock<Regex> = LazyLock::new(|| {
+                    Regex::new(r"(?mi)^(\s*(?:[-*+]\s+)?(?:\*\*|__)?status(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*).*$").unwrap()
+                });
+                let with_status = if STATUS_LINE.is_match(text) {
+                    STATUS_LINE.replace(text, "${1}deprecated").into_owned()
+                } else {
+                    match text.split_once('\n') {
+                        Some((h1, rest)) => format!("{h1}\n\n**Status:** deprecated\n{rest}"),
+                        None => format!("{text}\n\n**Status:** deprecated\n"),
+                    }
+                };
+                format!("{}\n{note}", with_status.trim_end())
+            }
+        }
+    }
+
     pub fn validate(&self, e: &Entry, known_ids: &HashSet<String>, tracked: Option<&[String]>) -> Vec<Issue> {
         let mut issues = Vec::new();
         let mut push = |level, msg: String| issues.push(Issue { level, path: e.rel_path.clone(), msg });
@@ -1052,6 +1080,30 @@ mod tests {
         assert_eq!(crate::config::period_days("2w"), Some(14));
         assert_eq!(crate::config::period_days("1y"), Some(365));
         assert_eq!(crate::config::period_days("soon"), None);
+    }
+
+    #[test]
+    fn retiring_keeps_the_claim_and_says_why() {
+        let conv = Entry::parse(
+            ".ai/conventions/x.md",
+            "---\nid: x\nkind: convention\ntitle: Log ids\n---\n\nLog the request id.\n",
+            "convention",
+        );
+        let text = Store::retired_text(&conv, "Tracing replaced it.", "2026-10-19", "");
+        let again = Entry::parse(".ai/conventions/x.md", &text, "convention");
+        assert_eq!(again.status.as_deref(), Some("deprecated"));
+        assert!(!again.is_active());
+        assert!(again.body.starts_with("Log the request id.\n\n## Retired\n\n2026-10-19: Tracing replaced it.\n"), "{text}");
+        let adr_text = "# 0002 — Orders in PostgreSQL\n\n**Status:** accepted\n\n## Decision\n\nOne database.\n";
+        let adr = Entry::parse("docs/adr/0002-orders.md", adr_text, "decision");
+        let retired = Store::retired_text(&adr, "Moved to the order service.", "2026-10-19", adr_text);
+        assert_eq!(
+            retired,
+            "# 0002 — Orders in PostgreSQL\n\n**Status:** deprecated\n\n## Decision\n\nOne database.\n\n## Retired\n\n2026-10-19: Moved to the order service.\n"
+        );
+        let bare = "# Learning\n\nSome text.\n";
+        let e = Entry { style: Style::Fields, ..Entry::parse("docs/l.md", bare, "learning") };
+        assert!(Store::retired_text(&e, "Gone.", "2026-10-19", bare).starts_with("# Learning\n\n**Status:** deprecated\n"));
     }
 
     #[test]

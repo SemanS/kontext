@@ -18,6 +18,7 @@ pub const OPERATIONS: &[&str] = &[
     "drafts.stage",
     "drafts.extract",
     "drafts.formalize",
+    "drafts.retire",
     "guidance.propose",
     "operations.get",
 ];

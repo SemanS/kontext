@@ -219,8 +219,8 @@ fn save(path: &Path, journal: &Journal) -> Result<()> {
 }
 fn begin(app: &App, operation: &str, input: &Value) -> Result<(Option<PathBuf>, Journal, String)> {
     let id = optional(input, "operation_id")?;
-    if operation == "drafts.stage" && id.is_none_or(|s| s.trim().is_empty()) {
-        return Err(error("invalid_input", "drafts.stage requires a stable operation_id"));
+    if matches!(operation, "drafts.stage" | "drafts.retire") && id.is_none_or(|s| s.trim().is_empty()) {
+        return Err(error("invalid_input", format!("{operation} requires a stable operation_id")));
     }
     let Some(id) = id else {
         return Ok((None, Journal::default(), String::new()));
@@ -469,6 +469,13 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
     let mut args = vec!["add", "--", entry.rel_path.as_str()];
     args.extend(journal.related.iter().map(|c| c.path.as_str()));
     app.repo.git(&args)?;
+    // a replacement answers the challenges against what it supersedes
+    let mut resolved = Vec::new();
+    for change in &journal.related {
+        let kind = app.store().kind_for_path(&change.path).unwrap_or_default();
+        let old = Entry::parse(&change.path, &change.before, &kind);
+        resolved.extend(resolve_challenges(app, &old.id, &entry.rel_path)?);
+    }
     if let Some(id) = &journal.candidate_id
         && inbox.get(id).is_some()
     {
@@ -481,12 +488,98 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
     // Preserve canonical parsed form in responses (including ADR field styles).
     entry = Entry::parse(&entry.rel_path, &entry.markdown(), &entry.kind);
     let result = json!({"entry":entry_json_in(app,&entry)?,"path":entry.rel_path,"staged":true,"publication":"staged","replayed":false,
-        "related":journal.related.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),"notes":notes,"redactions":redactions,
+        "related":journal.related.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),"notes":notes,"redactions":redactions,"resolved_challenges":resolved,
         "evidence":if journal.evidence.is_null() { json!([]) } else { journal.evidence.clone() }});
     journal.result = Some(result.clone());
     save(&receipt, &journal)?;
     Ok(result)
 }
+/// The entry's file changes only if it is still what the caller read: `entry_revision` (a commit,
+/// usually `publication.revision`) must hold the same blob for the file as HEAD, and the file must
+/// have no local or staged edits.
+fn check_revision(app: &App, entry: &Entry, revision: &str) -> Result<()> {
+    let blob = |rev: &str| app.repo.git_opt(&["rev-parse", "--verify", "--quiet", &format!("{rev}:{}", entry.rel_path)]);
+    let Some(then) = blob(revision) else {
+        return Err(error("operation_conflict", format!("{} does not exist at revision {revision}", entry.rel_path)));
+    };
+    if blob("HEAD").as_deref() != Some(then.as_str()) {
+        return Err(error("operation_conflict", format!("{} changed since revision {revision}; read it again", entry.id)));
+    }
+    let changed = app.repo.git(&["status", "--porcelain=v1", "--", &entry.rel_path])?;
+    if !changed.trim().is_empty() {
+        return Err(error("operation_conflict", format!("entry has local or staged changes: {}", entry.rel_path)));
+    }
+    Ok(())
+}
+
+/// Retire `entry` without a replacement: its own file gets status `deprecated` and a `## Retired`
+/// note. Nothing is rewritten silently: the change is staged for review like any other.
+pub(crate) fn plan_retire(app: &App, entry: &Entry, reason: &str) -> Result<(String, String)> {
+    if !entry.is_active() {
+        return Err(error("operation_conflict", format!("{} is already {}", entry.id, entry.status.as_deref().unwrap_or("inactive"))));
+    }
+    app.store().validate_reserved(entry).map_err(|e| error("invalid_input", e.to_string()))?;
+    let before = std::fs::read_to_string(app.repo.abs(&entry.rel_path))?;
+    let after = Store::retired_text(entry, &distill::mask_text(app, reason), &util::today(), &before);
+    Ok((before, after))
+}
+
+/// Pending challenges in this worktree's inbox against `entry_id` become resolving: the retirement
+/// or replacement that answers them is staged. They leave the inbox with the change.
+pub(crate) fn resolve_challenges(app: &App, entry_id: &str, path: &str) -> Result<Vec<String>> {
+    let inbox = Inbox::open(&app.repo);
+    let mut resolved = Vec::new();
+    for c in inbox.list() {
+        if c.kind == "challenge" && c.get_extra("against").as_deref() == Some(entry_id) && Origin::of(&app.repo, &c).is_ours() {
+            inbox.mark_promoted(&c.id, path)?;
+            resolved.push(c.id);
+        }
+    }
+    Ok(resolved)
+}
+
+fn retire(app: &App, input: &Value) -> Result<Value> {
+    let _file = write_guard(app)?;
+    let _local = app.write_lock.lock().unwrap();
+    let (receipt, mut journal, _marker) = begin(app, "drafts.retire", input)?;
+    let receipt = receipt.context("retire operation receipt")?;
+    if let Some(result) = journal.result.clone() {
+        return replay(app, result, &journal);
+    }
+    let entry_id = required(input, "entry_id")?;
+    if journal.related.is_empty() {
+        let revision = required(input, "entry_revision")?;
+        let reason = required(input, "reason")?;
+        if reason.len() > 2000 {
+            return Err(error("invalid_input", "reason must be at most 2000 bytes"));
+        }
+        let (entries, _) = app.entries();
+        let entry = Store::find(&entries, entry_id).ok_or_else(|| error("not_found", format!("no entry '{entry_id}'")))?;
+        check_revision(app, entry, revision)?;
+        let (before, after) = plan_retire(app, entry, reason)?;
+        journal.path = Some(entry.rel_path.clone());
+        journal.markdown = Some(after.clone());
+        journal.related.push(Change { path: entry.rel_path.clone(), before, after });
+        save(&receipt, &journal)?;
+    }
+    // a planned retirement can be replayed after process death; other content is never replaced
+    let change = &journal.related[0];
+    let text = std::fs::read_to_string(app.repo.abs(&change.path))?;
+    if text != change.before && text != change.after {
+        return Err(error("operation_conflict", format!("entry changed during operation: {}", change.path)));
+    }
+    util::write_atomic(&app.repo.abs(&change.path), &change.after)?;
+    app.repo.git(&["add", "--", &change.path])?;
+    let kind = app.store().kind_for_path(&change.path).unwrap_or_default();
+    let entry = Entry::parse(&change.path, &change.after, &kind);
+    let resolved = resolve_challenges(app, &entry.id, &change.path)?;
+    let result = json!({"entry":entry_json_in(app,&entry)?,"path":change.path,"staged":true,"publication":"staged",
+        "resolved_challenges":resolved,"replayed":false});
+    journal.result = Some(result.clone());
+    save(&receipt, &journal)?;
+    Ok(result)
+}
+
 fn local_entry_json(entry: &Entry, state: &str) -> Value {
     let mut value = entry_json(entry);
     value["publication"] = json!({"state":state,"revision":null,"staged":false,"modified":false});
@@ -595,6 +688,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "operations.get" => operation_get(app, input),
         "drafts.capture" => capture(app, input),
         "drafts.stage" => stage(app, input),
+        "drafts.retire" => retire(app, input),
         "drafts.extract" => {
             let text = required(input, "text")?;
             let max = match input.get("max") {

@@ -62,6 +62,8 @@ fn annotations(name: &str) -> Value {
         // `drop` discards only local, never-shared inbox drafts — not destructive in the MCP sense,
         // and Codex refuses destructive tools outright under `approval_policy = "never"`
         "ctx_inbox" => ("Knowledge inbox", false, false),
+        // a challenge is a local inbox note; it changes no knowledge by itself
+        "ctx_challenge" => ("Challenge a knowledge entry", false, false),
         "ctx_prepare_commit" => ("Prepare the commit", false, false),
         "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
         "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
@@ -79,7 +81,8 @@ fn annotations(name: &str) -> Value {
 }
 
 /// Tools that act on one repository and take `dir` for another (every `ctx_` tool accepts it).
-const TAKES_DIR: &[&str] = &["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_log", "ctx_capture", "ctx_inbox", "ctx_prepare_commit"];
+const TAKES_DIR: &[&str] =
+    &["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_log", "ctx_capture", "ctx_challenge", "ctx_inbox", "ctx_prepare_commit"];
 
 pub fn definitions() -> Vec<Value> {
     let mut defs = tool_list();
@@ -156,6 +159,15 @@ fn tool_list() -> Vec<Value> {
             }, "required": ["kind", "title", "body"]}
         }),
         json!({
+            "name": "ctx_challenge",
+            "description": "Say that a recorded entry no longer holds, and why. It waits in the local inbox as a challenge; nothing changes until review: ctx_prepare_commit then offers to retire the entry (retire=[id]) or to record a replacement that supersedes it. Never edit the entry in place.",
+            "inputSchema": {"type": "object", "properties": {
+                "id": s("The entry: kx:<id>, an id or its unique prefix"),
+                "why": s("Why it no longer holds: what changed, with a source if there is one"),
+                "visibility": {"type": "string", "enum": ["team", "private"]}
+            }, "required": ["id", "why"]}
+        }),
+        json!({
             "name": "ctx_why",
             "description": "Explain why code is the way it is: knowledge covering a path, its module summary, decision-shaped commits (with blame for path:line), and history from connected session/memory adapters. Also accepts a commit sha, or a symbol/topic.",
             "inputSchema": {"type": "object", "properties": {
@@ -194,7 +206,8 @@ fn tool_list() -> Vec<Value> {
             "description": "Run before committing: the staged change, recorded knowledge it touches, inbox candidates to ship with it (promote=[ids] writes and stages them, drop=[ids] discards), checks of knowledge files, module docs to refresh, and the commit trailers (and whether a hook adds them).",
             "inputSchema": {"type": "object", "properties": {
                 "promote": arr("Inbox ids to promote and stage"),
-                "drop": arr("Inbox ids to discard")
+                "drop": arr("Inbox ids to discard"),
+                "retire": arr("Entries challenged in this worktree to retire (status deprecated, the challenge as the reason, staged)")
             }}
         }),
         json!({
@@ -356,6 +369,16 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             }
             Ok(text)
         }
+        "ctx_challenge" => {
+            let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
+            let why = str_arg(args, "why").ok_or_else(|| anyhow!("why is required"))?;
+            let c = ops::challenge(app, &id, &why, str_arg(args, "visibility").as_deref())?;
+            Ok(format!(
+                "Recorded the challenge against {} as inbox:{} (local, not shared). Resolve it before committing: ctx_prepare_commit offers to retire the entry or to record a replacement that supersedes it.",
+                c.get_extra("against").unwrap_or_default(),
+                c.id
+            ))
+        }
         "ctx_why" => {
             let target = str_arg(args, "target").ok_or_else(|| anyhow!("target is required"))?;
             ops::why(app, &target, int_arg(args, "limit").unwrap_or(12))
@@ -479,7 +502,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             if !promote.is_empty() && !app.is_set_up() {
                 bail!("{NOT_SET_UP}");
             }
-            ops::prepare_commit(app, &PrepareReq { promote, drop: list_arg(args, "drop") })
+            ops::prepare_commit(app, &PrepareReq { promote, drop: list_arg(args, "drop"), retire: list_arg(args, "retire") })
         }
         "ctx_init" => {
             let count = int_arg(args, "count").unwrap_or(1).clamp(1, 5);

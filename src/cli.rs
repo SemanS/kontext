@@ -164,6 +164,19 @@ enum Cmd {
         /// Inbox ids to discard (repeatable)
         #[arg(long)]
         drop: Vec<String>,
+        /// Entries challenged in this worktree to retire, with the challenge as the reason (repeatable)
+        #[arg(long)]
+        retire: Vec<String>,
+    },
+    /// Say that an entry no longer holds, and why (a local challenge, resolved by retire or supersede)
+    Challenge {
+        /// The entry: kx:<id>, an id or its unique prefix
+        id: String,
+        /// Why it no longer holds
+        why: Vec<String>,
+        /// Keep the challenge personal
+        #[arg(long)]
+        private: bool,
     },
     /// Validate knowledge files and scan them for secrets
     Check {
@@ -748,9 +761,18 @@ fn run(cli: Cli) -> Result<i32> {
             let app = open(&dir)?;
             print!("{}", ops::why(&app, &target, limit)?);
         }
-        Cmd::PrepareCommit { promote, drop } => {
+        Cmd::Challenge { id, why, private } => {
             let app = open(&dir)?;
-            print!("{}", ops::prepare_commit(&app, &ops::PrepareReq { promote, drop })?);
+            let c = ops::challenge(&app, &id, &why.join(" "), Some(if private { "private" } else { "team" }))?;
+            println!(
+                "challenged {} as inbox:{} — resolve it with a retirement or a replacement before committing",
+                c.get_extra("against").unwrap_or_default(),
+                c.id
+            );
+        }
+        Cmd::PrepareCommit { promote, drop, retire } => {
+            let app = open(&dir)?;
+            print!("{}", ops::prepare_commit(&app, &ops::PrepareReq { promote, drop, retire })?);
         }
         Cmd::Check { staged } => {
             let app = open(&dir)?;

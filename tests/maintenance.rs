@@ -175,3 +175,55 @@ fn the_brief_says_what_changed_since_the_last_one() {
     assert!(!tight.contains("## Changed"), "{tight}");
     assert!(r.kontext(&["brief", "--no-adapters"]).contains("Keep CSV as the export format (new)"));
 }
+
+#[test]
+fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
+    let r = Repo::new();
+    r.decision("2026-01-10-use-cron", "Use cron for exports", "accepted", "");
+    r.decision("2026-01-10-use-csv", "Use CSV for exports", "accepted", "");
+    r.write(".ai/conventions/log-ids.md", "---\nid: log-ids\nkind: convention\ntitle: Log request ids\n---\n\nLog the request id.\n");
+    let head = r.commit("seed");
+    let said = r.kontext(&["call", "ctx_challenge", r#"{"id":"2026-01-10-use-cron","why":"Exports run on the queue since September."}"#]);
+    assert!(said.contains("inbox:"), "{said}");
+    let original = r.read(".ai/decisions/2026-01-10-use-cron.md");
+    assert!(r.kontext(&["brief", "--no-adapters"]).contains("Use cron for exports (challenged locally)"));
+    let offer = r.kontext(&["prepare-commit"]);
+    assert!(offer.contains("## Challenges (local)") && offer.contains("retire=[<entry id>]"), "{offer}");
+    // a challenge is not a candidate to promote
+    let inbox = r.ok("inbox.list", json!({}));
+    let cid = inbox["entries"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(inbox["entries"][0]["kind"], "challenge");
+    assert_eq!(inbox["entries"][0]["extra"]["against"], "2026-01-10-use-cron");
+    assert_eq!(inbox["entries"][0]["extra"]["against_revision"], head.as_str());
+    let o = r.cmd(env!("CARGO_BIN_EXE_kontext")).args(["promote", &cid]).output().unwrap();
+    assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("is a challenge"));
+    assert_eq!(r.read(".ai/decisions/2026-01-10-use-cron.md"), original, "nothing changed in place");
+    let done = r.kontext(&["prepare-commit", "--retire", "2026-01-10-use-cron"]);
+    assert!(done.contains("retired 2026-01-10-use-cron"), "{done}");
+    let retired = r.read(".ai/decisions/2026-01-10-use-cron.md");
+    assert!(
+        retired.contains("status: deprecated") && retired.contains("## Retired") && retired.contains("on the queue since September"),
+        "{retired}"
+    );
+    assert!(r.git(&["diff", "--cached", "--name-only"]).contains("2026-01-10-use-cron.md"));
+    assert_eq!(r.ok("inbox.list", json!({}))["entries"], json!([]), "the challenge left with the change");
+    r.commit("retire cron");
+
+    // drafts.retire: a receipt, a replay, and the same refusal for a stale revision
+    let input = json!({"operation_id":"retire-log","entry_id":"log-ids","entry_revision":head,"reason":"Tracing replaced it."});
+    let first = r.ok("drafts.retire", input.clone());
+    assert_eq!(first["entry"]["status"], "deprecated");
+    assert_eq!(first["entry"]["publication"]["state"], "staged");
+    let again = r.ok("drafts.retire", input);
+    assert_eq!(again["replayed"], true);
+    let stale = r.api("drafts.retire", json!({"operation_id":"retire-csv","entry_id":"2026-01-10-use-csv","entry_revision":"0123456789012345678901234567890123456789","reason":"x"}));
+    assert_eq!(stale["error"]["code"], "operation_conflict");
+    assert_eq!(r.api("drafts.retire", json!({"entry_id":"log-ids"}))["error"]["code"], "invalid_input", "operation_id is required");
+    r.commit("retire log");
+
+    // a replacement that supersedes the entry resolves the challenge as well
+    r.kontext(&["challenge", "2026-01-10-use-csv", "Partners want Parquet."]);
+    let staged = r.ok("drafts.stage", json!({"operation_id":"parquet","entry":{"kind":"decision","title":"Use Parquet for exports","body":"Partners load Parquet.","supersedes":["2026-01-10-use-csv"]}}));
+    assert_eq!(staged["resolved_challenges"].as_array().unwrap().len(), 1, "{staged}");
+    assert!(r.read(".ai/decisions/2026-01-10-use-csv.md").contains("status: superseded"));
+}
