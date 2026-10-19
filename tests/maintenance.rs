@@ -227,3 +227,87 @@ fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
     assert_eq!(staged["resolved_challenges"].as_array().unwrap().len(), 1, "{staged}");
     assert!(r.read(".ai/decisions/2026-01-10-use-csv.md").contains("status: superseded"));
 }
+
+/// A command adapter standing in for a model: answers with `.git/answer.json` and counts its calls.
+fn fake_model(r: &Repo, answer: Value) {
+    r.write(".git/answer.json", &answer.to_string());
+    let root = r.0.display();
+    r.write(
+        ".git/kontext/config.toml",
+        &format!(
+            "[init]\nllm = \"fake\"\n[adapters.fake]\ndriver = \"command\"\n[adapters.fake.ops.llm]\ncommand = [\"sh\", \"-c\", \"cat >/dev/null; echo x >> {root}/.git/calls; cat {root}/.git/answer.json\"]\nstdin = \"{{{{prompt}}}}\"\nformat = \"text\"\n"
+        ),
+    );
+}
+
+fn calls(r: &Repo) -> usize {
+    std::fs::read_to_string(r.0.join(".git/calls")).map(|s| s.lines().count()).unwrap_or(0)
+}
+
+#[test]
+fn related_entries_ask_the_model_once_and_trust_only_shown_entries() {
+    let r = Repo::new();
+    r.decision("2026-01-10-round-half-even", "Round invoice lines half-even", "accepted", "");
+    r.decision("2026-01-10-round-half-up", "Round receipt totals half-up", "accepted", "");
+    let head = r.commit("seed");
+    let text = "Invoices round only the grand total half-up";
+    let plain = r.ok("entries.related", json!({"text":text,"paths":["src/lib.rs"]}));
+    assert!(plain.get("relations").is_none(), "no model unless asked: {plain}");
+    assert_eq!(plain["candidates"].as_array().unwrap().len(), 2);
+    assert_eq!(plain["candidates"][0]["label"], "related, check");
+    fake_model(
+        &r,
+        json!({"relations":[{"relation":"conflicts","id":"2026-01-10-round-half-even"},{"relation":"same","id":"kx:2026-01-10-round-half-up"},{"relation":"conflicts","id":"not-shown"}]}),
+    );
+    let asked = r.ok("entries.related", json!({"text":text,"paths":["src/lib.rs"],"llm":true}));
+    assert_eq!(
+        asked["relations"],
+        json!([{"relation":"conflicts","id":"2026-01-10-round-half-even","label":"possible conflict, check","title":"Round invoice lines half-even"},
+               {"relation":"same","id":"2026-01-10-round-half-up","label":"possibly the same, check","title":"Round receipt totals half-up"}])
+    );
+    assert_eq!(asked["model"]["asked"], true);
+    // capture, formalize and a second question reuse the answer: one model call in all
+    let again = r.ok("entries.related", json!({"text":text,"paths":["src/lib.rs"],"llm":true}));
+    assert_eq!(again["model"]["cached"], true);
+    let captured = r.kontext(&[
+        "call",
+        "ctx_capture",
+        &json!({"kind":"decision","title":"Invoices round only the grand total half-up","body":"","summary":"x","paths":["src/lib.rs"]})
+            .to_string(),
+    ]);
+    assert!(captured.contains("possible conflict, check: Round invoice lines half-even <kx:2026-01-10-round-half-even>"), "{captured}");
+    assert_eq!(calls(&r), 1);
+    // an answer about entries it was not shown is not trusted
+    fake_model(&r, json!({"relations":[{"relation":"conflicts","id":"elsewhere"}]}));
+    let other = r.ok("entries.related", json!({"text":"Round receipts with banker's rounding","llm":true}));
+    assert_eq!(other["relations"], json!([{"relation":"uncertain","label":"uncertain, check"}]));
+
+    // revise: a draft that supersedes the entry, never the old body back
+    fake_model(
+        &r,
+        json!({"title":"Round invoice totals half-up","body":"Invoices round the grand total half-up, like receipts, since accounting sums unrounded lines."}),
+    );
+    let draft = r.ok(
+        "drafts.revise",
+        json!({"entry_id":"2026-01-10-round-half-even","entry_revision":head,"objections":["Accounting now sums unrounded lines."]}),
+    );
+    assert_eq!(draft["entry"]["supersedes"], json!(["2026-01-10-round-half-even"]));
+    assert_eq!(draft["entry"]["status"], "proposed");
+    assert_eq!(draft["entry"]["kind"], "decision");
+    assert_eq!(draft["entry"]["paths"], json!(["src/**"]));
+    assert!(r.git(&["status", "--porcelain"]).is_empty(), "revise writes nothing");
+    fake_model(&r, json!({"title":"Round invoice lines half-even","body":"Round invoice lines half-even, for the record."}));
+    let same = r.api("drafts.revise", json!({"entry_id":"2026-01-10-round-half-even","entry_revision":head,"objections":["x"]}));
+    assert_eq!(same["error"]["code"], "invalid_model_output", "{same}");
+    for bad in [json!([]), json!(["x".repeat(301)]), json!(vec!["x"; 21])] {
+        let out = r.api("drafts.revise", json!({"entry_id":"2026-01-10-round-half-even","entry_revision":head,"objections":bad}));
+        assert_eq!(out["error"]["code"], "invalid_input");
+    }
+    r.write(".git/kontext/config.toml", "");
+    let none = r.api("drafts.revise", json!({"entry_id":"2026-01-10-round-half-even","entry_revision":head,"objections":["x"]}));
+    assert_eq!(none["error"]["code"], "model_unavailable", "{none}");
+    let status = r.ok("status", json!({}));
+    for op in ["entries.related", "drafts.retire", "drafts.revise"] {
+        assert!(status["capabilities"].as_array().unwrap().iter().any(|c| c == op), "{op}");
+    }
+}

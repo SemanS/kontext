@@ -22,6 +22,7 @@ mod mcp;
 mod model;
 mod ops;
 mod presets;
+mod related;
 mod repo;
 mod route;
 mod secrets;

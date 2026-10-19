@@ -20,6 +20,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "entries.search" => search(app, input),
         "entries.governing" => governing(app, input),
         "entries.export" => export(app, input),
+        "entries.related" => related(app, input),
         _ => Err(crate::api::error("unsupported_operation", format!("unknown read operation '{operation}'"))),
     }?;
     if operation == "status" || operation == "entries.export" { Ok(result) } else { working_result(app, result) }
@@ -318,6 +319,23 @@ fn search(app: &App, input: &Value) -> Result<Value> {
     let total = selected.len();
     let entries: Vec<Value> = selected.into_iter().take(limit).map(entry_json).collect();
     Ok(json!({"entries":entries,"total":total}))
+}
+
+fn related(app: &App, input: &Value) -> Result<Value> {
+    let text = input
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty() && s.len() <= 20_000)
+        .ok_or_else(|| crate::api::error("invalid_input", "text must be a non-empty string of at most 20000 bytes"))?;
+    let paths = strings(input, "paths")?;
+    let exclude = strings(input, "exclude_ids")?;
+    let model = match input.get("llm") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => crate::related::Model::CachedOnly,
+        Some(Value::Bool(true)) => crate::related::Model::Ask(None),
+        Some(Value::String(name)) if !name.trim().is_empty() => crate::related::Model::Ask(Some(name.as_str())),
+        _ => return Err(crate::api::error("invalid_input", "llm must be a boolean or an adapter name")),
+    };
+    crate::related::related(app, text, &paths, &exclude, model)
 }
 
 fn validate_path(path: &str) -> Result<String> {

@@ -591,16 +591,10 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared
 pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
     let (mut entry, redactions, mut notes, _) = prepare_capture(app, req.clone())?;
     let visibility = entry.visibility.clone().unwrap_or_else(|| "team".into());
-    let kind = entry.kind.clone();
-    // similar entries already in the store?
-    if let Ok(hits) =
-        app.with_index(|idx| idx.search(&entry.title, &SearchOpts { limit: 3, kinds: vec![kind.clone()], sources: vec!["entry".into()] }))
-    {
-        for h in hits {
-            if title_similarity(&h.title, &entry.title) >= 0.6 {
-                notes.push(format!("similar existing entry: {} <{}> — update it instead if this is the same thing", h.title, h.uri));
-            }
-        }
+    // entries it may duplicate, extend or contradict: a label to check, never an action
+    let text = format!("{}\n{}", entry.title, entry.body);
+    if let Ok(related) = crate::related::related(app, &text, &entry.paths, &entry.supersedes, crate::related::Model::CachedOnly) {
+        notes.extend(crate::related::render_notes(&related).into_iter().take(3));
     }
     let _file = write_guard(app)?;
     let _lock = app.write_lock.lock().unwrap();

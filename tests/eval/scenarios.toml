@@ -433,7 +433,6 @@ expect = ["status: superseded"]
 [[scenario]]
 name = "related entries without a model"
 item = "3.1"
-pending = "3.1"
 [[scenario.step]]
 run = ["api", "entries.related", '{"text":"Round each invoice line half-even before summing","paths":["src/pricing/round.rs"]}']
 expect = ['"id":"2026-02-20-round-prices-half-even-on-invoices"', '"id":"2026-02-21-round-prices-half-up-on-receipts"', '"reason"']
@@ -441,7 +440,6 @@ expect = ['"id":"2026-02-20-round-prices-half-even-on-invoices"', '"id":"2026-02
 [[scenario]]
 name = "related shown when capturing"
 item = "3.1"
-pending = "3.1"
 [[scenario.step]]
 run = ["call", "ctx_capture", '{"kind":"decision","title":"Round each invoice line half-even","body":"Round every invoice line before summing.","paths":["src/pricing/**"]}']
 expect = ["<kx:2026-02-20-round"]
@@ -449,7 +447,6 @@ expect = ["<kx:2026-02-20-round"]
 [[scenario]]
 name = "contradiction flagged by the model, never as replace"
 item = "3.1"
-pending = "3.1"
 [[scenario.step]]
 write = ".git/answer.json"
 content = """{"relations": [{"relation": "conflicts", "id": "2026-02-20-round-prices-half-even-on-invoices"}], "title": "Round invoice totals half-up", "body": "Invoices round only the grand total half-up, like receipts."}"""
@@ -470,12 +467,34 @@ run = ["api", "entries.related", '{"text":"Invoices round only the grand total h
 expect = ['"relation":"conflicts"', '"id":"2026-02-20-round-prices-half-even-on-invoices"', "possible conflict, check"]
 forbid = ["replace"]
 
+[[scenario]]
+name = "similar names, different content: an answer about unseen entries is uncertain"
+item = "3.1"
+[[scenario.step]]
+write = ".git/answer.json"
+content = """{"relations": [{"relation": "same", "id": "2026-01-20-cache-product-pages-for-five-minutes"}]}"""
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[init]
+llm = "fake"
+[adapters.fake]
+driver = "command"
+[adapters.fake.ops.llm]
+command = ["sh", "-c", "cat >/dev/null; cat {root}/.git/answer.json"]
+stdin = "{{prompt}}"
+format = "text"
+"""
+[[scenario.step]]
+run = ["api", "entries.related", '{"text":"Round prices half-up on receipts printed by the kiosk","paths":["src/pricing/**"],"llm":true}']
+expect = ['"relation":"uncertain"', '"id":"2026-02-21-round-prices-half-up-on-receipts"']
+forbid = ['"relation":"same"']
+
 # ------------------------------------------------------------------------------------- 3.2
 
 [[scenario]]
 name = "revise without a model is refused"
 item = "3.2"
-pending = "3.2"
 [[scenario.step]]
 run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
 expect = ["model_unavailable"]
@@ -483,7 +502,6 @@ expect = ["model_unavailable"]
 [[scenario]]
 name = "revise drafts a superseding entry"
 item = "3.2"
-pending = "3.2"
 [[scenario.step]]
 write = ".git/answer.json"
 content = """{"title": "Round invoice totals half-up", "body": "Invoices round only the grand total half-up, like receipts."}"""

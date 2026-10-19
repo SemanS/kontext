@@ -322,7 +322,7 @@ fn end_to_end() {
         "Floats broke VAT rounding; every amount is an integer number of cents.",
     ]);
     assert!(cap.contains("captured inbox:"), "{cap}");
-    let id = cap.trim().rsplit(':').next().unwrap().trim().to_string();
+    let id = cap.lines().find(|l| l.starts_with("captured ")).unwrap().rsplit(':').next().unwrap().trim().to_string();
     s.write("libs/pricing/src/round.ts", "export function round(n: number) { return Math.round(n); }\n// cents only\n");
     s.ok_git(&["add", "libs/pricing/src/round.ts"]);
     let report = s.kontext(&["prepare-commit"]);
@@ -379,7 +379,7 @@ fn end_to_end() {
         "--body",
         "Abandoned carts are dropped after 24 hours to keep the store small.",
     ]);
-    let pathless = cap.trim().rsplit(':').next().unwrap().trim().to_string();
+    let pathless = cap.lines().find(|l| l.starts_with("captured ")).unwrap().rsplit(':').next().unwrap().trim().to_string();
     s.write("apps/api/src/cart.ts", "export class Cart { total() { return 0; } expires = 86400; }\n");
     s.kontext(&["prepare-commit", "--promote", &pathless]);
     let promoted = std::fs::read_dir(s.repo.join(".ai/decisions"))
@@ -861,7 +861,7 @@ fn routing_edges() {
     // …and a team that turned trailers off is not told to write them by hand
     let cap =
         s.kontext(&["capture", "-C", a, "--kind", "decision", "--title", "Use cents", "--paths", "src/**", "--body", "Integer cents."]);
-    let id = cap.trim().rsplit(':').next().unwrap().trim().to_string();
+    let id = cap.lines().find(|l| l.starts_with("captured ")).unwrap().rsplit(':').next().unwrap().trim().to_string();
     let report = s.kontext(&["prepare-commit", "-C", a, "--promote", &id]);
     assert!(report.contains("promoted") && !report.contains("Commit trailers"), "{report}");
 }
