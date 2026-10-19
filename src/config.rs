@@ -58,6 +58,10 @@ max_modules = 14
 [freshness]
 threshold_commits = 20
 
+[search]
+adapters = "always"
+min_local_hits = 3
+
 [capture]
 default_visibility = "team"
 redact = true
@@ -92,6 +96,7 @@ pub struct Config {
     pub index: IndexCfg,
     pub brief: BriefCfg,
     pub freshness: FreshnessCfg,
+    pub search: SearchCfg,
     pub capture: CaptureCfg,
     pub hooks: HooksCfg,
     pub secrets: SecretsCfg,
@@ -175,6 +180,15 @@ pub struct BriefCfg {
 pub struct FreshnessCfg {
     /// Flag an active decision once this many commits touched its `paths` since its date (0 = off).
     pub threshold_commits: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SearchCfg {
+    /// When `ctx_search` asks the adapters with a search op: "always", or "fallback" — only when the
+    /// local sources found fewer than `min_local_hits` hits (or the caller asks for them).
+    pub adapters: String,
+    pub min_local_hits: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

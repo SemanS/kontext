@@ -131,7 +131,6 @@ expect = ["<kx:2026-01-10-orders-live-in-postgresql>", "hub:"]
 [[scenario]]
 name = "unavailable hub skipped when local hits suffice"
 item = "1.4"
-pending = "1.4"
 [[scenario.step]]
 write = ".git/kontext/config.toml"
 content = """
@@ -147,11 +146,31 @@ format = "json"
 """
 [[scenario.step]]
 run = ["search", "orders postgresql"]
-expect = ["<kx:2026-01-10-orders-live-in-postgresql>"]
+expect = ["<kx:2026-01-10-orders-live-in-postgresql>", "connected sources not asked"]
 forbid = ["hub:"]
+
+[[scenario]]
+name = "fallback mode still asks a hub that is named"
+item = "1.4"
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[search]
+adapters = "fallback"
+min_local_hits = 1
+
+[adapters.hub]
+driver = "command"
+[adapters.hub.ops.search]
+command = ["sh", "-c", "sleep 1; exit 3"]
+format = "json"
+"""
 [[scenario.step]]
 run = ["search", "orders postgresql", "--source", "hub"]
 expect = ["hub:"]
+[[scenario.step]]
+run = ["search", "orders postgresql", "--adapters"]
+expect = ["<kx:2026-01-10-orders-live-in-postgresql>", "hub:"]
 
 # ------------------------------------------------------------------------------- retrieval
 

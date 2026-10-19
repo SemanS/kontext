@@ -123,6 +123,7 @@ fn tool_list() -> Vec<Value> {
                 "kinds": arr("Restrict local results: decision, convention, learning, incident, architecture, doc, commit"),
                 "sources": arr("Restrict sources: local and/or adapter names (default: all)"),
                 "limit": {"type": "integer", "description": "Max hits (default 10)"},
+                "adapters": {"type": "boolean", "description": "Ask the connected search adapters even when local hits suffice (true) or never (false); default from [search] adapters"},
                 "budget_tokens": {"type": "integer", "description": "Approximate size limit (default 1200)"}
             }, "required": ["query"]}
         }),
@@ -271,6 +272,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 kinds: list_arg(args, "kinds"),
                 sources: list_arg(args, "sources"),
                 limit: int_arg(args, "limit").unwrap_or(10),
+                adapters: args.get("adapters").and_then(Value::as_bool),
             };
             let (hits, notes) = ops::search(app, &req)?;
             let mut out = model::render(&hits, int_arg(args, "budget_tokens").unwrap_or(1200));

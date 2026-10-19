@@ -74,6 +74,9 @@ enum Cmd {
         /// Print hits as JSON
         #[arg(long)]
         json: bool,
+        /// Ask the search adapters even when local hits suffice (`[search] adapters = "fallback"`)
+        #[arg(long)]
+        adapters: bool,
     },
     /// Read a URI: kx:<id>, file:<path>[#section], git:<sha>, inbox:<id>, adapter URIs (viking://…)
     Read {
@@ -619,13 +622,14 @@ fn run(cli: Cli) -> Result<i32> {
                 _ => print!("{text}"),
             }
         }
-        Cmd::Search { query, kind, source, limit, json } => {
+        Cmd::Search { query, kind, source, limit, json, adapters } => {
             let app = open(&dir)?;
             let q = query.join(" ");
             if q.trim().is_empty() {
                 bail!("give a query");
             }
-            let (hits, notes) = ops::search(&app, &ops::SearchReq { query: q, kinds: kind, sources: source, limit })?;
+            let (hits, notes) =
+                ops::search(&app, &ops::SearchReq { query: q, kinds: kind, sources: source, limit, adapters: adapters.then_some(true) })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&json!({"hits": hits, "notes": notes}))?);
             } else {

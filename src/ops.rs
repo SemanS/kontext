@@ -58,6 +58,8 @@ pub struct SearchReq {
     pub kinds: Vec<String>,
     pub sources: Vec<String>,
     pub limit: usize,
+    /// Ask the search adapters (`Some(true)`), skip them (`Some(false)`), or follow `[search] adapters`.
+    pub adapters: Option<bool>,
 }
 
 pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
@@ -107,7 +109,18 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
         }
     }
     let external: Vec<String> = req.sources.iter().filter(|s| *s != "local").cloned().collect();
-    if req.sources.is_empty() || !external.is_empty() {
+    // adapters cost a round trip each (a hub, a memory server); `fallback` asks them only when the
+    // local answer is thin. Naming one in `sources` or passing `adapters` is asking for them.
+    let local_hits: usize = groups.iter().map(|g| g.hits.len()).sum();
+    let wanted = match req.adapters {
+        Some(w) => w,
+        None => !external.is_empty() || app.cfg().search.adapters != "fallback" || local_hits < app.cfg().search.min_local_hits,
+    };
+    let any_search_adapter = || app.registry().adapters.iter().any(|a| a.has_op("search"));
+    if (req.sources.is_empty() || !external.is_empty()) && !wanted && any_search_adapter() {
+        notes.push(format!("connected sources not asked: {local_hits} local hits are enough (ask with adapters=true)"));
+    }
+    if (req.sources.is_empty() || !external.is_empty()) && wanted {
         let q = req.query.clone();
         let reg = app.registry();
         let results = reg.fanout("search", &external, Duration::from_secs(12), move |a| a.search(&q, limit));
@@ -1105,7 +1118,13 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         for p in &focus.paths {
             q.extend(p.split(['/', '.', '-', '_']).filter(|s| s.len() > 2).map(str::to_string));
         }
-        let req = SearchReq { query: q.join(" "), kinds: vec!["doc".into(), "commit".into()], sources: vec!["local".into()], limit: 5 };
+        let req = SearchReq {
+            query: q.join(" "),
+            kinds: vec!["doc".into(), "commit".into()],
+            sources: vec!["local".into()],
+            limit: 5,
+            adapters: Some(false),
+        };
         let room = ((budget_left.max(0) as usize) / 2).min(450);
         if room >= 80
             && let Ok((hits, _)) = search(app, &req)
@@ -1339,7 +1358,8 @@ pub fn why(app: &App, target: &str, limit: usize) -> Result<String> {
             }
         }
     }
-    let (hits, _) = search(app, &SearchReq { query: target.into(), kinds: Vec::new(), sources: vec!["local".into()], limit })?;
+    let (hits, _) =
+        search(app, &SearchReq { query: target.into(), kinds: Vec::new(), sources: vec!["local".into()], limit, adapters: Some(false) })?;
     if !hits.is_empty() {
         let _ = writeln!(out, "\n## Knowledge and history\n{}", model::render(&hits, 900));
     }
