@@ -106,6 +106,16 @@ impl WorkingView {
     }
 }
 
+/// Knowledge files that differ from HEAD in the working tree or the index: drafts, edits and staged
+/// changes nobody has approved yet.
+pub(crate) fn unapproved_files(app: &App) -> Vec<String> {
+    WorkingView::new(app).map(|v| v.changes.into_iter().map(|(path, _)| path).collect()).unwrap_or_default()
+}
+
+pub(crate) fn is_unapproved(files: &[String], file: &str) -> bool {
+    files.iter().any(|path| path == file || (path.ends_with('/') && file.starts_with(path.as_str())))
+}
+
 pub fn entry_json_in(app: &App, entry: &Entry) -> Result<Value> {
     let mut value = entry_json(entry);
     WorkingView::new(app)?.annotate(&mut value);

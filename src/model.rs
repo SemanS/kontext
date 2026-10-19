@@ -90,8 +90,9 @@ pub fn render(hits: &[Hit], budget_tokens: usize) -> String {
         if let Some(k) = &h.kind {
             meta.push(k.clone());
         }
-        if let Some(s) = &h.status {
-            meta.push(s.clone());
+        // an accepted entry is the norm and costs no tokens; anything else is said
+        if let Some(s) = h.status.as_deref().filter(|s| *s != "accepted") {
+            meta.push(s.to_string());
         }
         if let Some(d) = &h.date {
             meta.push(d.chars().take(10).collect());
@@ -138,6 +139,17 @@ mod tests {
         let uris: Vec<_> = m.iter().map(|h| h.uri.as_str()).collect();
         assert_eq!(uris, vec!["kx:a", "kx:b"], "same-text and same-uri hits collapse");
         assert!(render(&m, 1000).contains("1. Alpha"));
+    }
+
+    #[test]
+    fn render_marks_everything_short_of_accepted() {
+        let mut accepted = hit("local", "kx:a", "Accepted rule", 1.0);
+        accepted.status = Some("accepted".into());
+        let mut old = hit("local", "kx:b", "Old rule", 1.0);
+        old.status = Some("deprecated".into());
+        let text = render(&[accepted, old], 1000);
+        assert!(text.contains("1. Accepted rule [] <kx:a>"), "{text}");
+        assert!(text.contains("2. Old rule [deprecated] <kx:b>"), "{text}");
     }
 
     #[test]

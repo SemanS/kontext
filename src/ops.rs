@@ -121,7 +121,57 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
             }
         }
     }
-    Ok((model::merge(groups, limit), notes))
+    let mut hits = model::merge(groups, limit);
+    if hits.iter().any(|h| h.source == "local" && h.uri.starts_with("kx:")) {
+        let (entries, _) = app.entries();
+        let marks = Marks::load(app, &entries);
+        for h in hits.iter_mut().filter(|h| h.source == "local") {
+            let Some(e) = h.uri.strip_prefix("kx:").and_then(|id| entries.iter().find(|e| e.id == id)) else { continue };
+            let flags = marks.flags(e);
+            if !flags.is_empty() {
+                let mut all: Vec<String> = h.status.iter().cloned().collect();
+                all.extend(flags);
+                h.status = Some(all.join(" · "));
+            }
+        }
+    }
+    Ok((hits, notes))
+}
+
+/// What a short line says about an entry besides its text: anything short of accepted, approved
+/// team knowledge. An accepted, committed entry carries no mark, so the common case costs nothing.
+pub(crate) struct Marks {
+    unapproved: Vec<String>,
+}
+
+impl Marks {
+    pub(crate) fn load(app: &App, entries: &[Entry]) -> Marks {
+        let unapproved = if entries.is_empty() { Vec::new() } else { crate::api_read::unapproved_files(app) };
+        Marks { unapproved }
+    }
+
+    /// Marks other than the status: where the entry stands locally and what it is waiting for.
+    pub(crate) fn flags(&self, e: &Entry) -> Vec<String> {
+        let mut out = Vec::new();
+        if crate::api_read::is_unapproved(&self.unapproved, &e.rel_path) {
+            out.push("local, unapproved".to_string());
+        }
+        out
+    }
+
+    /// ` (proposed; local, unapproved)` after a title, or nothing for accepted, approved knowledge.
+    pub(crate) fn suffix(&self, e: &Entry) -> String {
+        let mut all: Vec<String> = e.status.iter().filter(|s| s.as_str() != "accepted").cloned().collect();
+        all.extend(self.flags(e));
+        if all.is_empty() { String::new() } else { format!(" ({})", all.join("; ")) }
+    }
+
+    /// `Title (marks) — summary`, the one-line form the brief lists.
+    pub(crate) fn line(&self, e: &Entry, max: usize) -> String {
+        let s = e.summary_text(max);
+        let title = format!("{}{}", e.title, self.suffix(e));
+        if s.is_empty() { title } else { format!("{title} — {s}") }
+    }
 }
 
 /// Inbox notes that match a query. The inbox is a handful of files outside the repository, so it
@@ -752,6 +802,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
     };
     let refs = Refs::new(entries.iter().map(|e| e.id.as_str()));
     let reference = |e: &Entry| format!("{}{}", part.prefix, refs.of(e));
+    let marks = Marks::load(app, &entries);
 
     // the state comes last but must not be crowded out (a stale decision or missing hooks matter
     // most when knowledge fills the brief): its lines are written now and their budget kept aside
@@ -927,7 +978,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
                 .filter(|d| !r.trim_start_matches(part.prefix).starts_with(*d))
                 .map(|d| format!(" ({d})"))
                 .unwrap_or_default();
-            let line = format!("- [{r}] {} — {}{date}\n", e.title, e.summary_text(150));
+            let line = format!("- [{r}] {}{date}\n", marks.line(e, 150));
             if util::est_tokens(&(sec.clone() + &line)) as isize > budget_left * 6 / 10 {
                 break;
             }
@@ -959,7 +1010,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
         let mut sec = format!("\n{h2} {heading}\n");
         for (e, _) in list.iter().take(max) {
-            let _ = writeln!(sec, "- {} <kx:{}>", e.l0(140), reference(e));
+            let _ = writeln!(sec, "- {} <kx:{}>", marks.line(e, 140), reference(e));
         }
         add(&mut out, &sec, &mut budget_left);
     }

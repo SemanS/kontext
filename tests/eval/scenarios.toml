@@ -19,7 +19,6 @@
 [[scenario]]
 name = "proposed vs accepted in the brief"
 item = "1.1"
-pending = "1.1"
 [[scenario.step]]
 run = ["brief", "--focus", "src/search", "--focus", "src/orders", "--no-adapters"]
 expect = ["Move product search to OpenSearch (proposed)", "Orders live in PostgreSQL —"]
@@ -36,7 +35,6 @@ forbid = ["accepted"]
 [[scenario]]
 name = "locally edited entry is not presented as approved"
 item = "1.1"
-pending = "1.1"
 [[scenario.step]]
 write = ".ai/decisions/2026-01-10-orders-live-in-postgresql.md"
 content = """---
