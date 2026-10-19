@@ -223,6 +223,7 @@ fn inbox_hits(app: &App, query: &str, kinds: &[String], limit: usize) -> Vec<Hit
             score,
             date: e.date.clone(),
             status: Some(if private { "local note, private".into() } else { "local note".into() }),
+            similar_to: None,
         });
     }
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));

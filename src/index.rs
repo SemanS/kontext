@@ -293,6 +293,7 @@ impl LocalIndex {
                 score,
                 date: opt(get(self.f.date)),
                 status: opt(get(self.f.status)),
+                similar_to: None,
             });
         }
         Ok(hits)

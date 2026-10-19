@@ -62,7 +62,6 @@ expect = ["local, unapproved"]
 [[scenario]]
 name = "near-duplicate learnings both survive"
 item = "1.2"
-pending = "1.2"
 [[scenario.step]]
 run = ["search", "webhook retries arrive twice"]
 keep = ["<kx:webhook-retries-arrive-twice-from-the-provider>", "<kx:webhook-retries-arrive-twice-from-the-carrier>"]
@@ -77,7 +76,6 @@ keep = ["<kx:2026-02-20-round-prices-half-even-on-invoices>", "<kx:2026-02-21-ro
 [[scenario]]
 name = "memory copies collapse, a different memory stays"
 item = "1.2"
-pending = "1.2"
 [[scenario.step]]
 write = ".git/memory.json"
 content = """{"hits": [
