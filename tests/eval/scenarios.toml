@@ -229,7 +229,6 @@ forbid = ["Exports skip cancelled orders"]
 [[scenario]]
 name = "review date passed: marked in brief, search and status"
 item = "2.2"
-pending = "2.2"
 [[scenario.step]]
 write = ".ai/decisions/2026-01-05-freeze-the-orders-table-during-migration.md"
 content = """---
@@ -264,7 +263,6 @@ expect = ["due for review"]
 [[scenario]]
 name = "review date before the entry date is a validation error"
 item = "2.2"
-pending = "2.2"
 [[scenario.step]]
 write = ".ai/learnings/reports-time-out.md"
 content = """---
@@ -284,7 +282,6 @@ expect = ["error: .ai/learnings/reports-time-out.md: review_by"]
 [[scenario]]
 name = "per-kind review default applies to new incidents"
 item = "2.2"
-pending = "2.2"
 [[scenario.step]]
 write = ".ai/kontext.toml"
 content = """[project]

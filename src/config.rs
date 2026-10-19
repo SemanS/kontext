@@ -150,6 +150,25 @@ pub struct KindCfg {
     pub numbering: Option<Numbering>,
     /// Commit trailer key added by the prepare-commit-msg hook, e.g. `Decision`.
     pub trailer: Option<String>,
+    /// Default review date for new entries of this kind, relative to their date: `90d`, `12w`,
+    /// `6m` (months of 30 days) or `1y`. Unset (the default): no review date.
+    pub review_after: Option<String>,
+}
+
+/// Days in a `review_after` period (`90d`, `12w`, `6m`, `1y`).
+pub fn period_days(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let (n, unit) = t.split_at(t.find(|c: char| !c.is_ascii_digit())?);
+    let n: i64 = n.parse().ok().filter(|n| *n > 0)?;
+    Some(
+        n * match unit.trim() {
+            "d" => 1,
+            "w" => 7,
+            "m" => 30,
+            "y" => 365,
+            _ => return None,
+        },
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

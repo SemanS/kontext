@@ -45,6 +45,9 @@ pub struct Entry {
     pub title: String,
     pub status: Option<String>,
     pub date: Option<String>,
+    /// When someone should look at the entry again (`YYYY-MM-DD`). A review date, not an expiry:
+    /// past it the entry is marked, never hidden.
+    pub review_by: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub paths: Vec<String>,
@@ -94,6 +97,11 @@ impl Entry {
         } else {
             self.extra.push((key.to_string(), value));
         }
+    }
+
+    /// The review date has passed (`today` is `YYYY-MM-DD`). Only active entries are due.
+    pub fn review_due(&self, today: &str) -> bool {
+        self.is_active() && self.review_by.as_deref().and_then(|r| r.get(..10)).is_some_and(|r| r < today)
     }
 
     pub fn is_active(&self) -> bool {
@@ -168,6 +176,7 @@ impl Entry {
         s("title", &Some(self.title.clone()));
         s("status", &self.status);
         s("date", &self.date);
+        s("review_by", &self.review_by);
         s("summary", &self.summary);
         let mut l = |k: &str, val: &Vec<String>| {
             if !val.is_empty() {
@@ -218,6 +227,7 @@ impl Entry {
         };
         field("Status", self.status.clone().unwrap_or_default());
         field("Date", self.date.clone().unwrap_or_default());
+        field("Review by", self.review_by.clone().unwrap_or_default());
         field("Summary", self.summary.clone().unwrap_or_default());
         field("Tags", self.tags.join(", "));
         field("Paths", self.paths.join(", "));
@@ -399,6 +409,9 @@ const FIELD_KEYS: &[&str] = &[
     "kontext metadata",
     "status",
     "date",
+    "review by",
+    "review-by",
+    "review_by",
     "tags",
     "paths",
     "supersedes",
@@ -504,6 +517,7 @@ impl Entry {
                 }
             }
             "summary" | "description" => self.summary = Some(v.as_str()),
+            "review_by" | "review-by" | "review by" => self.review_by = Some(v.as_str()).filter(|s| !s.trim().is_empty()),
             "tags" => self.tags = v.as_list(),
             "paths" | "scope" if matches!(v, FmValue::List(_)) || key == "paths" => self.paths = v.as_list(),
             "supersedes" => self.supersedes = v.as_list(),
@@ -824,6 +838,19 @@ impl<'a> Store<'a> {
                 push(Level::Warn, format!("date '{d}' is not YYYY-MM-DD"));
             }
         }
+        if let Some(r) = &e.review_by {
+            let day = |d: &str| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok();
+            match day(r) {
+                None => push(Level::Error, format!("review_by '{r}' is not a YYYY-MM-DD date")),
+                Some(by) => {
+                    if let Some(date) = e.date.as_deref().and_then(|d| d.get(..10)).and_then(day)
+                        && by < date
+                    {
+                        push(Level::Error, format!("review_by {r} is before the entry's date {}", &e.date.as_deref().unwrap_or("")[..10]));
+                    }
+                }
+            }
+        }
         let lines = e.body.lines().filter(|l| !l.trim().is_empty()).count();
         let max = self.cfg.store.max_body_lines;
         if max > 0 && lines > max && e.get_extra("generated").is_none() {
@@ -992,6 +1019,39 @@ mod tests {
         assert_eq!(e.summary_text(200), "One PostgreSQL database. Reporting reads a replica.");
         let md = e.markdown();
         assert!(md.starts_with("# 0002 — Orders live in PostgreSQL\n\n**Status:** accepted\n"));
+    }
+
+    #[test]
+    fn review_by_round_trips_in_both_styles_and_is_validated() {
+        let text =
+            "---\nid: freeze\nkind: decision\ntitle: Freeze\nstatus: accepted\ndate: 2026-01-05\nreview_by: 2026-01-31\n---\nNo writes.\n";
+        let e = Entry::parse(".ai/decisions/freeze.md", text, "decision");
+        assert_eq!(e.review_by.as_deref(), Some("2026-01-31"));
+        assert!(e.markdown().contains("date: 2026-01-05\nreview_by: 2026-01-31\n"));
+        assert!(e.review_due("2026-02-01") && !e.review_due("2026-01-31"));
+        let adr = Entry::parse(
+            "docs/adr/0003-freeze.md",
+            "# 0003 — Freeze\n\n**Status:** accepted\n**Review by:** 2026-01-31\n\nNo writes.\n",
+            "decision",
+        );
+        assert_eq!(adr.review_by.as_deref(), Some("2026-01-31"));
+        assert!(adr.markdown().contains("**Review by:** 2026-01-31"));
+
+        let cfg: Config = toml::from_str(crate::config::DEFAULTS).unwrap();
+        let repo = crate::repo::Repo::discover(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let store = Store::new(&repo, &cfg);
+        let errors = |e: &Entry| {
+            store.validate(e, &HashSet::new(), None).into_iter().filter(|i| i.level == Level::Error).map(|i| i.msg).collect::<Vec<_>>()
+        };
+        assert!(errors(&e).is_empty());
+        let before = Entry { review_by: Some("2026-01-01".into()), ..e.clone() };
+        assert_eq!(errors(&before), vec!["review_by 2026-01-01 is before the entry's date 2026-01-05"]);
+        let bad = Entry { review_by: Some("end of January".into()), ..e.clone() };
+        assert_eq!(errors(&bad), vec!["review_by 'end of January' is not a YYYY-MM-DD date"]);
+        assert_eq!(crate::config::period_days("90d"), Some(90));
+        assert_eq!(crate::config::period_days("2w"), Some(14));
+        assert_eq!(crate::config::period_days("1y"), Some(365));
+        assert_eq!(crate::config::period_days("soon"), None);
     }
 
     #[test]

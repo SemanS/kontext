@@ -39,7 +39,7 @@ pub fn entry_json(entry: &Entry) -> Value {
         .collect();
     let mut out = json!({
         "id":entry.id,"kind":entry.kind,"title":entry.title,"body":entry.body,
-        "summary":entry.summary_text(usize::MAX),"status":entry.status,"date":entry.date,
+        "summary":entry.summary_text(usize::MAX),"status":entry.status,"date":entry.date,"review_by":entry.review_by,
         "paths":entry.paths,"tags":entry.tags,"file":entry.rel_path,"markdown":entry.markdown(),
         "style":entry.style,"supersedes":entry.supersedes,"superseded_by":entry.superseded_by,
         "commits":entry.commits,"author":entry.author,"visibility":entry.visibility,"origin":entry.origin,

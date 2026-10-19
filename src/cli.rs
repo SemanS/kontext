@@ -308,6 +308,9 @@ struct CaptureArgs {
     /// proposed | accepted (decisions default to accepted)
     #[arg(long)]
     status: Option<String>,
+    /// When it should be looked at again (YYYY-MM-DD), e.g. for a temporary rule
+    #[arg(long)]
+    review_by: Option<String>,
     /// Keep it personal (never promoted; mirrored to personal adapters)
     #[arg(long)]
     private: bool,
@@ -669,6 +672,7 @@ fn run(cli: Cli) -> Result<i32> {
                     supersedes: a.supersedes,
                     status: a.status,
                     promote: a.promote,
+                    review_by: a.review_by,
                     origin: "cli".into(),
                     ..Default::default()
                 },
@@ -1059,6 +1063,19 @@ fn status(app: &App) -> Result<()> {
                 freshness::render_list(&stale, usize::MAX, &name)
             );
         }
+    }
+    let due = freshness::review_due(&entries, &crate::util::today());
+    if due.is_empty() {
+        println!("review    no active entry is past its review_by date");
+    } else {
+        let refs = ops::Refs::new(entries.iter().map(|e| e.id.as_str()));
+        let name = |d: &freshness::Due| entries.iter().find(|e| e.id == d.id).map(|e| refs.of(e)).unwrap_or_else(|| d.id.clone());
+        println!(
+            "review    {} entr{} due for review: {}",
+            due.len(),
+            if due.len() == 1 { "y" } else { "ies" },
+            freshness::render_due(&due, usize::MAX, &name)
+        );
     }
     let inbox = inbox::Inbox::open(&app.repo).list();
     let private = inbox.iter().filter(|e| e.visibility.as_deref() == Some("private")).count();

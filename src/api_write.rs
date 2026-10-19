@@ -64,6 +64,7 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<(Entry, usi
         visibility: optional(value, "visibility")?.map(String::from),
         supersedes: strings(value, "supersedes")?,
         commits: strings(value, "commits")?,
+        review_by: optional(value, "review_by")?.map(String::from),
         origin: "application".into(),
         source: source.map(String::from),
         ..Default::default()
@@ -98,6 +99,8 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<(Entry, usi
                         | "body"
                         | "status"
                         | "date"
+                        | "review_by"
+                        | "review-by"
                         | "summary"
                         | "tags"
                         | "paths"

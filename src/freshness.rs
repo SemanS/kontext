@@ -1,7 +1,9 @@
-//! Knowledge freshness: active decisions whose governed `paths` saw many commits since the
-//! decision was made, a hint that the decision may need a review. One `git log` covers every
-//! decision, and the counts are cached per HEAD: a brief pays one `rev-parse` while nothing is
-//! committed.
+//! Knowledge freshness, the one place for both signals that an entry may need a look:
+//! * churn — active decisions whose governed `paths` saw many commits since the decision was made.
+//!   One `git log` covers every decision, and the counts are cached per HEAD: a brief pays one
+//!   `rev-parse` while nothing is committed;
+//! * review date — active entries whose `review_by` date has passed. A review date is not an
+//!   expiry: the entry stays where it is, marked, until someone confirms, supersedes or retires it.
 use crate::app::App;
 use crate::glob::path_matches;
 use crate::store::Entry;
@@ -164,6 +166,44 @@ pub fn stale_decisions(app: &App, entries: &[Entry]) -> Vec<Stale> {
     stale
 }
 
+/// An active entry (any kind) whose `review_by` date has passed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Due {
+    pub id: String,
+    pub title: String,
+    pub review_by: String,
+}
+
+/// Active entries past their review date (`today` is `YYYY-MM-DD`), the longest overdue first.
+pub fn review_due(entries: &[Entry], today: &str) -> Vec<Due> {
+    let mut due: Vec<Due> = entries
+        .iter()
+        .filter(|e| e.review_due(today))
+        .map(|e| Due { id: e.id.clone(), title: e.title.clone(), review_by: e.review_by.clone().unwrap_or_default() })
+        .collect();
+    due.sort_by(|a, b| a.review_by.cmp(&b.review_by).then(a.id.cmp(&b.id)));
+    due
+}
+
+/// Both signals for one set of entries.
+pub struct Freshness {
+    pub stale: Vec<Stale>,
+    pub due: Vec<Due>,
+}
+
+pub fn check(app: &App, entries: &[Entry]) -> Freshness {
+    Freshness { stale: stale_decisions(app, entries), due: review_due(entries, &util::today()) }
+}
+
+/// `[ref] Title (review by 2026-01-31), …` for the first `max`.
+pub fn render_due(due: &[Due], max: usize, name: &dyn Fn(&Due) -> String) -> String {
+    let mut s: Vec<String> = due.iter().take(max).map(|d| format!("[{}] {} (review by {})", name(d), d.title, d.review_by)).collect();
+    if due.len() > max {
+        s.push(format!("+{} more (`kontext status`)", due.len() - max));
+    }
+    s.join(", ")
+}
+
 /// `[ref] Title (34 commits), …` for the first `max`, each named as `name` refers to it.
 pub fn render_list(stale: &[Stale], max: usize, name: &dyn Fn(&Stale) -> String) -> String {
     let mut s: Vec<String> = stale.iter().take(max).map(|d| format!("[{}] {} ({} commits)", name(d), d.title, d.commits)).collect();
@@ -247,6 +287,22 @@ mod tests {
         let counts = count(&watched(&entries), &commits);
         assert_eq!(counts.get("billing"), Some(&2), "two files of one commit count once");
         assert_eq!(counts.get("api"), Some(&1));
+    }
+
+    #[test]
+    fn review_dates_mark_active_entries_of_any_kind() {
+        let mut e = decision("freeze", Some("2026-01-05"), &[], None);
+        e.review_by = Some("2026-01-31".into());
+        let mut conv = Entry { kind: "convention".into(), ..decision("conv", None, &[], None) };
+        conv.review_by = Some("2026-03-01".into());
+        let mut gone = decision("gone", None, &[], Some("deprecated"));
+        gone.review_by = Some("2026-01-01".into());
+        let later = Entry { review_by: Some("2027-01-01".into()), ..decision("later", None, &[], None) };
+        let entries = vec![conv, e, gone, later, decision("none", None, &[], None)];
+        let due = review_due(&entries, "2026-04-01");
+        assert_eq!(due.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["freeze", "conv"]);
+        assert!(review_due(&entries, "2026-01-31").is_empty(), "due only after the day itself");
+        assert_eq!(render_due(&due, 1, &|d| d.id.clone()), "[freeze] freeze (review by 2026-01-31), +1 more (`kontext status`)");
     }
 
     #[test]

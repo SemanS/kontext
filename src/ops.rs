@@ -155,12 +155,13 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
 /// team knowledge. An accepted, committed entry carries no mark, so the common case costs nothing.
 pub(crate) struct Marks {
     unapproved: Vec<String>,
+    today: String,
 }
 
 impl Marks {
     pub(crate) fn load(app: &App, entries: &[Entry]) -> Marks {
         let unapproved = if entries.is_empty() { Vec::new() } else { crate::api_read::unapproved_files(app) };
-        Marks { unapproved }
+        Marks { unapproved, today: util::today() }
     }
 
     /// Marks other than the status: where the entry stands locally and what it is waiting for.
@@ -168,6 +169,9 @@ impl Marks {
         let mut out = Vec::new();
         if crate::api_read::is_unapproved(&self.unapproved, &e.rel_path) {
             out.push("local, unapproved".to_string());
+        }
+        if e.review_due(&self.today) {
+            out.push("review due".to_string());
         }
         out
     }
@@ -439,6 +443,8 @@ pub struct CaptureReq {
     pub source: Option<String>,
     /// Commits it came from.
     pub commits: Vec<String>,
+    /// When it should be looked at again (`YYYY-MM-DD`); else the kind's `review_after` default.
+    pub review_by: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -499,11 +505,30 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, 
     let status =
         req.status.clone().map(|s| crate::store::normalize_status(&s)).or_else(|| (kind == "decision").then(|| "accepted".to_string()));
     let body = if body.is_empty() { String::new() } else { format!("{body}\n") };
+    let today = util::today();
+    let review_by = match req.review_by.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => {
+            if chrono::NaiveDate::parse_from_str(r, "%Y-%m-%d").is_err() {
+                bail!("review_by '{r}' is not a YYYY-MM-DD date");
+            }
+            Some(r.to_string())
+        }
+        None => match app.cfg().store.kinds.get(&kind).and_then(|k| k.review_after.as_deref()) {
+            Some(period) => {
+                let days = crate::config::period_days(period)
+                    .ok_or_else(|| anyhow!("store.kinds.{kind}.review_after '{period}' is not a period such as 90d, 12w, 6m or 1y"))?;
+                let from = chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d")?;
+                Some((from + chrono::Duration::days(days)).format("%Y-%m-%d").to_string())
+            }
+            None => None,
+        },
+    };
     let mut entry = Entry {
         kind: kind.clone(),
         title,
         status,
-        date: Some(util::today()),
+        date: Some(today),
+        review_by,
         summary,
         tags,
         paths: req.paths.iter().map(|p| p.trim().trim_start_matches("./").to_string()).filter(|p| !p.is_empty()).collect(),
@@ -839,7 +864,12 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         } else if done < total {
             let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
         }
-        let stale = crate::freshness::stale_decisions(app, &entries);
+        let crate::freshness::Freshness { stale, due } = crate::freshness::check(app, &entries);
+        if !due.is_empty() {
+            let named = |d: &crate::freshness::Due| entries.iter().find(|e| e.id == d.id).map(reference).unwrap_or_else(|| d.id.clone());
+            let _ =
+                writeln!(state, "- Due for review: {} — confirm, supersede or retire them.", crate::freshness::render_due(&due, 3, &named));
+        }
         if !stale.is_empty() {
             let named = |s: &crate::freshness::Stale| entries.iter().find(|e| e.id == s.id).map(reference).unwrap_or_else(|| s.id.clone());
             let _ = writeln!(

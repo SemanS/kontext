@@ -150,6 +150,7 @@ fn tool_list() -> Vec<Value> {
                 "commits": arr("Commits it came from (short shas)"),
                 "source": s("Where it was found, e.g. thread claude:4f1c2a9b (kept in the inbox only)"),
                 "status": s("Decisions: proposed | accepted (default)"),
+                "review_by": s("When the entry should be looked at again, YYYY-MM-DD (a temporary rule, a workaround); optional"),
                 "promote": {"type": "boolean", "description": "Write into the repo store now instead of the inbox"}
             }, "required": ["kind", "title", "body"]}
         }),
@@ -310,6 +311,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 origin: origin.to_string(),
                 source: str_arg(args, "source"),
                 commits: list_arg(args, "commits"),
+                review_by: str_arg(args, "review_by"),
             };
             let out = ops::capture(app, req)?;
             let mut text = if out.promoted {
