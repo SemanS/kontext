@@ -46,27 +46,99 @@ explicit stale state when it cannot be refreshed.
 | `entries.search` | `query`, `limit?`, `active_only?` | matching knowledge entries and total |
 | `entries.governing` | `paths`, `exclude_ids?`, `limit?`, `min_specificity?` | matching entries with pattern, path and specificity, plus snapshot |
 | `entries.export` | `revision`, `review_ref`, `paths?` | committed entries with exact Markdown, revision and Git blob hashes |
+| `entries.related` | `text`, `paths?`, `exclude_ids?`, `llm?` | up to five related entries with reasons; with `llm`, the model's relations ([details](#related)) |
 | `inbox.list` | `state?`: `pending` (default), `dismissed`, `promoted`, `all` | local candidates and retained workflow history |
 | `inbox.drop` | `id`, `reason?` | dismiss a local candidate |
-| `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes and redaction count |
-| `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes and replay flag |
+| `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
+| `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
+| `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
+| `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | a draft that supersedes the entry; no writes ([details](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extracted candidates and notes; no capture or staging |
-| `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulated entry and notes; no capture or staging |
+| `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulated entry, notes and `related_entries`; no capture or staging |
 | `guidance.propose` | `kept`, `dismissed`, `missed`, `current?`, `profile_tag?`, `llm?` | proposed convention; no staging |
 | `operations.get` | `operation_id`, `fingerprint?` | the original completed write result, or an explicit incomplete/conflict error |
 
 The `entry` object includes `kind`, `title`, `body`, and optional `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, and `commits`. Keep paths as arrays throughout the workflow. A selected
+`supersedes`, `visibility`, `commits`, `review_by` and `evidence` ([below](#maintenance)). Keep paths as arrays throughout the workflow. A selected
 finding can be formalized separately from extracting new findings, so deduplication does not discard
 something the user explicitly chose to keep. Extraction and guidance generation require a usable LLM;
 formalization can preserve the supplied finding when no model is selected.
 
-Read entries include `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `paths`, `tags`, `file`,
-`markdown`, `style`, supersession fields and extra metadata. The engine owns parsing and matching;
+Read entries include `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `paths`, `tags`, `file`,
+`markdown`, `style`, supersession fields and extra metadata (`extra.external_refs` holds the sources). The engine owns parsing and matching;
 clients must not parse Markdown or implement a second matcher. `active_only` excludes superseded,
 deprecated and rejected entries. It does not imply that a working-tree proposal passed review.
 List queries default to 100 entries (maximum 500); follow `next_offset` until null. Snapshots change
 when entry content changes, including edits that keep the number of entries unchanged.
+
+## Knowledge maintenance {#maintenance}
+
+Added in 0.3.0. `status.capabilities` lists `entries.related`, `drafts.retire` and `drafts.revise`
+when a binary supports them; check it before calling them.
+
+**Review date.** `entry.review_by` (`YYYY-MM-DD`) says when someone should look at the entry again,
+for example a rule that holds during a migration. It is not an expiry: past the date the entry is
+marked (`review due` in search, the brief and `kontext status`), never hidden. A malformed date or one
+before the entry's `date` is `invalid_input`. A kind can default it with
+[`review_after`](./03-configuration.md#store-kinds); without that, entries have none.
+
+**Evidence.** `entry.evidence` is a list of `{ref, quote?}` (at most 50). The reference shapes are
+`pr:<id>`, `issue:<id>`, `task:<id>`, `code:<repo>@<rev>:<path>#L<a>-<b>` (the line range is optional)
+and `url:<http(s) URL>`; anything else is `invalid_input`. The references are stored in
+`extra.external_refs`, after any references the client passes there itself. A `quote` (at most 200
+characters) of a `code:` reference into this repository is checked with `git show <rev>:<path>`;
+every result lists the references as `evidence: [{ref, kind, quote?, verification}]` with
+`verification` one of `verified`, `quote_not_found`, `unverifiable` (another repository, an unknown
+revision, or a reference that is not code) or `none` (no quote). Nothing is refused for being
+unverifiable: quoted references and their verdicts go into a `## Evidence` section of the body, where
+the reviewer reads them. Keep personal data out of references: e-mail addresses and session ids do
+not belong in Git.
+
+### Related entries {#related}
+
+`entries.related {text, paths?, exclude_ids?, llm?}` answers how a text relates to recorded entries.
+Without a model it returns `candidates`: at most five active entries that read alike (local BM25,
+near the best hit) or govern overlapping `paths`, each `{id, title, kind, status?, reason, label}`
+with `label: "related, check"`. With `llm: true` (or an adapter name) one model question names the
+relation and the entry together; `relations` is a list of `{relation, id?, title?, label}` where
+`relation` is `new`, `same`, `extends`, `conflicts` or `uncertain` and several may apply. An answer
+about an entry the model was not shown is dropped; with nothing left the answer is `uncertain`.
+The labels read `possible conflict, check`, `possibly the same, check`, `extends it, check` — a
+person decides; nothing suggests or prefills `supersedes`. `model: {asked, cached}` tells whether a
+model was called. The answer is cached in the worktree's local state by the hash of the text and of
+the compared entries' content, so `drafts.capture`, `drafts.stage` and `drafts.formalize`, which
+return the same object as `related_entries`, reuse a cached answer and never call a model themselves.
+Without a configured model, `llm: true` fails with `model_unavailable`.
+
+### Retiring an entry {#retire}
+
+```json
+{"operation_id":"retire-42","entry_id":"2026-01-10-use-cron","entry_revision":"<publication.revision>","reason":"Exports run on the queue since September."}
+```
+
+`drafts.retire` changes the entry's own file: status `deprecated` and a `## Retired` note with the
+date and the reason, then stages it. Nothing else is rewritten; the old claim stays readable in Git.
+`entry_revision` is the commit the caller read the entry at (`publication.revision` of `entries.get`)
+or the entry's blob (`publication.blob_hash`); a later commit that did not touch the file does not
+make it stale. The operation fails with `operation_conflict` when the file at that revision differs from HEAD, when
+the file has local or staged changes, or when the entry is already inactive. It needs an
+`operation_id`, keeps a receipt and replays like `drafts.stage` (`replayed: true`,
+`operations.get`). Pending challenges of this worktree against the entry are resolved by it and
+listed in `resolved_challenges`. Retirement and supersession work for every kind, not only decisions.
+
+A challenge is how an agent says an entry no longer holds without changing it: `ctx_challenge`
+(or `kontext challenge`) writes an inbox candidate of kind `challenge` with `extra.against` (the entry
+id), `extra.against_revision` (the commit) and `extra.against_blob`. `inbox.list` returns it; it cannot
+be staged as an entry. A retirement or a staged replacement that supersedes the entry resolves it.
+
+### Drafting a replacement {#revise}
+
+`drafts.revise {entry_id, entry_revision, objections, llm?}` asks the model for a replacement that
+answers the objections (1 to 20 strings of at most 300 characters). It writes nothing. The draft keeps
+the entry's kind, paths and tags, sets `supersedes: [entry_id]` and is `proposed` when it is a
+decision; the client shows it to a person and stages it with `drafts.stage`. A stale
+`entry_revision` or a dirty file is `operation_conflict`, no model is `model_unavailable`, and a
+model that returns the old body unchanged is `invalid_model_output`.
 
 ## Rust embedding
 
@@ -149,7 +221,10 @@ When a supplied `requested_path` selects a configured kind directory, staging ca
 
 An entry's `status` describes its content; publication evidence describes where that content exists.
 Working reads distinguish local drafts, modified files, staged changes and committed content. None
-of those states by itself proves team approval.
+of those states by itself proves team approval. `publication.revision` is the commit the read saw
+(HEAD, the same for every entry); `publication.blob_hash` is the Git blob of the entry's own file
+(null while the file has unstaged edits or is untracked), so it changes only when that entry changes.
+Use it to tell whether an entry changed since a client last showed it.
 
 For a reviewed export, supply a full commit SHA and a full local review ref, for example
 `refs/remotes/origin/main`. The revision must equal that ref's current tip. Export reads committed

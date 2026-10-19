@@ -59,11 +59,23 @@ The report lists:
 
 1. the staged change (or the working tree, when nothing is staged),
 2. recorded knowledge whose `paths` cover the changed files (*confirm it still holds*),
-3. inbox candidates, the ones touching changed files first,
-4. validation and secret-scan results for staged knowledge (errors will block the commit),
-5. module docs that may need a refresh (many changed files, or files added/removed),
-6. the commit trailers, and whether the prepare-commit-msg hook adds them (a clone without kontext's hooks needs them added by hand, or `kontext hooks install`),
-7. a nudge when a large change carries no knowledge at all.
+3. challenges raised in this worktree, with the two ways to resolve them ([below](#challenges)),
+4. inbox candidates, the ones touching changed files first,
+5. validation and secret-scan results for staged knowledge (errors will block the commit),
+6. module docs that may need a refresh (many changed files, or files added/removed),
+7. the commit trailers, and whether the prepare-commit-msg hook adds them (a clone without kontext's hooks needs them added by hand, or `kontext hooks install`),
+8. a nudge when a large change carries no knowledge at all.
+
+A capture also names the recorded entries it may duplicate, extend or contradict (`related, check: … <kx:id> — governs the same paths (src/pricing/**)`). It is a prompt to look, never an instruction to replace: whether the new entry supersedes one is the author's call, and the reviewer's.
+
+## Challenges {#challenges}
+
+Sometimes an agent finds that recorded knowledge no longer holds. It says so with `ctx_challenge <id> "why"` (or `kontext challenge`): a local inbox candidate of kind `challenge`, against the entry and the commit it was read at. The challenge changes nothing by itself and cannot be promoted. The brief marks the entry `challenged locally`, and `ctx_prepare_commit` offers two ways to resolve it in the change under review:
+
+- **retire** the entry (`retire=[id]`): its file gets status `deprecated` and a `## Retired` note with the challenge as the reason, staged;
+- **replace** it: capture the new rule with `supersedes: [id]` and promote it.
+
+Either takes the challenge out of the inbox with the commit. If the entry changed since it was challenged, the report says so; drop a challenge that turned out wrong. A challenge is resolved only when the change is reviewed and merged, not when one worktree prepared it. Shared challenges with counting of independent voices belong to an application such as Peer Hub; kontext keeps the local, reviewed part.
 
 ## Review
 

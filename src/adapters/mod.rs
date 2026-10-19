@@ -413,6 +413,7 @@ pub fn map_hits(payload: &Value, op: &OpCfg, source: &str) -> Vec<Hit> {
                 score,
                 date,
                 status: None,
+                similar_to: None,
             })
         })
         .collect()

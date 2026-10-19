@@ -8,11 +8,11 @@ Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom.
 a voliteľné `dir`. Vracia `structuredContent` a `outputSchema` aj úplnú textovú JSON kópiu.
 Existujúce nástroje nižšie si zachovávajú textové výsledky.
 
-Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
+Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
 
 ### Iný repozitár: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -22,7 +22,7 @@ Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo tr
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | približná veľkosť |
 | `adapters` | boolean | true | zahrnie sekcie `brief` z adaptérov |
 
-Odkazy v hranatých zátvorkách sú najkratšia jednoznačná predpona id (`[2026-09-28-adapters]`), ktorú `ctx_read` rozpozná. Brief uvádza aj *Local notes* (inbox tohto klonu) a bez úložiska aj *Related docs and history*. Pozri [Vrstvy kontextu](../concepts/04-context-layers.md).
+Odkazy v hranatých zátvorkách sú najkratšia jednoznačná predpona id (`[2026-09-28-adapters]`), ktorú `ctx_read` rozpozná. Riadok má značku, keď záznam nie je prijatá a schválená znalosť: stav, keď nie je `accepted` (`(proposed)`), `local, unapproved`, keď je jeho súbor v pracovnom strome nový, zmenený alebo stagnutý, `review due`, `challenged locally` a `N sources`, keď má evidenciu, napr. `Move search to OpenSearch (proposed; 2 sources)`. Prijatý a commitnutý záznam značku nemá. `## Changed since <rev>` uvádza, čo sa zmenilo od posledného briefu v tomto worktree (najviac päť riadkov; bez neho *Changed in the last 14 days*). Brief uvádza aj *Local notes* (inbox tohto klonu) a bez úložiska aj *Related docs and history*. Pozri [Vrstvy kontextu](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -32,9 +32,10 @@ Odkazy v hranatých zátvorkách sú najkratšia jednoznačná predpona id (`[20
 | `kinds` | string[] | | `decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit` |
 | `sources` | string[] | všetky | `local` a/alebo názvy adaptérov |
 | `limit` | integer | 10 | najviac výsledkov (do 50) |
+| `adapters` | boolean | `[search] adapters` | `true` sa pýta vyhľadávacích adaptérov, aj keď lokálne zásahy stačia, `false` nikdy |
 | `budget_tokens` | integer | 1200 | približná veľkosť odpovede |
 
-Každý výsledok: `N. title — snippet [kind · status · date · source] <uri>`.
+Každý výsledok: `N. title — snippet [kind · status · date · source] <uri>`. Stav `accepted` sa vynecháva; značky ako `local, unapproved` a `review due` nasledujú za stavom. Zásah, ktorý iba začína ako ten nad ním (rovnaké prvé slová, iné tvrdenie), nezmizne: nasleduje ako `↳ similar, differs: … <uri>` s časťou, ktorou sa líši. Vypadnú iba preukázané kópie: rovnaké URI, kópia lokálneho záznamu z adaptéra a zásah, ktorého celý text sa zhoduje s predošlým.
 
 Lokálny zdroj zahŕňa aj poznámky v inboxe tohto klonu (`inbox:<id>`, označené *local note*) a submoduly s vlastnými tímovými znalosťami (označené ich cestou).
 
@@ -76,6 +77,20 @@ Lokálny zdroj zahŕňa aj poznámky v inboxe tohto klonu (`inbox:<id>`, označe
 | `promote` | boolean | false | zapíše ho hneď do úložiska namiesto inboxu |
 | `commits` | string[] | | krátke sha commitov, z ktorých pochádza |
 | `source` | string | | kde sa našiel, napr. označenie vlákna z `ctx_threads` (zostáva len v inboxe) |
+| `review_by` | string | `review_after` druhu | `YYYY-MM-DD`: kedy ho znova pozrieť (pravidlo, ktoré platí počas migrácie) |
+| `evidence` | object[] | | `{ref, quote?}`: `pr:<id>`, `issue:<id>`, `task:<id>`, `code:<repo>@<rev>:<cesta>#L<a>-<b>`, `url:<url>`; pozri [Evidencia](./05-application-api.md#maintenance) |
+
+Odpoveď uvedie súvisiace záznamy ako poznámky (`related, check: <názov> <kx:id> — <dôvod>`), so štítkom od modelu, napr. `possible conflict, check`, keď sa ho [`entries.related`](./05-application-api.md#related) na tento text už pýtalo. Či záznam niečo nahrádza, rozhodneš ty; poznámka to nikdy netvrdí.
+
+### `ctx_challenge`
+
+| Parameter | Typ | Predvolene | |
+| --- | --- | --- | --- |
+| `id` | string | povinné | záznam: `kx:<id>`, id alebo jeho jednoznačná predpona |
+| `why` | string | povinné | prečo už neplatí |
+| `visibility` | `team` \| `private` | `team` | |
+
+Zaznamená, že záznam už neplatí, ako lokálneho kandidáta v inboxe druhu `challenge` (voči záznamu a commitu, v ktorom bol prečítaný). Kým neprejde review, nič sa nemení: brief označí záznam `challenged locally` a `ctx_prepare_commit` ponúkne jeho vyradenie alebo zaznamenanie náhrady, ktorá ho nahrádza.
 
 ### `ctx_threads`
 
@@ -100,6 +115,7 @@ Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto po�
 | --- | --- | --- |
 | `promote` | string[] | ID z inboxu, ktoré sa zapíšu do úložiska a stagnú |
 | `drop` | string[] | ID z inboxu, ktoré sa zahodia |
+| `retire` | string[] | záznamy s námietkou z tohto worktree (alebo námietky): stav `deprecated`, námietka ako dôvod v poznámke `## Retired`, stagnuté |
 
 Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). Uvedie trailery commitu a či ich pridá hook prepare-commit-msg: v klone bez hookov kontextu (čerstvý klon, projekt v Superset) ich treba dopísať ručne, alebo spustiť `kontext hooks install`.
 

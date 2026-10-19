@@ -250,8 +250,16 @@ impl LocalIndex {
         let mut qp = QueryParser::for_index(&self.index, vec![self.f.title, self.f.body, self.f.aux]);
         qp.set_field_boost(self.f.title, 2.5);
         qp.set_field_boost(self.f.aux, 1.5);
-        let (user_q, _errors) = qp.parse_query_lenient(&sanitize_query(query));
+        let cleaned = sanitize_query(query);
+        let (user_q, _errors) = qp.parse_query_lenient(&cleaned);
         let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, user_q)];
+        // the whole query as a phrase ranks an exact wording first; it never adds a hit of its own
+        let plain: Vec<&str> = query.split_whitespace().collect();
+        if plain.len() >= 2 {
+            let phrase = sanitize_query(&plain.join(" ")).replace('"', " ").split_whitespace().take(12).collect::<Vec<_>>().join(" ");
+            let (pq, _) = qp.parse_query_lenient(&format!("\"{phrase}\""));
+            clauses.push((Occur::Should, Box::new(tantivy::query::BoostQuery::new(pq, 2.0))));
+        }
         let terms = |field: Field, values: &[String]| -> Box<dyn Query> {
             Box::new(BooleanQuery::new(
                 values
@@ -293,6 +301,7 @@ impl LocalIndex {
                 score,
                 date: opt(get(self.f.date)),
                 status: opt(get(self.f.status)),
+                similar_to: None,
             });
         }
         Ok(hits)

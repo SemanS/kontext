@@ -4,10 +4,30 @@ Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzov
 
 ## Nevydané
 
+**Znalosti, ktoré ostanú správne aj po zápise.** Brief a vyhľadávanie už nenechajú návrh vyzerať ako prijaté pravidlo, spájanie zdrojov už nezahodí iné tvrdenie len preto, že začína rovnako, a zaznamenané znalosti môžu niesť termín kontroly a svoje zdroje, dajú sa napadnúť a vyradiť, vždy cez review. Merané novou [evaluačnou sadou](https://github.com/SemanS/kontext/tree/main/tests/eval) s 33 scenármi: na 0.2.1 prešlo 8 (nájdených 23 zo 64 očakávaní, 2 výsledky nesprávne potlačené, 1 so šumom); teraz prejde všetkých 33 (69 zo 69, nič potlačené, žiadny šum).
+
+- **Značky autority.** Riadok v briefe a výsledok hľadania povedia, keď záznam nie je prijatý (`(proposed)`, `(deprecated)`), keď je jeho súbor nový, zmenený alebo stagnutý a nikto ho neschválil (`local, unapproved`), keď uplynul termín kontroly (`review due`), keď je lokálne napadnutý a koľko má zdrojov. Prijaté a commitnuté záznamy značku nemajú. Pozri [Značky](../concepts/04-context-layers.md#marks).
+- **Bezpečná deduplikácia.** Vyhľadávanie zlúčilo výsledky, ktorých prvých 90 normalizovaných znakov sa zhodovalo, takže jedno z dvoch rôznych tvrdení zmizlo. Teraz vypadnú iba preukázané kópie (rovnaké URI, kópia lokálneho záznamu z adaptéra, zhoda celého textu); podobný výsledok sa ukáže pod prvým s tým, čím sa líši.
+- **Zmenené od posledného briefu.** Brief vypíše najviac v piatich riadkoch znalosti pridané, zmenené alebo odobrané od posledného briefu v tomto worktree (bez neho posledných 14 dní) a povie, ktorý záznam nový nahrádza. Brief bez zmien nepridá nič. Pozri [Zmenené od posledného briefu](../concepts/04-context-layers.md#changed).
+- **Termíny kontroly.** `review_by: YYYY-MM-DD` pri ľubovoľnom zázname; po termíne je záznam označený v briefe, vo vyhľadávaní a v `kontext status`, nikdy nie skrytý. Voliteľná predvolená lehota podľa druhu `[store.kinds.<kind>] review_after = "90d"`, predvolene vypnutá. Pozri [Termín kontroly](../concepts/02-knowledge-store.md#review-by).
+- **Evidencia.** Zachytenia prijímajú `evidence: [{ref, quote?}]` s odkazmi `pr:`, `issue:`, `task:`, `code:<repo>@<rev>:<cesta>#L<a>-<b>` a `url:`, uložené v `extra.external_refs`. Citát pri odkaze na kód tohto repozitára sa overí voči danej revízii; čokoľvek iné sa označí ako neoverené, nikdy sa neodmietne. Pozri [Evidencia](../concepts/02-knowledge-store.md#evidence).
+- **Námietky a vyradenie.** `ctx_challenge` / `kontext challenge` zaznamenajú, že záznam už neplatí; `ctx_prepare_commit retire=[id]` ho vyradí (stav `deprecated` a poznámka `## Retired`, stagnuté) alebo ho nahradí náhrada. Vyradenie aj nahradenie fungujú pre každý druh. Pozri [Námietky](../concepts/03-capture-and-review.md#challenges).
+- **Súvisiace znalosti.** `ctx_capture` pomenuje záznamy, ktoré nový môže duplikovať, rozširovať alebo im protirečiť, s dôvodom (podobné znenie, rovnaké cesty); stará poznámka „update it instead“ zmizla. Model sa pýta iba na vyžiadanie, cez `entries.related`, a jeho odpoveď sa ukladá.
+- **Vyhľadávanie.** Frázový bonus za celý dopyt dá presnému zneniu prvé miesto (v evaluačnej sade sa dopyt s presnou frázou posunul z 2. na 1. miesto; dopyty vlastnými slovami si poradie udržali). `[search] adapters = "fallback"` sa pýta vyhľadávacích adaptérov, iba keď je lokálnych zásahov menej ako `min_local_hits`, alebo na vyžiadanie (`adapters: true`, `--adapters`); predvolene ostáva `always`.
+- **Aplikačné API.** Nové operácie `entries.related`, `drafts.retire` a `drafts.revise` (uvedené v `status.capabilities`); `drafts.capture`, `drafts.stage` a `drafts.formalize` vracajú aj `evidence` a `related_entries`, `drafts.stage` aj `resolved_challenges`; záznamy nesú `review_by` a pracovné čítania `publication.blob_hash`, revíziu obsahu jednotlivého záznamu. Pozri [Údržba znalostí](../reference/05-application-api.md#maintenance).
+
 Aplikácie môžu používať spoločný engine znalostí cez [aplikačné API](../reference/05-application-api.md):
 verzované JSON CLI a štruktúrované MCP, dotazy na nakonfigurované úložisko, platnosť podľa ciest,
 extrakciu bez zápisu, idempotentný staging návrhov a commitnuté exporty overené voči review refu.
 Existujúce príkazy pre ľudí a nástroje pre agentov zostávajú kompatibilné.
+
+**Migrácia.** V `.ai/` netreba nič meniť. Čo si môže všimnúť skript alebo klient:
+
+- `kontext search` (text) už v metadátach výsledku nevypisuje `accepted` a podobný výsledok vypíše ako nečíslovaný riadok `↳ similar, differs: …`; výsledky v `--json` môžu mať `similar_to`.
+- Riadky rozhodnutí v briefe môžu mať za titulkom značky, môže pribudnúť sekcia *Changed since …* a brief zapisuje malú cache (`brief-head`) do lokálneho stavu worktree pod `.git/kontext/`.
+- Poznámky z `ctx_capture` a `kontext capture` znejú `related, check: … <kx:id> — <dôvod>` namiesto `similar existing entry: … — update it instead`.
+- `review_by` (a `review-by`) sú teraz polia záznamu: ako kľúč v `extra` pri `drafts.*` sú odmietnuté ako rezervované; posielajte `entry.review_by`.
+- `inbox.list` môže vrátiť kandidátov druhu `challenge`; ako záznamy sa stagnúť nedajú (`invalid_input`).
 
 ## 0.2.1 (2026-10-03)
 

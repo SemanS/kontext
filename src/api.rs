@@ -12,12 +12,15 @@ pub const OPERATIONS: &[&str] = &[
     "entries.search",
     "entries.governing",
     "entries.export",
+    "entries.related",
     "inbox.list",
     "inbox.drop",
     "drafts.capture",
     "drafts.stage",
     "drafts.extract",
     "drafts.formalize",
+    "drafts.retire",
+    "drafts.revise",
     "guidance.propose",
     "operations.get",
 ];
@@ -34,6 +37,11 @@ impl fmt::Display for ApiError {
     }
 }
 impl std::error::Error for ApiError {}
+
+/// The machine code of an error raised with [`error`], if it was.
+pub fn error_code(err: &anyhow::Error) -> Option<&str> {
+    err.downcast_ref::<ApiError>().map(|e| e.code.as_str())
+}
 
 pub fn error(code: &str, message: impl Into<String>) -> anyhow::Error {
     ApiError { code: code.into(), message: message.into() }.into()

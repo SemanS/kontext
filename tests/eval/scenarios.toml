@@ -1,0 +1,535 @@
+# Evaluation scenarios for kontext (see tests/eval.rs and tests/eval/README.md).
+#
+# Each scenario starts from a fresh copy of tests/eval/fixtures/<fixture> (default `shop`),
+# committed once on 2026-05-01. Steps run in order:
+#   write = "path", content = "…"     write a file (`{root}`, `{wt}`, `{head}` are expanded)
+#   remove = "path"                   delete a file or directory
+#   touch = "path", times = N         N commits that each change the file
+#   git = [args]                      a git command (date = "…" sets author and committer date)
+#   run = [args]                      a kontext command; scored when it has expectations:
+#     expect = [..]   must appear (found / missed)
+#     keep = [..]     exists in the sources and must not be dropped (wrongly suppressed)
+#     forbid = [..]   must not appear (noise)
+#     rank = { "needle" = N }         the first numbered hit containing needle is within the top N
+#     max_tokens = N                  output size limit (chars / 4)
+# `pending = "<item>"` marks behaviour not built yet: reported, not asserted.
+
+# ------------------------------------------------------------------------------------- 1.1
+
+[[scenario]]
+name = "proposed vs accepted in the brief"
+item = "1.1"
+[[scenario.step]]
+run = ["brief", "--focus", "src/search", "--focus", "src/orders", "--no-adapters"]
+expect = ["Move product search to OpenSearch (proposed)", "Orders live in PostgreSQL —"]
+forbid = ["(accepted)"]
+
+[[scenario]]
+name = "deprecated entry marked in search"
+item = "1.1"
+[[scenario.step]]
+run = ["search", "cache product pages"]
+expect = ["Cache product pages for five minutes", "deprecated"]
+forbid = ["accepted"]
+
+[[scenario]]
+name = "locally edited entry is not presented as approved"
+item = "1.1"
+[[scenario.step]]
+write = ".ai/decisions/2026-01-10-orders-live-in-postgresql.md"
+content = """---
+id: 2026-01-10-orders-live-in-postgresql
+kind: decision
+title: Orders live in PostgreSQL
+status: accepted
+date: 2026-01-10
+paths: [src/orders/**]
+---
+
+## Decision
+
+Orders live in one PostgreSQL database; stock moves to Redis.
+"""
+[[scenario.step]]
+run = ["brief", "--focus", "src/orders", "--no-adapters"]
+expect = ["Orders live in PostgreSQL (local, unapproved)"]
+[[scenario.step]]
+run = ["search", "orders postgresql"]
+expect = ["local, unapproved"]
+
+# ------------------------------------------------------------------------------------- 1.2
+
+[[scenario]]
+name = "near-duplicate learnings both survive"
+item = "1.2"
+[[scenario.step]]
+run = ["search", "webhook retries arrive twice"]
+keep = ["<kx:webhook-retries-arrive-twice-from-the-provider>", "<kx:webhook-retries-arrive-twice-from-the-carrier>"]
+
+[[scenario]]
+name = "similar titles, different content"
+item = "1.2"
+[[scenario.step]]
+run = ["search", "round prices"]
+keep = ["<kx:2026-02-20-round-prices-half-even-on-invoices>", "<kx:2026-02-21-round-prices-half-up-on-receipts>"]
+
+[[scenario]]
+name = "memory copies collapse, a different memory stays"
+item = "1.2"
+[[scenario.step]]
+write = ".git/memory.json"
+content = """{"hits": [
+ {"title": "Orders live in PostgreSQL", "snippet": "Orders live in one PostgreSQL database; an order and its items are written in one transaction.", "uri": "mem://team/decision/2026-01-10-orders-live-in-postgresql.md"},
+ {"title": "Orders live in PostgreSQL", "snippet": "Orders live in one PostgreSQL database; an order and its items are written in one transaction.", "uri": "mem://notes/copied-note"},
+ {"title": "Orders live in PostgreSQL", "snippet": "Orders live in one PostgreSQL database; an order and its items are written in one transaction. Since March the reporting replica lags up to a minute.", "uri": "mem://notes/replica-lag"}
+]}"""
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[adapters.mem]
+driver = "command"
+[adapters.mem.ops.search]
+command = ["cat", "{root}/.git/memory.json"]
+format = "json"
+"""
+[[scenario.step]]
+run = ["search", "orders postgresql"]
+expect = ["<kx:2026-01-10-orders-live-in-postgresql>"]
+keep = ["<mem://notes/replica-lag>"]
+forbid = ["<mem://team/decision/", "<mem://notes/copied-note>"]
+
+# ------------------------------------------------------------------------------------- 1.4
+
+[[scenario]]
+name = "session start stays under the shared budget"
+item = "1.4"
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+expect = ["## Decisions"]
+max_tokens = 1500
+[[scenario.step]]
+run = ["brief", "--focus", "src/payments", "--no-adapters"]
+expect = ["Retry payments with idempotency keys"]
+max_tokens = 1500
+
+[[scenario]]
+name = "unavailable hub: local answers still come"
+item = "1.4"
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[adapters.hub]
+driver = "command"
+[adapters.hub.ops.search]
+command = ["sh", "-c", "sleep 1; exit 3"]
+format = "json"
+"""
+[[scenario.step]]
+run = ["search", "orders postgresql"]
+expect = ["<kx:2026-01-10-orders-live-in-postgresql>", "hub:"]
+
+[[scenario]]
+name = "unavailable hub skipped when local hits suffice"
+item = "1.4"
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[search]
+adapters = "fallback"
+min_local_hits = 1
+
+[adapters.hub]
+driver = "command"
+[adapters.hub.ops.search]
+command = ["sh", "-c", "sleep 1; exit 3"]
+format = "json"
+"""
+[[scenario.step]]
+run = ["search", "orders postgresql"]
+expect = ["<kx:2026-01-10-orders-live-in-postgresql>", "connected sources not asked"]
+forbid = ["hub:"]
+
+[[scenario]]
+name = "fallback mode still asks a hub that is named"
+item = "1.4"
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[search]
+adapters = "fallback"
+min_local_hits = 1
+
+[adapters.hub]
+driver = "command"
+[adapters.hub.ops.search]
+command = ["sh", "-c", "sleep 1; exit 3"]
+format = "json"
+"""
+[[scenario.step]]
+run = ["search", "orders postgresql", "--source", "hub"]
+expect = ["hub:"]
+[[scenario.step]]
+run = ["search", "orders postgresql", "--adapters"]
+expect = ["<kx:2026-01-10-orders-live-in-postgresql>", "hub:"]
+
+# ------------------------------------------------------------------------------- retrieval
+
+[[scenario]]
+name = "query in own words"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "which database keeps our orders"]
+rank = { "<kx:2026-01-10-orders-live-in-postgresql>" = 2 }
+
+[[scenario]]
+name = "query with an exact phrase"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "idempotency key per checkout attempt"]
+rank = { "<kx:2026-02-03-retry-payments-with-idempotency-keys>" = 1 }
+
+[[scenario]]
+name = "query with an exact phrase from an incident"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "client certificate expired"]
+rank = { "<kx:2026-04-02-checkout-outage-from-an-expired-certificate>" = 1 }
+
+[[scenario]]
+name = "query in own words about money"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "never store money as floating point numbers"]
+rank = { "<kx:money-is-integer-cents>" = 1 }
+
+[[scenario]]
+name = "why a path is the way it is"
+item = "baseline"
+[[scenario.step]]
+run = ["why", "src/orders/mod.rs"]
+expect = ["Orders live in PostgreSQL"]
+
+[[scenario]]
+name = "old decision whose code kept moving"
+item = "baseline"
+[[scenario.step]]
+touch = "src/exports/nightly.rs"
+times = 4
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+expect = ["May need a refresh", "Export orders nightly with cron (5 commits)"]
+
+[[scenario]]
+name = "candidates of another worktree stay there"
+item = "baseline"
+[[scenario.step]]
+git = ["worktree", "add", "-q", "-b", "other", "{wt}"]
+[[scenario.step]]
+run = ["-C", "{wt}", "capture", "--kind", "learning", "--title", "Exports skip cancelled orders", "--body", "Cancelled orders never reach the nightly CSV."]
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+expect = ["Exports skip cancelled orders"]
+[[scenario.step]]
+write = "src/exports/nightly.rs"
+content = "pub fn export_nightly() { /* skip cancelled */ }\n"
+[[scenario.step]]
+run = ["prepare-commit"]
+expect = ["Nothing staged yet"]
+forbid = ["Exports skip cancelled orders"]
+
+# ------------------------------------------------------------------------------------- 2.2
+
+[[scenario]]
+name = "review date passed: marked in brief, search and status"
+item = "2.2"
+[[scenario.step]]
+write = ".ai/decisions/2026-01-05-freeze-the-orders-table-during-migration.md"
+content = """---
+id: 2026-01-05-freeze-the-orders-table-during-migration
+kind: decision
+title: Freeze the orders table during the migration
+status: accepted
+date: 2026-01-05
+review_by: 2026-01-31
+paths: [src/orders/**]
+---
+
+## Decision
+
+Do not write to the orders table while the migration runs.
+"""
+[[scenario.step]]
+git = ["add", "-A"]
+[[scenario.step]]
+git = ["commit", "-qm", "freeze"]
+date = "2026-01-05T10:00:00+00:00"
+[[scenario.step]]
+run = ["brief", "--focus", "src/orders", "--no-adapters"]
+expect = ["Freeze the orders table during the migration (review due)", "Due for review"]
+[[scenario.step]]
+run = ["search", "freeze orders table migration"]
+expect = ["review due"]
+[[scenario.step]]
+run = ["status"]
+expect = ["due for review"]
+
+[[scenario]]
+name = "review date before the entry date is a validation error"
+item = "2.2"
+[[scenario.step]]
+write = ".ai/learnings/reports-time-out.md"
+content = """---
+id: reports-time-out
+kind: learning
+title: Reports time out
+date: 2026-03-01
+review_by: 2026-02-01
+---
+
+Reports over a year time out.
+"""
+[[scenario.step]]
+run = ["check"]
+expect = ["error: .ai/learnings/reports-time-out.md: review_by"]
+
+[[scenario]]
+name = "per-kind review default applies to new incidents"
+item = "2.2"
+[[scenario.step]]
+write = ".ai/kontext.toml"
+content = """[project]
+name = "shop"
+
+[store.kinds.incident]
+review_after = "90d"
+"""
+[[scenario.step]]
+run = ["api", "drafts.stage", '{"operation_id":"incident-1","entry":{"kind":"incident","title":"Exports stalled on a full disk","body":"The export disk filled up; we added an alert."}}']
+expect = ['"review_by":"20']
+
+# ------------------------------------------------------------------------------------- 2.1
+
+[[scenario]]
+name = "evidence: sources counted in the brief, listed on read"
+item = "2.1"
+[[scenario.step]]
+run = ["api", "drafts.stage", '{"operation_id":"ev-1","requested_path":".ai/decisions/refund-through-the-original-payment-method.md","entry":{"kind":"decision","status":"accepted","title":"Refund through the original payment method","body":"Refunds go back to the card or wallet that paid.","paths":["src/payments/**"],"evidence":[{"ref":"task:shop-12"},{"ref":"task:shop-15"},{"ref":"pr:41"}]}}']
+expect = ['"external_refs":["task:shop-12","task:shop-15","pr:41"]']
+[[scenario.step]]
+git = ["commit", "-qm", "refunds"]
+[[scenario.step]]
+run = ["brief", "--focus", "src/payments", "--no-adapters"]
+expect = ["Refund through the original payment method (3 sources)"]
+[[scenario.step]]
+run = ["read", "kx:refund-through", "--level", "1"]
+expect = ["sources (3): task:shop-12, task:shop-15, pr:41"]
+
+[[scenario]]
+name = "evidence: a code quote is verified against its revision"
+item = "2.1"
+[[scenario.step]]
+run = ["api", "drafts.stage", '{"operation_id":"ev-2","entry":{"kind":"learning","title":"Payment retries share one key","body":"Retries reuse the attempt key.","evidence":[{"ref":"code:shop@{head}:src/payments/retry.rs#L1","quote":"one idempotency key per checkout attempt"},{"ref":"code:shop@{head}:src/payments/retry.rs#L1-2","quote":"two keys per attempt"},{"ref":"url:https://example.invalid/provider-docs","quote":"keys expire"}]}}']
+expect = ['"verification":"verified"', '"verification":"quote_not_found"', '"verification":"unverifiable"']
+
+# ------------------------------------------------------------------------------------- 2.5
+
+[[scenario]]
+name = "changed since the last brief, then quiet"
+item = "2.5"
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+[[scenario.step]]
+write = ".ai/decisions/2026-05-02-charge-at-shipping-time.md"
+content = """---
+id: 2026-05-02-charge-at-shipping-time
+kind: decision
+title: Charge cards at shipping time
+status: accepted
+date: 2026-05-02
+paths: [src/payments/**]
+supersedes: [2026-02-03-retry-payments-with-idempotency-keys]
+---
+
+## Decision
+
+Authorize at checkout and capture the charge when the parcel ships.
+"""
+[[scenario.step]]
+git = ["add", "-A"]
+[[scenario.step]]
+git = ["commit", "-qm", "charge at shipping"]
+date = "2026-05-02T10:00:00+00:00"
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+expect = ["## Changed since", "Charge cards at shipping time"]
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+forbid = ["## Changed since", "## Changed in the last"]
+
+[[scenario]]
+name = "changed recently when the brief cache is missing"
+item = "2.5"
+[[scenario.step]]
+write = ".ai/conventions/amounts-carry-a-currency.md"
+content = """---
+id: amounts-carry-a-currency
+kind: convention
+title: Amounts carry a currency
+---
+
+Every amount travels with its ISO currency code.
+"""
+[[scenario.step]]
+git = ["add", "-A"]
+[[scenario.step]]
+git = ["commit", "-qm", "currency"]
+[[scenario.step]]
+run = ["brief", "--no-adapters"]
+expect = ["## Changed in the last 14 days", "Amounts carry a currency"]
+
+# ------------------------------------------------------------------------------------- 2.3
+
+[[scenario]]
+name = "challenge: brief marks it, prepare-commit offers retire, retire deprecates"
+item = "2.3"
+[[scenario.step]]
+run = ["call", "ctx_challenge", '{"id":"2026-01-10-orders-live-in-postgresql","why":"Orders moved to the order service with its own store in September."}']
+expect = ["challenge"]
+[[scenario.step]]
+run = ["brief", "--focus", "src/orders", "--no-adapters"]
+expect = ["Orders live in PostgreSQL (challenged locally)"]
+[[scenario.step]]
+run = ["prepare-commit"]
+expect = ["## Challenges", "retire"]
+[[scenario.step]]
+run = ["call", "ctx_prepare_commit", '{"retire":["2026-01-10-orders-live-in-postgresql"]}']
+expect = ["retired 2026-01-10-orders-live-in-postgresql"]
+[[scenario.step]]
+run = ["read", "kx:2026-01-10-orders-live-in-postgresql", "--level", "2"]
+expect = ["status: deprecated", "## Retired", "order service"]
+
+[[scenario]]
+name = "retire refuses a changed revision and a dirty file"
+item = "2.3"
+[[scenario.step]]
+run = ["api", "drafts.retire", '{"operation_id":"rt-1","entry_id":"log-with-request-ids","entry_revision":"0000000000000000000000000000000000000000","reason":"Tracing replaced it."}']
+expect = ["operation_conflict"]
+[[scenario.step]]
+write = ".ai/conventions/log-with-request-ids.md"
+content = """---
+id: log-with-request-ids
+kind: convention
+title: Log with request ids
+---
+
+Every log line carries the trace id.
+"""
+[[scenario.step]]
+run = ["api", "drafts.retire", '{"operation_id":"rt-2","entry_id":"log-with-request-ids","entry_revision":"{head}","reason":"Tracing replaced it."}']
+expect = ["operation_conflict"]
+
+[[scenario]]
+name = "retire and supersede work for every kind"
+item = "2.3"
+[[scenario.step]]
+run = ["api", "drafts.retire", '{"operation_id":"rt-3","entry_id":"idempotency-keys-expire-after-a-day","entry_revision":"{head}","reason":"The provider keeps keys for a week now."}']
+expect = ['"ok":true', '"status":"deprecated"']
+[[scenario.step]]
+run = ["api", "drafts.stage", '{"operation_id":"sp-1","entry":{"kind":"convention","title":"Money is integer minor units","body":"Amounts are i64 minor units of their currency.","supersedes":["money-is-integer-cents"]}}']
+expect = ['"ok":true']
+[[scenario.step]]
+run = ["read", "kx:money-is-integer-cents", "--level", "2"]
+expect = ["status: superseded"]
+
+# ------------------------------------------------------------------------------------- 3.1
+
+[[scenario]]
+name = "related entries without a model"
+item = "3.1"
+[[scenario.step]]
+run = ["api", "entries.related", '{"text":"Round each invoice line half-even before summing","paths":["src/pricing/round.rs"]}']
+expect = ['"id":"2026-02-20-round-prices-half-even-on-invoices"', '"id":"2026-02-21-round-prices-half-up-on-receipts"', '"reason"']
+
+[[scenario]]
+name = "related shown when capturing"
+item = "3.1"
+[[scenario.step]]
+run = ["call", "ctx_capture", '{"kind":"decision","title":"Round each invoice line half-even","body":"Round every invoice line before summing.","paths":["src/pricing/**"]}']
+expect = ["<kx:2026-02-20-round"]
+
+[[scenario]]
+name = "contradiction flagged by the model, never as replace"
+item = "3.1"
+[[scenario.step]]
+write = ".git/answer.json"
+content = """{"relations": [{"relation": "conflicts", "id": "2026-02-20-round-prices-half-even-on-invoices"}], "title": "Round invoice totals half-up", "body": "Invoices round only the grand total half-up, like receipts."}"""
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[init]
+llm = "fake"
+[adapters.fake]
+driver = "command"
+[adapters.fake.ops.llm]
+command = ["sh", "-c", "cat >/dev/null; cat {root}/.git/answer.json"]
+stdin = "{{prompt}}"
+format = "text"
+"""
+[[scenario.step]]
+run = ["api", "entries.related", '{"text":"Invoices round only the grand total half-up","paths":["src/pricing/**"],"llm":true}']
+expect = ['"relation":"conflicts"', '"id":"2026-02-20-round-prices-half-even-on-invoices"', "possible conflict, check"]
+forbid = ["replace"]
+
+[[scenario]]
+name = "similar names, different content: an answer about unseen entries is uncertain"
+item = "3.1"
+[[scenario.step]]
+write = ".git/answer.json"
+content = """{"relations": [{"relation": "same", "id": "2026-01-20-cache-product-pages-for-five-minutes"}]}"""
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[init]
+llm = "fake"
+[adapters.fake]
+driver = "command"
+[adapters.fake.ops.llm]
+command = ["sh", "-c", "cat >/dev/null; cat {root}/.git/answer.json"]
+stdin = "{{prompt}}"
+format = "text"
+"""
+[[scenario.step]]
+run = ["api", "entries.related", '{"text":"Round prices half-up on receipts printed by the kiosk","paths":["src/pricing/**"],"llm":true}']
+expect = ['"relation":"uncertain"', '"id":"2026-02-21-round-prices-half-up-on-receipts"']
+forbid = ['"relation":"same"']
+
+# ------------------------------------------------------------------------------------- 3.2
+
+[[scenario]]
+name = "revise without a model is refused"
+item = "3.2"
+[[scenario.step]]
+run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
+expect = ["model_unavailable"]
+
+[[scenario]]
+name = "revise drafts a superseding entry"
+item = "3.2"
+[[scenario.step]]
+write = ".git/answer.json"
+content = """{"title": "Round invoice totals half-up", "body": "Invoices round only the grand total half-up, like receipts."}"""
+[[scenario.step]]
+write = ".git/kontext/config.toml"
+content = """
+[init]
+llm = "fake"
+[adapters.fake]
+driver = "command"
+[adapters.fake.ops.llm]
+command = ["sh", "-c", "cat >/dev/null; cat {root}/.git/answer.json"]
+stdin = "{{prompt}}"
+format = "text"
+"""
+[[scenario.step]]
+run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
+expect = ['"supersedes":["2026-02-20-round-prices-half-even-on-invoices"]', '"status":"proposed"', '"paths":["src/pricing/**"]']

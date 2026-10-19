@@ -50,6 +50,7 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 | `-s, --source <name>` | všetky | `local` a/alebo názvy adaptérov (dá sa opakovať) |
 | `-n, --limit <n>` | 10 | najviac výsledkov |
 | `--json` | | výsledky ako JSON |
+| `--adapters` | | pýta sa vyhľadávacích adaptérov, aj keď lokálne zásahy stačia (pozri [`[search]`](./03-configuration.md#search)) |
 
 ### `kontext read <uri>`
 
@@ -84,6 +85,11 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 | `--status <status>` | `proposed` alebo `accepted` (rozhodnutia predvolene accepted) |
 | `--private` | nechá ho osobným (nikdy sa nepovýši) |
 | `--promote` | zapíše ho hneď do úložiska namiesto inboxu |
+| `--review-by <YYYY-MM-DD>` | kedy ho znova pozrieť (inak `review_after` druhu, ak je nastavené) |
+
+### `kontext challenge <id> <prečo…> [--private]`
+
+Povie, že záznam už neplatí, a prečo. Námietka čaká v lokálnom inboxe; `prepare-commit` ponúkne vyradenie záznamu alebo zaznamenanie náhrady, ktorá ho nahrádza.
 
 ### `kontext inbox [list | show <id> | drop <id…>]`
 
@@ -93,9 +99,9 @@ Lokálni kandidáti. `list` je predvolený.
 
 Zapíše kandidátov do úložiska a spraví `git add`.
 
-### `kontext prepare-commit [--promote <id>]… [--drop <id>]…`
+### `kontext prepare-commit [--promote <id>]… [--drop <id>]… [--retire <id>]…`
 
-Report, ktorý agenti dostanú z `ctx_prepare_commit`.
+Report, ktorý agenti dostanú z `ctx_prepare_commit`. `--retire` vyradí záznam s námietkou z tohto worktree: stav `deprecated`, námietka ako dôvod v poznámke `## Retired`, stagnuté.
 
 ### `kontext distill [<súbor>…] [--claude <id|last>]… [--codex <id|last>]… [--superset [<workspace>]]`
 
@@ -148,7 +154,7 @@ Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich 
 
 | Príkaz | Význam |
 | --- | --- |
-| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, rozhodnutia na prehodnotenie, inbox, postup initu, adaptéry, hooky, outbox |
+| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, rozhodnutia na prehodnotenie, záznamy po termíne `review_by`, inbox, postup initu, adaptéry, hooky, outbox |
 | `kontext reindex` | zostaví lokálny vyhľadávací index od nuly |
 
 ## Premenné prostredia

@@ -32,7 +32,7 @@ Používateľský adresár je `$KONTEXT_CONFIG_DIR`, inak `$XDG_CONFIG_HOME/kont
 | `index_file` | `true` | udržiava `<dir>/README.md` |
 | `max_body_lines` | `80` | varuje nad týmto počtom neprázdnych riadkov tela (0 = vypnuté) |
 
-### `[store.kinds.<kind>]`
+### `[store.kinds.<kind>]` {#store-kinds}
 
 | Kľúč | Predvolene | |
 | --- | --- | --- |
@@ -41,8 +41,15 @@ Používateľský adresár je `$KONTEXT_CONFIG_DIR`, inak `$XDG_CONFIG_HOME/kont
 | `style` | `store.style` | |
 | `numbering` | `date` pre rozhodnutia, inak `none` | `date`, `sequential`, `none` |
 | `trailer` | `Decision`, `Convention`, `Learning`, `Incident` | kľúč traileru commitu; pre architecture žiadny |
+| `review_after` | žiadne | predvolený `review_by` pre nové záznamy tohto druhu, počítaný od ich dátumu: `90d`, `12w`, `6m` (mesiace po 30 dňoch) alebo `1y`. Bez nastavenia vypnuté |
 
 Fungujú aj vlastné druhy: pridaj tabuľku s `dir`.
+
+```toml
+# dočasné obchádzky treba pozrieť znova do štvrťroka
+[store.kinds.incident]
+review_after = "90d"
+```
 
 ## `[sources]`
 
@@ -76,6 +83,18 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 | Kľúč | Predvolene | |
 | --- | --- | --- |
 | `threshold_commits` | `20` | označí aktívne rozhodnutie, keď sa od jeho dátumu jeho `paths` dotklo aspoň toľkoto commitov; `0` to vypne (pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness)) |
+
+## `[search]` {#search}
+
+| Kľúč | Predvolene | |
+| --- | --- | --- |
+| `adapters` | `always` | kedy sa `ctx_search` a `kontext search` pýtajú adaptérov s operáciou `search`: `always`, alebo `fallback` — iba keď lokálne zdroje našli menej ako `min_local_hits` zásahov. Adaptér menovaný v `sources` alebo `adapters: true` (`--adapters`) sa pýta vždy |
+| `min_local_hits` | `3` | koľko lokálnych zásahov v režime `fallback` stačí |
+
+`fallback` ušetrí cestu k adaptéru, keď lokálna odpoveď už existuje (v evaluačnej sade hub s
+oneskorením jednej sekundy pridal v režime `always` ku každému hľadaniu asi sekundu a v režime
+`fallback` nič). Znamená to však aj, že sémantická pamäť sa nepýta, keď BM25 niečo našlo, a preto
+predvolene ostáva `always`.
 
 ## `[capture]`
 

@@ -58,6 +58,8 @@ pub struct SearchReq {
     pub kinds: Vec<String>,
     pub sources: Vec<String>,
     pub limit: usize,
+    /// Ask the search adapters (`Some(true)`), skip them (`Some(false)`), or follow `[search] adapters`.
+    pub adapters: Option<bool>,
 }
 
 pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
@@ -107,7 +109,18 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
         }
     }
     let external: Vec<String> = req.sources.iter().filter(|s| *s != "local").cloned().collect();
-    if req.sources.is_empty() || !external.is_empty() {
+    // adapters cost a round trip each (a hub, a memory server); `fallback` asks them only when the
+    // local answer is thin. Naming one in `sources` or passing `adapters` is asking for them.
+    let local_hits: usize = groups.iter().map(|g| g.hits.len()).sum();
+    let wanted = match req.adapters {
+        Some(w) => w,
+        None => !external.is_empty() || app.cfg().search.adapters != "fallback" || local_hits < app.cfg().search.min_local_hits,
+    };
+    let any_search_adapter = || app.registry().adapters.iter().any(|a| a.has_op("search"));
+    if (req.sources.is_empty() || !external.is_empty()) && !wanted && any_search_adapter() {
+        notes.push(format!("connected sources not asked: {local_hits} local hits are enough (ask with adapters=true)"));
+    }
+    if (req.sources.is_empty() || !external.is_empty()) && wanted {
         let q = req.query.clone();
         let reg = app.registry();
         let results = reg.fanout("search", &external, Duration::from_secs(12), move |a| a.search(&q, limit));
@@ -121,7 +134,72 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
             }
         }
     }
-    Ok((model::merge(groups, limit), notes))
+    let mut hits = model::merge(groups, limit);
+    if hits.iter().any(|h| h.source == "local" && h.uri.starts_with("kx:")) {
+        let (entries, _) = app.entries();
+        let marks = Marks::load(app, &entries);
+        for h in hits.iter_mut().filter(|h| h.source == "local") {
+            let Some(e) = h.uri.strip_prefix("kx:").and_then(|id| entries.iter().find(|e| e.id == id)) else { continue };
+            let flags = marks.flags(e);
+            if !flags.is_empty() {
+                let mut all: Vec<String> = h.status.iter().cloned().collect();
+                all.extend(flags);
+                h.status = Some(all.join(" · "));
+            }
+        }
+    }
+    Ok((hits, notes))
+}
+
+/// What a short line says about an entry besides its text: anything short of accepted, approved
+/// team knowledge. An accepted, committed entry carries no mark, so the common case costs nothing.
+pub(crate) struct Marks {
+    unapproved: Vec<String>,
+    today: String,
+    challenged: HashSet<String>,
+}
+
+impl Marks {
+    pub(crate) fn load(app: &App, entries: &[Entry]) -> Marks {
+        let unapproved = if entries.is_empty() { Vec::new() } else { crate::api_read::unapproved_files(app) };
+        let challenged =
+            Inbox::open(&app.repo).list().into_iter().filter(|c| c.kind == "challenge").filter_map(|c| c.get_extra("against")).collect();
+        Marks { unapproved, today: util::today(), challenged }
+    }
+
+    /// Marks other than the status: where the entry stands locally and what it is waiting for.
+    pub(crate) fn flags(&self, e: &Entry) -> Vec<String> {
+        let mut out = Vec::new();
+        if crate::api_read::is_unapproved(&self.unapproved, &e.rel_path) {
+            out.push("local, unapproved".to_string());
+        }
+        if e.review_due(&self.today) {
+            out.push("review due".to_string());
+        }
+        if self.challenged.contains(&e.id) {
+            out.push("challenged locally".to_string());
+        }
+        out
+    }
+
+    /// ` (proposed; local, unapproved)` after a title, or nothing for accepted, approved knowledge.
+    /// The brief also counts the sources an entry rests on; their detail is in `ctx_read`.
+    pub(crate) fn suffix(&self, e: &Entry) -> String {
+        let mut all: Vec<String> = e.status.iter().filter(|s| s.as_str() != "accepted").cloned().collect();
+        all.extend(self.flags(e));
+        let sources = e.extra.iter().find(|(k, _)| k == "external_refs").map(|(_, v)| v.as_list().len()).unwrap_or(0);
+        if sources > 0 {
+            all.push(format!("{sources} source{}", if sources == 1 { "" } else { "s" }));
+        }
+        if all.is_empty() { String::new() } else { format!(" ({})", all.join("; ")) }
+    }
+
+    /// `Title (marks) — summary`, the one-line form the brief lists.
+    pub(crate) fn line(&self, e: &Entry, max: usize) -> String {
+        let s = e.summary_text(max);
+        let title = format!("{}{}", e.title, self.suffix(e));
+        if s.is_empty() { title } else { format!("{title} — {s}") }
+    }
 }
 
 /// Inbox notes that match a query. The inbox is a handful of files outside the repository, so it
@@ -173,6 +251,7 @@ fn inbox_hits(app: &App, query: &str, kinds: &[String], limit: usize) -> Vec<Hit
             score,
             date: e.date.clone(),
             status: Some(if private { "local note, private".into() } else { "local note".into() }),
+            similar_to: None,
         });
     }
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -282,6 +361,13 @@ fn render_entry(e: &Entry, level: u8) -> String {
             if !e.paths.is_empty() {
                 let _ = write!(s, "\npaths: {}", e.paths.join(", "));
             }
+            let refs = e.extra.iter().find(|(k, _)| k == "external_refs").map(|(_, v)| v.as_list()).unwrap_or_default();
+            if !refs.is_empty() {
+                let _ = write!(s, "\nsources ({}): {}", refs.len(), refs.join(", "));
+            }
+            if let Some(r) = &e.review_by {
+                let _ = write!(s, "\nreview by: {r}");
+            }
             let _ = write!(s, "\n\n{}", util::truncate_chars(e.body.trim(), 4000));
             s
         }
@@ -375,6 +461,11 @@ pub struct CaptureReq {
     pub source: Option<String>,
     /// Commits it came from.
     pub commits: Vec<String>,
+    /// When it should be looked at again (`YYYY-MM-DD`); else the kind's `review_after` default.
+    pub review_by: Option<String>,
+    /// Where it comes from: references (`pr:12`, `task:x`, `code:<repo>@<rev>:<path>#L1-3`, `url:…`)
+    /// with an optional short quote.
+    pub evidence: Vec<(String, Option<String>)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -387,8 +478,10 @@ pub struct CaptureOut {
     pub notes: Vec<String>,
 }
 
+pub(crate) type Prepared = (Entry, usize, Vec<String>, Vec<crate::evidence::Checked>);
+
 /// Canonical validation, normalization and redaction for every capture client.
-pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, usize, Vec<String>)> {
+pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared> {
     // `--paths a,` or an agent's [""] must not become an entry's paths, tags or supersedes
     for list in [&mut req.paths, &mut req.tags, &mut req.supersedes] {
         list.iter_mut().for_each(|v| *v = v.trim().to_string());
@@ -435,11 +528,30 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, 
     let status =
         req.status.clone().map(|s| crate::store::normalize_status(&s)).or_else(|| (kind == "decision").then(|| "accepted".to_string()));
     let body = if body.is_empty() { String::new() } else { format!("{body}\n") };
+    let today = util::today();
+    let review_by = match req.review_by.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        Some(r) => {
+            if chrono::NaiveDate::parse_from_str(r, "%Y-%m-%d").is_err() {
+                bail!("review_by '{r}' is not a YYYY-MM-DD date");
+            }
+            Some(r.to_string())
+        }
+        None => match app.cfg().store.kinds.get(&kind).and_then(|k| k.review_after.as_deref()) {
+            Some(period) => {
+                let days = crate::config::period_days(period)
+                    .ok_or_else(|| anyhow!("store.kinds.{kind}.review_after '{period}' is not a period such as 90d, 12w, 6m or 1y"))?;
+                let from = chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d")?;
+                Some((from + chrono::Duration::days(days)).format("%Y-%m-%d").to_string())
+            }
+            None => None,
+        },
+    };
     let mut entry = Entry {
         kind: kind.clone(),
         title,
         status,
-        date: Some(util::today()),
+        date: Some(today),
+        review_by,
         summary,
         tags,
         paths: req.paths.iter().map(|p| p.trim().trim_start_matches("./").to_string()).filter(|p| !p.is_empty()).collect(),
@@ -454,22 +566,35 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, 
     if let Some(src) = req.source.as_deref().filter(|s| !s.is_empty()) {
         entry.set_extra("source", crate::store::FmValue::Str(src.to_string()));
     }
-    Ok((entry, redactions, notes))
+    let masked: Vec<(String, Option<String>)> = req
+        .evidence
+        .iter()
+        .map(|(r, q)| (crate::distill::mask_text(app, r), q.as_deref().map(|q| crate::distill::mask_text(app, q))))
+        .collect();
+    let evidence = crate::evidence::check(app, &masked)?;
+    if !evidence.is_empty() {
+        let mut refs: Vec<String> = Vec::new();
+        for c in &evidence {
+            if !refs.contains(&c.reference) {
+                refs.push(c.reference.clone());
+            }
+            if c.verification == "quote_not_found" {
+                notes.push(format!("evidence: the quote for {} is not at that revision; it is marked, check it", c.reference));
+            }
+        }
+        entry.set_extra("external_refs", crate::store::FmValue::List(refs));
+        entry.body.push_str(&crate::evidence::section(&evidence));
+    }
+    Ok((entry, redactions, notes, evidence))
 }
 
 pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
-    let (mut entry, redactions, mut notes) = prepare_capture(app, req.clone())?;
+    let (mut entry, redactions, mut notes, _) = prepare_capture(app, req.clone())?;
     let visibility = entry.visibility.clone().unwrap_or_else(|| "team".into());
-    let kind = entry.kind.clone();
-    // similar entries already in the store?
-    if let Ok(hits) =
-        app.with_index(|idx| idx.search(&entry.title, &SearchOpts { limit: 3, kinds: vec![kind.clone()], sources: vec!["entry".into()] }))
-    {
-        for h in hits {
-            if title_similarity(&h.title, &entry.title) >= 0.6 {
-                notes.push(format!("similar existing entry: {} <{}> — update it instead if this is the same thing", h.title, h.uri));
-            }
-        }
+    // entries it may duplicate, extend or contradict: a label to check, never an action
+    let text = format!("{}\n{}", entry.title, entry.body);
+    if let Ok(related) = crate::related::related(app, &text, &entry.paths, &entry.supersedes, crate::related::Model::CachedOnly) {
+        notes.extend(crate::related::render_notes(&related).into_iter().take(3));
     }
     let _file = write_guard(app)?;
     let _lock = app.write_lock.lock().unwrap();
@@ -487,6 +612,47 @@ pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
     outbox.push("capture", events::entry_payload(&app.repo, &saved, &visibility))?;
     kick_outbox(app);
     Ok(CaptureOut { id: saved.id.clone(), location: format!("inbox:{}", saved.id), promoted: false, visibility, redactions, notes })
+}
+
+/// Say that an entry no longer holds, and why. The challenge waits in this worktree's inbox (kind
+/// `challenge`, `against` the entry, `against_revision` the commit it was read at): it changes
+/// nothing by itself. It is resolved through review — a retirement (`drafts.retire`,
+/// `ctx_prepare_commit` retire=[id]) or a replacement that supersedes the entry — never in place.
+pub fn challenge(app: &App, id: &str, why: &str, visibility: Option<&str>) -> Result<Entry> {
+    let (entries, _) = app.entries();
+    let target = Store::find(&entries, id).ok_or_else(|| anyhow!("no entry '{id}' (`ctx_search` finds it)"))?;
+    if !target.is_active() {
+        bail!("{} is already {}; nothing to challenge", target.id, target.status.as_deref().unwrap_or("inactive"));
+    }
+    if why.trim().is_empty() {
+        bail!("say why it no longer holds");
+    }
+    let visibility = visibility.unwrap_or("team");
+    if visibility != "team" && visibility != "private" {
+        bail!("visibility must be 'team' or 'private'");
+    }
+    let text = crate::distill::mask_text(app, why.trim());
+    let mut c = Entry {
+        kind: "challenge".into(),
+        title: format!("Challenge: {}", target.title),
+        summary: Some(util::truncate_chars(&util::one_line(&text), 200)),
+        body: format!("{text}\n"),
+        paths: target.paths.clone(),
+        author: app.repo.user_name(),
+        visibility: Some(visibility.to_string()),
+        origin: Some("challenge".into()),
+        ..Default::default()
+    };
+    c.set_extra("against", crate::store::FmValue::Str(target.id.clone()));
+    if let Some(head) = app.repo.head() {
+        c.set_extra("against_revision", crate::store::FmValue::Str(head));
+    }
+    if let Ok(blob) = app.repo.git(&["hash-object", "--", &target.rel_path]) {
+        c.set_extra("against_blob", crate::store::FmValue::Str(blob.trim().to_string()));
+    }
+    let _file = write_guard(app)?;
+    let _lock = app.write_lock.lock().unwrap();
+    Inbox::open(&app.repo).add(&app.repo, c)
 }
 
 pub(crate) fn title_similarity(a: &str, b: &str) -> f32 {
@@ -537,6 +703,13 @@ pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, St
         if cand.visibility.as_deref() == Some("private") {
             bail!("'{}' is private; recapture it with visibility=team if the team should see it", cand.id);
         }
+        if cand.kind == "challenge" {
+            bail!(
+                "'{}' is a challenge: it is resolved by retiring the entry (`ctx_prepare_commit` retire=[{}]) or by a replacement that supersedes it",
+                cand.id,
+                cand.get_extra("against").unwrap_or_default()
+            );
+        }
         let mut e = cand.clone();
         e.extra.retain(|(k, _)| !matches!(k.as_str(), "captured" | "branch" | "worktree" | "source"));
         e.visibility = None;
@@ -550,6 +723,11 @@ pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, St
         let rel = store.write_new(&mut e)?;
         let superseded = apply_supersedes(app, &e, stage)?;
         inbox.mark_promoted(&cand.id, &rel)?;
+        for old in &e.supersedes {
+            if let Some(found) = Store::find(&store.load_all().0, old) {
+                crate::api_write::resolve_challenges(app, &found.id, &rel)?;
+            }
+        }
         if stage {
             app.repo.git(&["add", "--", &rel])?;
         }
@@ -733,6 +911,78 @@ fn local_notes(app: &App, focus: &Focus, h2: &str, prefix: &str) -> String {
     s
 }
 
+/// Knowledge that changed since this worktree's last brief: entries added, changed or removed between
+/// the knowledge-store HEAD the last brief saw (a disposable cache in `.git/kontext`) and HEAD now.
+/// Without the cache, the last 14 days. `None` when nothing changed. At most five lines.
+fn changed_since(app: &App, entries: &[Entry], refs: &dyn Fn(&Entry) -> String) -> Option<(String, Option<String>)> {
+    let head = app.repo.head()?;
+    let cache = app.repo.worktree_state_dir().join("brief-head");
+    let seen = std::fs::read_to_string(&cache).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if seen.as_deref() == Some(head.as_str()) {
+        return None;
+    }
+    let store = app.store();
+    let mut dirs: Vec<String> = app.cfg().kind_names().iter().map(|k| app.cfg().kind_path(k)).collect();
+    dirs.sort();
+    dirs.dedup();
+    let known = seen.as_deref().filter(|s| app.repo.git_status_ok(&["cat-file", "-e", &format!("{s}^{{commit}}")]));
+    let (heading, listing) = match known {
+        Some(s) => {
+            let mut args = vec!["diff", "--name-status", "--no-renames", s, &head, "--"];
+            args.extend(dirs.iter().map(String::as_str));
+            (format!("Changed since {}", &s[..s.len().min(8)]), app.repo.git(&args).ok()?)
+        }
+        None => {
+            let since = (chrono::Local::now() - chrono::Duration::days(14)).format("--since=%Y-%m-%dT%H:%M:%S").to_string();
+            let mut args = vec!["log", &since, "--name-status", "--no-renames", "--format=", &head, "--"];
+            args.extend(dirs.iter().map(String::as_str));
+            ("Changed in the last 14 days".to_string(), app.repo.git(&args).ok()?)
+        }
+    };
+    // newest first in a log; a path once, with its latest state
+    let mut seen_paths = HashSet::new();
+    let mut changes: Vec<(char, String)> = Vec::new();
+    for line in listing.lines() {
+        let Some((st, path)) = line.split_once('\t') else { continue };
+        let st = st.chars().next().unwrap_or('M');
+        if store.is_entry_path(path) && seen_paths.insert(path.to_string()) {
+            changes.push((st, path.to_string()));
+        }
+    }
+    if changes.is_empty() {
+        return Some((String::new(), Some(head)));
+    }
+    let superseders: Vec<&Entry> =
+        changes.iter().filter_map(|(_, p)| entries.iter().find(|e| &e.rel_path == p)).filter(|e| !e.supersedes.is_empty()).collect();
+    let mut lines: Vec<String> = Vec::new();
+    for (st, path) in &changes {
+        match entries.iter().find(|e| &e.rel_path == path) {
+            Some(e) => {
+                // the replaced entry is named on its replacement's line
+                if superseders.iter().any(|n| n.supersedes.iter().any(|s| e.id == *s || e.id.starts_with(&format!("{s}-")))) {
+                    continue;
+                }
+                let what = if *st == 'A' { "new" } else { "changed" };
+                let replaces: Vec<String> = e
+                    .supersedes
+                    .iter()
+                    .map(|s| entries.iter().find(|o| o.id == *s).map(|o| format!("[{}] {}", refs(o), o.title)).unwrap_or_else(|| s.clone()))
+                    .collect();
+                let replaces = if replaces.is_empty() { String::new() } else { format!(", supersedes {}", replaces.join(", ")) };
+                lines.push(format!("- [{}] {} ({what}{replaces})", refs(e), e.title));
+            }
+            None if *st == 'D' => lines.push(format!("- {path} (removed)")),
+            None => {}
+        }
+    }
+    let total = lines.len();
+    lines.truncate(5);
+    if total > 5 {
+        lines.push(format!("- … {} more: `ctx_log`", total - 5));
+    }
+    Some((format!("\n## {heading}\n{}\n", lines.join("\n")), Some(head)))
+}
+
 fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, part: Part, elsewhere: &[Elsewhere]) -> String {
     let cfg = app.cfg();
     let (entries, errors) = app.entries();
@@ -752,6 +1002,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
     };
     let refs = Refs::new(entries.iter().map(|e| e.id.as_str()));
     let reference = |e: &Entry| format!("{}{}", part.prefix, refs.of(e));
+    let marks = Marks::load(app, &entries);
 
     // the state comes last but must not be crowded out (a stale decision or missing hooks matter
     // most when knowledge fills the brief): its lines are written now and their budget kept aside
@@ -774,7 +1025,12 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         } else if done < total {
             let _ = writeln!(state, "- Knowledge bootstrap: {done}/{total} module summaries written — continue with `ctx_init`.");
         }
-        let stale = crate::freshness::stale_decisions(app, &entries);
+        let crate::freshness::Freshness { stale, due } = crate::freshness::check(app, &entries);
+        if !due.is_empty() {
+            let named = |d: &crate::freshness::Due| entries.iter().find(|e| e.id == d.id).map(reference).unwrap_or_else(|| d.id.clone());
+            let _ =
+                writeln!(state, "- Due for review: {} — confirm, supersede or retire them.", crate::freshness::render_due(&due, 3, &named));
+        }
         if !stale.is_empty() {
             let named = |s: &crate::freshness::Stale| entries.iter().find(|e| e.id == s.id).map(reference).unwrap_or_else(|| s.id.clone());
             let _ = writeln!(
@@ -857,6 +1113,10 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         all.extend(nested_rules.iter().map(|s| format!("{}{s}", part.prefix)));
         add(&mut out, &format!("Rules for agents: read {}\n", all.join(", ")), &mut budget_left);
     }
+    // what changed since the last brief goes here, but only if room is left once everything else
+    // is in: it is the first thing a full budget drops (and then it stays due for the next brief)
+    let changed_at = out.len();
+    let changed = if part.section || !app.is_set_up() { None } else { changed_since(app, &entries, &|e: &Entry| reference(e)) };
 
     // the repositories this work reaches into: a submodule's team knowledge gets its own section,
     // anything further a pointer
@@ -927,7 +1187,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
                 .filter(|d| !r.trim_start_matches(part.prefix).starts_with(*d))
                 .map(|d| format!(" ({d})"))
                 .unwrap_or_default();
-            let line = format!("- [{r}] {} — {}{date}\n", e.title, e.summary_text(150));
+            let line = format!("- [{r}] {}{date}\n", marks.line(e, 150));
             if util::est_tokens(&(sec.clone() + &line)) as isize > budget_left * 6 / 10 {
                 break;
             }
@@ -959,7 +1219,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
         let mut sec = format!("\n{h2} {heading}\n");
         for (e, _) in list.iter().take(max) {
-            let _ = writeln!(sec, "- {} <kx:{}>", e.l0(140), reference(e));
+            let _ = writeln!(sec, "- {} <kx:{}>", marks.line(e, 140), reference(e));
         }
         add(&mut out, &sec, &mut budget_left);
     }
@@ -1053,7 +1313,13 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         for p in &focus.paths {
             q.extend(p.split(['/', '.', '-', '_']).filter(|s| s.len() > 2).map(str::to_string));
         }
-        let req = SearchReq { query: q.join(" "), kinds: vec!["doc".into(), "commit".into()], sources: vec!["local".into()], limit: 5 };
+        let req = SearchReq {
+            query: q.join(" "),
+            kinds: vec!["doc".into(), "commit".into()],
+            sources: vec!["local".into()],
+            limit: 5,
+            adapters: Some(false),
+        };
         let room = ((budget_left.max(0) as usize) / 2).min(450);
         if room >= 80
             && let Ok((hits, _)) = search(app, &req)
@@ -1081,6 +1347,21 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
                     add(&mut out, &format!("\n## From {name}\n{clipped}\n"), &mut budget_left);
                 }
             }
+        }
+    }
+
+    if let Some((section, head)) = changed {
+        const OWN_BUDGET: isize = 200;
+        let cost = util::est_tokens(&section) as isize;
+        let delivered = section.is_empty() || (cost <= OWN_BUDGET && cost <= budget_left);
+        if delivered && !section.is_empty() {
+            out.insert_str(changed_at, &section);
+            budget_left -= cost;
+        }
+        if delivered && let Some(head) = head {
+            let dir = app.repo.worktree_state_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = util::write_atomic(&dir.join("brief-head"), &head);
         }
     }
 
@@ -1287,7 +1568,8 @@ pub fn why(app: &App, target: &str, limit: usize) -> Result<String> {
             }
         }
     }
-    let (hits, _) = search(app, &SearchReq { query: target.into(), kinds: Vec::new(), sources: vec!["local".into()], limit })?;
+    let (hits, _) =
+        search(app, &SearchReq { query: target.into(), kinds: Vec::new(), sources: vec!["local".into()], limit, adapters: Some(false) })?;
     if !hits.is_empty() {
         let _ = writeln!(out, "\n## Knowledge and history\n{}", model::render(&hits, 900));
     }
@@ -1507,6 +1789,8 @@ pub fn render_check(rep: &CheckReport) -> String {
 pub struct PrepareReq {
     pub promote: Vec<String>,
     pub drop: Vec<String>,
+    /// Entries (or the challenges against them) to retire with the reason the challenge gives.
+    pub retire: Vec<String>,
 }
 
 /// Another worktree of this clone that has the team knowledge checked out (on a branch or detached).
@@ -1558,6 +1842,10 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
             let _ = writeln!(out, "- promoted {id} → {rel} (staged)");
         }
     }
+    for key in &req.retire {
+        let (id, rel) = retire_challenged(app, key)?;
+        let _ = writeln!(out, "- retired {id} → {rel} (status deprecated, staged)");
+    }
     let store = app.store();
     let mut staged = app.repo.staged_paths()?;
     let using_worktree = staged.is_empty();
@@ -1566,6 +1854,8 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     }
     if staged.is_empty() {
         out.push_str("\nNothing staged or changed.\n");
+        let (entries, _) = store.load_all();
+        out.push_str(&challenges_section(app, &inbox, &entries));
         return Ok(out);
     }
     let code: Vec<&(char, String)> = staged.iter().filter(|(_, p)| !store.is_store_path(p)).collect();
@@ -1602,8 +1892,10 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
         );
     }
 
+    out.push_str(&challenges_section(app, &inbox, &entries));
+
     // inbox candidates — the inbox is shared by all worktrees; offer only this worktree's own
-    let cands = inbox.list();
+    let cands: Vec<Entry> = inbox.list().into_iter().filter(|c| c.kind != "challenge").collect();
     let team: Vec<&Entry> = cands.iter().filter(|e| e.visibility.as_deref() != Some("private")).collect();
     let touches = |e: &Entry| code.iter().filter(|(_, p)| e.paths.iter().any(|pat| path_matches(pat, p) || path_overlaps(pat, p))).count();
     let mut ours: Vec<(&Entry, usize, Origin)> = Vec::new();
@@ -1708,6 +2000,66 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
         let _ = writeln!(out, "\nStage your changes (`git add …`) and run this again for an exact report.");
     }
     Ok(out)
+}
+
+/// Challenges this worktree raised: resolved by review, through a retirement or a replacement.
+fn challenges_section(app: &App, inbox: &Inbox, entries: &[Entry]) -> String {
+    let mut out = String::new();
+    let challenges: Vec<Entry> = inbox.list().into_iter().filter(|c| c.kind == "challenge" && Origin::of(&app.repo, c).is_ours()).collect();
+    if !challenges.is_empty() {
+        let _ = writeln!(out, "\n## Challenges (local) — entries said to no longer hold");
+        for c in &challenges {
+            let against = c.get_extra("against").unwrap_or_default();
+            let target = entries.iter().find(|e| e.id == against);
+            let changed = match (target, c.get_extra("against_blob")) {
+                (Some(t), Some(blob)) => app.repo.git(&["hash-object", "--", &t.rel_path]).is_ok_and(|now| now.trim() != blob),
+                _ => false,
+            };
+            let _ = writeln!(
+                out,
+                "- `{}` against [{against}] {}: {}{}",
+                c.id,
+                target.map(|t| t.title.as_str()).unwrap_or("(entry no longer in the store)"),
+                c.summary_text(200),
+                if changed { " (the entry changed since it was challenged: check it still applies)" } else { "" }
+            );
+        }
+        let _ = writeln!(
+            out,
+            "Resolve each in this change: retire the entry (`ctx_prepare_commit` retire=[<entry id>]: status deprecated with the challenge as the reason, staged) or record its replacement (`ctx_capture` with `supersedes: [<entry id>]`, then promote it). Drop a challenge that turned out wrong (drop=[<challenge id>])."
+        );
+    }
+    out
+}
+
+/// Retire the entry a challenge of this worktree is against (`key` names the entry or the
+/// challenge), with the challenge as the reason; staged.
+fn retire_challenged(app: &App, key: &str) -> Result<(String, String)> {
+    let inbox = Inbox::open(&app.repo);
+    let ours: Vec<Entry> = inbox.list().into_iter().filter(|c| c.kind == "challenge" && Origin::of(&app.repo, c).is_ours()).collect();
+    let (entries, _) = app.entries();
+    let target_id = Store::find(&entries, key).map(|e| e.id.clone());
+    let challenge = ours
+        .iter()
+        .find(|c| c.id == key || c.get_extra("against") == target_id)
+        .ok_or_else(|| anyhow!("no challenge of this worktree against '{key}': challenge it first (`ctx_challenge`), or use `kontext api drafts.retire` with a reason"))?;
+    let against = challenge.get_extra("against").unwrap_or_default();
+    let entry = Store::find(&entries, &against).ok_or_else(|| anyhow!("the challenged entry '{against}' is no longer in the store"))?;
+    if let Some(blob) = challenge.get_extra("against_blob")
+        && app.repo.git(&["hash-object", "--", &entry.rel_path])?.trim() != blob
+    {
+        bail!("{} changed since it was challenged; read it again and drop or renew the challenge", entry.id);
+    }
+    if !app.repo.git(&["status", "--porcelain=v1", "--", &entry.rel_path])?.trim().is_empty() {
+        bail!("{} has local or staged changes; commit or revert them first", entry.rel_path);
+    }
+    let _file = write_guard(app)?;
+    let _lock = app.write_lock.lock().unwrap();
+    let (_, after) = crate::api_write::plan_retire(app, entry, challenge.body.trim())?;
+    util::write_atomic(&app.repo.abs(&entry.rel_path), &after)?;
+    app.repo.git(&["add", "--", &entry.rel_path])?;
+    crate::api_write::resolve_challenges(app, &entry.id, &entry.rel_path)?;
+    Ok((entry.id.clone(), entry.rel_path.clone()))
 }
 
 // ---------------------------------------------------------------------------- misc helpers

@@ -22,11 +22,13 @@ Slová v tvare kódu sa rozkladajú, aby sa našli obe podoby: `orderTotal` sa i
 
 ### Poradie
 
-BM25 nad titulkom (váha 2,5), pomocným textom s rozloženými identifikátormi (1,5) a telom. Lokálne výsledky majú váhu 1,0; adaptéry predvolene 0,9 (`weight` pri každom adaptéri).
+BM25 nad titulkom (váha 2,5), pomocným textom s rozloženými identifikátormi (1,5) a telom. Celý dopyt sa počíta aj ako fráza (váha 2): záznam s presne takým znením ide prvý, no fráza sama nepridá žiadny výsledok. Lokálne výsledky majú váhu 1,0; adaptéry predvolene 0,9 (`weight` pri každom adaptéri).
 
 ## Federované vyhľadávanie
 
-`ctx_search` pošle dopyt paralelne každému adaptéru s operáciou `search`, s limitom 12 sekúnd. Zdroje sa spájajú váženým recipročným poradím (každý výsledok má skóre `weight / (8 + rank)`), takže škála skóre žiadneho zdroja (tu BM25, tam kosínusová podobnosť) nevytlačí ostatné a jediný zdroj si zachová vlastné poradie. Duplicity sa odstránia podľa URI, podľa takmer rovnakého titulku/úryvku a vtedy, keď adaptér vráti svoju kópiu lokálneho záznamu (synchronizované `…/<id>.md`). Pomalý alebo zlyhávajúci adaptér nikdy nezablokuje odpoveď: objaví sa v poznámke a na 30 sekúnd si dá pauzu.
+`ctx_search` pošle dopyt paralelne každému adaptéru s operáciou `search`, s limitom 12 sekúnd. S [`[search] adapters = "fallback"`](../reference/03-configuration.md#search) tak urobí, iba keď lokálne zdroje našli menej ako `min_local_hits` zásahov, alebo keď volajúci adaptér pomenuje či pošle `adapters: true`; predvolené `always` sa ich pýta zakaždým. Zdroje sa spájajú váženým recipročným poradím (každý výsledok má skóre `weight / (8 + rank)`), takže škála skóre žiadneho zdroja (tu BM25, tam kosínusová podobnosť) nevytlačí ostatné a jediný zdroj si zachová vlastné poradie.
+
+Vypadnú iba preukázané kópie: zásah s už videným URI, kópia lokálneho záznamu z adaptéra (synchronizované `…/<id>.md`) a zásah, ktorého celý normalizovaný titulok a text sa zhodujú s predošlým. Dve tvrdenia s rovnakým začiatkom nie sú to isté tvrdenie: zásah, ktorý iba začína ako predošlý, ostane a ukáže sa pod ním s časťou, ktorou sa líši (`↳ similar, differs: …`). Pomalý alebo zlyhávajúci adaptér nikdy nezablokuje odpoveď: objaví sa v poznámke a na 30 sekúnd si dá pauzu.
 
 Vyhľadávanie zúžiš cez `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) a `sources` (`local` a/alebo názvy adaptérov).
 

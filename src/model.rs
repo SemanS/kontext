@@ -1,7 +1,7 @@
 //! Shared result model: search hits from the local index and from adapters, merged and budgeted.
 use crate::util;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Hit {
@@ -16,6 +16,9 @@ pub struct Hit {
     pub date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// The URI of an earlier hit this one opens like: a look-alike shown under it, never dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub similar_to: Option<String>,
 }
 
 pub struct HitGroup {
@@ -24,14 +27,23 @@ pub struct HitGroup {
     pub hits: Vec<Hit>,
 }
 
-fn norm_key(s: &str) -> String {
-    util::one_line(s).to_lowercase().chars().filter(|c| c.is_alphanumeric()).take(90).collect()
+/// The whole text of a hit, normalized: equal only for copies of the same claim.
+fn norm_text(s: &str) -> String {
+    util::one_line(s).to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// How a hit opens. Two claims with the same opening are not the same claim: this key groups
+/// look-alikes so a reader sees both, it never decides that one of them goes.
+fn opening(s: &str) -> String {
+    norm_text(s).chars().take(90).collect()
 }
 
 /// Merge ranked lists from several sources with weighted reciprocal rank fusion: every source
 /// contributes by rank, so no source's score scale (BM25 here, cosine similarity there) crowds the
-/// others out, and a single source keeps its own order. Dedupes by URI, near-identical text and
-/// adapter copies of local entries (a `sync`ed entry comes back as `…/<id>.md`).
+/// others out, and a single source keeps its own order. Only proven copies are dropped: the same
+/// URI, an adapter copy of a local entry (a `sync`ed entry comes back as `…/<id>.md`) and a hit
+/// whose whole normalized text equals an earlier one. A hit that only opens like an earlier one is
+/// kept and placed under it (`similar_to`), so the difference stays visible.
 pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
     // small k: the top of each list matters most
     const K: f32 = 8.0;
@@ -50,24 +62,38 @@ pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
     let local_ids: HashSet<String> = all.iter().filter_map(|h| h.uri.strip_prefix("kx:")).map(str::to_string).collect();
     let mut seen_uri = HashSet::new();
     let mut seen_text = HashSet::new();
-    let mut out = Vec::new();
-    for h in all {
+    let mut openings: HashMap<String, usize> = HashMap::new();
+    let mut grouped: Vec<Vec<Hit>> = Vec::new();
+    let mut kept = 0;
+    for mut h in all {
+        if kept >= limit {
+            break;
+        }
         if !h.uri.is_empty() && !seen_uri.insert(h.uri.clone()) {
             continue;
         }
         if mirrored_id(&h.uri).is_some_and(|id| local_ids.contains(id)) {
             continue;
         }
-        let key = norm_key(&format!("{} {}", h.title, h.snippet));
-        if !key.is_empty() && !seen_text.insert(key) {
+        let text = format!("{} {}", h.title, h.snippet);
+        let full = norm_text(&text);
+        if !full.is_empty() && !seen_text.insert(full) {
             continue;
         }
-        out.push(h);
-        if out.len() >= limit {
-            break;
+        let open = opening(&text);
+        match openings.get(&open).filter(|_| !open.is_empty()) {
+            Some(&g) => {
+                h.similar_to = Some(grouped[g][0].uri.clone());
+                grouped[g].push(h);
+            }
+            None => {
+                openings.insert(open, grouped.len());
+                grouped.push(vec![h]);
+            }
         }
+        kept += 1;
     }
-    out
+    grouped.into_iter().flatten().collect()
 }
 
 /// The entry id an adapter URI names by its last segment (`viking://…/decision/<id>.md` → `<id>`).
@@ -79,19 +105,37 @@ fn mirrored_id(uri: &str) -> Option<&str> {
     Some(last.strip_suffix(".md").unwrap_or(last)).filter(|s| !s.is_empty())
 }
 
+/// The part of `h`'s text after the words it shares with `head`, from the first word that differs.
+fn differing_tail(head: &Hit, h: &Hit) -> String {
+    let a = util::one_line(&format!("{} {}", head.title, head.snippet));
+    let b = util::one_line(&format!("{} {}", h.title, h.snippet));
+    let (aw, bw): (Vec<&str>, Vec<&str>) = (a.split_whitespace().collect(), b.split_whitespace().collect());
+    let same = aw.iter().zip(&bw).take_while(|(x, y)| x.eq_ignore_ascii_case(y)).count();
+    let tail = bw[same.min(bw.len())..].join(" ");
+    if tail.is_empty() {
+        b
+    } else if same > 0 {
+        format!("… {tail}")
+    } else {
+        tail
+    }
+}
+
 pub fn render(hits: &[Hit], budget_tokens: usize) -> String {
     if hits.is_empty() {
         return "No matches.".into();
     }
     let mut out = String::new();
     let mut used = 0;
+    let mut n = 0;
     for (i, h) in hits.iter().enumerate() {
         let mut meta = Vec::new();
         if let Some(k) = &h.kind {
             meta.push(k.clone());
         }
-        if let Some(s) = &h.status {
-            meta.push(s.clone());
+        // an accepted entry is the norm and costs no tokens; anything else is said
+        if let Some(s) = h.status.as_deref().filter(|s| *s != "accepted") {
+            meta.push(s.to_string());
         }
         if let Some(d) = &h.date {
             meta.push(d.chars().take(10).collect());
@@ -99,10 +143,23 @@ pub fn render(hits: &[Hit], budget_tokens: usize) -> String {
         if h.source != "local" {
             meta.push(h.source.clone());
         }
-        let snippet = util::truncate_chars(&util::one_line(&h.snippet), 240);
-        let title = util::truncate_chars(&util::one_line(&h.title), 140);
-        let body = if snippet.is_empty() || snippet == title { String::new() } else { format!(" — {snippet}") };
-        let line = format!("{}. {title}{body} [{}] <{}>\n", i + 1, meta.join(" · "), h.uri);
+        let head = h.similar_to.as_ref().and_then(|uri| hits[..i].iter().find(|x| &x.uri == uri));
+        let line = match head {
+            // a look-alike: only what differs from the hit it sits under
+            Some(head) => format!(
+                "   ↳ similar, differs: {} [{}] <{}>\n",
+                util::truncate_chars(&differing_tail(head, h), 200),
+                meta.join(" · "),
+                h.uri
+            ),
+            None => {
+                n += 1;
+                let snippet = util::truncate_chars(&util::one_line(&h.snippet), 240);
+                let title = util::truncate_chars(&util::one_line(&h.title), 140);
+                let body = if snippet.is_empty() || snippet == title { String::new() } else { format!(" — {snippet}") };
+                format!("{n}. {title}{body} [{}] <{}>\n", meta.join(" · "), h.uri)
+            }
+        };
         let cost = util::est_tokens(&line);
         if used + cost > budget_tokens && i > 0 {
             out.push_str(&format!("(+{} more — narrow the query or raise budget_tokens)\n", hits.len() - i));
@@ -138,6 +195,42 @@ mod tests {
         let uris: Vec<_> = m.iter().map(|h| h.uri.as_str()).collect();
         assert_eq!(uris, vec!["kx:a", "kx:b"], "same-text and same-uri hits collapse");
         assert!(render(&m, 1000).contains("1. Alpha"));
+    }
+
+    #[test]
+    fn same_opening_is_grouped_never_dropped() {
+        let opening =
+            "Webhook retries arrive twice — the provider sends the same webhook again when our answer takes longer than ten seconds";
+        let mut a = hit("local", "kx:provider", "Webhook retries", 2.0);
+        a.snippet = format!("{opening}, so ignore an event id already processed.");
+        let mut b = hit("local", "kx:carrier", "Webhook retries", 1.0);
+        b.snippet = format!("{opening}, and the carrier sends tracking events without an id.");
+        let mut copy = hit("ov", "viking://notes/copy", "Webhook retries", 0.9);
+        copy.snippet = a.snippet.clone();
+        let merged = merge(
+            vec![
+                HitGroup { source: "local".into(), weight: 1.0, hits: vec![a, b] },
+                HitGroup { source: "ov".into(), weight: 1.0, hits: vec![copy] },
+            ],
+            10,
+        );
+        let uris: Vec<&str> = merged.iter().map(|h| h.uri.as_str()).collect();
+        assert_eq!(uris, vec!["kx:provider", "kx:carrier"], "the full-text copy collapses, the look-alike stays");
+        assert_eq!(merged[1].similar_to.as_deref(), Some("kx:provider"));
+        let text = render(&merged, 1000);
+        assert!(text.contains("   ↳ similar, differs: … and the carrier sends tracking events without an id. [] <kx:carrier>"), "{text}");
+        assert!(!text.contains("2."), "a look-alike is not numbered: {text}");
+    }
+
+    #[test]
+    fn render_marks_everything_short_of_accepted() {
+        let mut accepted = hit("local", "kx:a", "Accepted rule", 1.0);
+        accepted.status = Some("accepted".into());
+        let mut old = hit("local", "kx:b", "Old rule", 1.0);
+        old.status = Some("deprecated".into());
+        let text = render(&[accepted, old], 1000);
+        assert!(text.contains("1. Accepted rule [] <kx:a>"), "{text}");
+        assert!(text.contains("2. Old rule [deprecated] <kx:b>"), "{text}");
     }
 
     #[test]

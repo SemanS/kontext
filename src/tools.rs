@@ -62,6 +62,8 @@ fn annotations(name: &str) -> Value {
         // `drop` discards only local, never-shared inbox drafts — not destructive in the MCP sense,
         // and Codex refuses destructive tools outright under `approval_policy = "never"`
         "ctx_inbox" => ("Knowledge inbox", false, false),
+        // a challenge is a local inbox note; it changes no knowledge by itself
+        "ctx_challenge" => ("Challenge a knowledge entry", false, false),
         "ctx_prepare_commit" => ("Prepare the commit", false, false),
         "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
         "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
@@ -79,7 +81,8 @@ fn annotations(name: &str) -> Value {
 }
 
 /// Tools that act on one repository and take `dir` for another (every `ctx_` tool accepts it).
-const TAKES_DIR: &[&str] = &["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_log", "ctx_capture", "ctx_inbox", "ctx_prepare_commit"];
+const TAKES_DIR: &[&str] =
+    &["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_log", "ctx_capture", "ctx_challenge", "ctx_inbox", "ctx_prepare_commit"];
 
 pub fn definitions() -> Vec<Value> {
     let mut defs = tool_list();
@@ -123,6 +126,7 @@ fn tool_list() -> Vec<Value> {
                 "kinds": arr("Restrict local results: decision, convention, learning, incident, architecture, doc, commit"),
                 "sources": arr("Restrict sources: local and/or adapter names (default: all)"),
                 "limit": {"type": "integer", "description": "Max hits (default 10)"},
+                "adapters": {"type": "boolean", "description": "Ask the connected search adapters even when local hits suffice (true) or never (false); default from [search] adapters"},
                 "budget_tokens": {"type": "integer", "description": "Approximate size limit (default 1200)"}
             }, "required": ["query"]}
         }),
@@ -149,8 +153,19 @@ fn tool_list() -> Vec<Value> {
                 "commits": arr("Commits it came from (short shas)"),
                 "source": s("Where it was found, e.g. thread claude:4f1c2a9b (kept in the inbox only)"),
                 "status": s("Decisions: proposed | accepted (default)"),
+                "review_by": s("When the entry should be looked at again, YYYY-MM-DD (a temporary rule, a workaround); optional"),
+                "evidence": {"type": "array", "description": "Sources it rests on: {ref, quote?}. ref is pr:<id>, issue:<id>, task:<id>, code:<repo>@<rev>:<path>#L<a>-<b> or url:<url>; a quote (≤200 chars) of a code ref is checked against that revision", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "quote": {"type": "string"}}, "required": ["ref"]}},
                 "promote": {"type": "boolean", "description": "Write into the repo store now instead of the inbox"}
             }, "required": ["kind", "title", "body"]}
+        }),
+        json!({
+            "name": "ctx_challenge",
+            "description": "Say that a recorded entry no longer holds, and why. It waits in the local inbox as a challenge; nothing changes until review: ctx_prepare_commit then offers to retire the entry (retire=[id]) or to record a replacement that supersedes it. Never edit the entry in place.",
+            "inputSchema": {"type": "object", "properties": {
+                "id": s("The entry: kx:<id>, an id or its unique prefix"),
+                "why": s("Why it no longer holds: what changed, with a source if there is one"),
+                "visibility": {"type": "string", "enum": ["team", "private"]}
+            }, "required": ["id", "why"]}
         }),
         json!({
             "name": "ctx_why",
@@ -191,7 +206,8 @@ fn tool_list() -> Vec<Value> {
             "description": "Run before committing: the staged change, recorded knowledge it touches, inbox candidates to ship with it (promote=[ids] writes and stages them, drop=[ids] discards), checks of knowledge files, module docs to refresh, and the commit trailers (and whether a hook adds them).",
             "inputSchema": {"type": "object", "properties": {
                 "promote": arr("Inbox ids to promote and stage"),
-                "drop": arr("Inbox ids to discard")
+                "drop": arr("Inbox ids to discard"),
+                "retire": arr("Entries challenged in this worktree to retire (status deprecated, the challenge as the reason, staged)")
             }}
         }),
         json!({
@@ -271,6 +287,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 kinds: list_arg(args, "kinds"),
                 sources: list_arg(args, "sources"),
                 limit: int_arg(args, "limit").unwrap_or(10),
+                adapters: args.get("adapters").and_then(Value::as_bool),
             };
             let (hits, notes) = ops::search(app, &req)?;
             let mut out = model::render(&hits, int_arg(args, "budget_tokens").unwrap_or(1200));
@@ -308,6 +325,20 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 origin: origin.to_string(),
                 source: str_arg(args, "source"),
                 commits: list_arg(args, "commits"),
+                review_by: str_arg(args, "review_by"),
+                evidence: args
+                    .get("evidence")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|i| {
+                                let r = i.as_str().or_else(|| i.get("ref").and_then(Value::as_str))?;
+                                Some((r.to_string(), i.get("quote").and_then(Value::as_str).map(String::from)))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             };
             let out = ops::capture(app, req)?;
             let mut text = if out.promoted {
@@ -337,6 +368,16 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 text.push_str(&format!("\nnote: {n}"));
             }
             Ok(text)
+        }
+        "ctx_challenge" => {
+            let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
+            let why = str_arg(args, "why").ok_or_else(|| anyhow!("why is required"))?;
+            let c = ops::challenge(app, &id, &why, str_arg(args, "visibility").as_deref())?;
+            Ok(format!(
+                "Recorded the challenge against {} as inbox:{} (local, not shared). Resolve it before committing: ctx_prepare_commit offers to retire the entry or to record a replacement that supersedes it.",
+                c.get_extra("against").unwrap_or_default(),
+                c.id
+            ))
         }
         "ctx_why" => {
             let target = str_arg(args, "target").ok_or_else(|| anyhow!("target is required"))?;
@@ -461,7 +502,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             if !promote.is_empty() && !app.is_set_up() {
                 bail!("{NOT_SET_UP}");
             }
-            ops::prepare_commit(app, &PrepareReq { promote, drop: list_arg(args, "drop") })
+            ops::prepare_commit(app, &PrepareReq { promote, drop: list_arg(args, "drop"), retire: list_arg(args, "retire") })
         }
         "ctx_init" => {
             let count = int_arg(args, "count").unwrap_or(1).clamp(1, 5);

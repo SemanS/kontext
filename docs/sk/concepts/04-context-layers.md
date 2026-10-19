@@ -10,6 +10,7 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | --- | --- |
 | Hlavička | projekt, ID repozitára, vetva, *About* (zhrnutie prehľadu), *Stack* |
 | Pravidlá pre agentov | `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, inštrukcie pre Copilot a vnorené súbory `AGENTS.md` na cestách vo focuse |
+| Zmenené od … | znalosti pridané, zmenené alebo odobrané od posledného briefu v tomto worktree, najviac päť riadkov ([nižšie](#changed)) |
 | Rozhodnutia | aktívne rozhodnutia, najrelevantnejšie pre focus ako prvé, každé na jeden riadok (najviac `brief.max_decisions`) |
 | Konvencie · Poznatky a úskalia · Incidenty | každé na jeden riadok, zoradené podľa focusu |
 | Moduly | zhrnutia modulov (najviac `brief.max_modules`); pri moduloch vo focuse aj začiatok ich prehľadu |
@@ -17,9 +18,29 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Lokálne poznámky | poznámky v inboxe tohto klonu (tímoví kandidáti aj súkromné poznámky), ktoré zodpovedajú focusu, inak tri najnovšie |
 | Súvisiace dokumenty a história | v repozitári bez úložiska, keď už vyhľadávanie postavilo lokálny index: dokumenty a commity, ktoré zodpovedajú focusu |
 | Z adaptérov | sekcie od adaptérov s operáciou `brief` (napr. primer zo sessions) |
-| Stav | počty v inboxe, postup zavádzania, rozhodnutia na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
+| Stav | počty v inboxe, postup zavádzania, záznamy na kontrolu, rozhodnutia na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami. Keď všetky cesty vo focuse ležia v inom repozitári, brief je briefom toho repozitára ([Viac repozitárov](09-several-repositories.md)).
+
+### Značky {#marks}
+
+Krátky riadok nesmie nechať návrh vyzerať ako prijaté pravidlo. Riadok záznamu dostane značku, keď záznam nie je prijatá a schválená znalosť:
+
+| Značka | Kedy |
+| --- | --- |
+| `(proposed)`, `(deprecated)`, … | stav nie je `accepted` |
+| `local, unapproved` | súbor je v pracovnom strome nový, zmenený alebo stagnutý: ten text ešte nikto neschválil |
+| `review due` | uplynul jeho [`review_by`](./02-knowledge-store.md#review-by) |
+| `challenged locally` | inbox tohto klonu obsahuje [námietku](./03-capture-and-review.md#challenges) voči nemu |
+| `N sources` | nesie [evidenciu](./02-knowledge-store.md#evidence) |
+
+Viac značiek zdieľa jedny zátvorky: `Use queues for exports (proposed; local, unapproved)`. Prijatý a commitnutý záznam nemá žiadnu, takže bežný riadok nestojí tokeny navyše. Výsledky hľadania nesú tie isté značky vo svojich hranatých zátvorkách.
+
+### Zmenené od posledného briefu {#changed}
+
+Každý brief si zapamätá commit, ktorý videl, v cache lokálneho stavu worktree (`.git/kontext/…/brief-head`). Ďalší brief vypíše najviac v piatich riadkoch záznamy pridané, zmenené alebo odobrané odvtedy; nový záznam, ktorý iný nahrádza, ho pomenuje (`(new, supersedes [0007] Prices are integer cents)`). Bez cache — nový worktree, zmazaná cache — ukáže namiesto toho posledných 14 dní. Brief bez zmien takú sekciu nemá, takže bežný krok nepridá nič.
+
+Sekcia má vlastný malý rozpočet a plný brief ju vypustí ako prvú; cache sa posunie, len keď sa sekcia ukázala, takže vypustená zmena príde v ďalšom briefe.
 
 Na záznam sa odkazuje najkratšou jednoznačnou predponou jeho id (`[2026-09-28-adapters]` namiesto id, ktoré opakuje celý titulok), alebo číslom ADR. `ctx_read` rozpozná oboje.
 
@@ -34,6 +55,8 @@ Rozhodnutie sa zapíše raz, ale kód, ktorý riadi, sa ďalej mení. *Stav* v b
 ```
 
 Commity z dňa samotného rozhodnutia a merge commity sa nepočítajú. Commit sa počíta raz, nech sa zhoduje koľkokoľvek jeho súborov, a započíta sa aj presun kódu mimo riadenej cesty. Rozhodnutia bez `date` alebo `paths` sa neoznačia nikdy. Označenie je výzva na kontrolu, nie verdikt: ak rozhodnutie stále platí, netreba nič meniť; ak nie, nahraď ho novým (supersede).
+
+Záznamy každého druhu môžu niesť aj [termín kontroly](./02-knowledge-store.md#review-by). Po ňom ich *Stav* v briefe vypíše ako *Due for review* a ich riadky majú značku `review due`; `kontext status` vypíše všetky. Oba signály sú na jednom mieste (`src/freshness.rs`).
 
 Počty pochádzajú z jedného `git log` pre všetky rozhodnutia, od dátumu najstaršieho rozhodnutia (obmedzeného `index.max_commits`), a ukladajú sa do cache podľa `HEAD` v stavovom adresári worktree: brief nepridá žiadne volanie gitu na rozhodnutie a do ďalšieho commitu žiadne. `threshold_commits = 0` to vypne.
 

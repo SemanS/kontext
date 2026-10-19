@@ -4,10 +4,30 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ## Unreleased
 
+**Knowledge that stays correct after it is written.** The brief and search no longer let a proposal pass for an accepted rule, merging sources no longer drops a different claim that happens to start the same way, and recorded knowledge can now carry a review date and its sources, be challenged and be retired, always through review. Measured on a new [evaluation set](https://github.com/SemanS/kontext/tree/main/tests/eval) of 33 scenarios: 8 passed on 0.2.1 (23 of 64 expectations found, 2 hits wrongly suppressed, 1 noisy); all 33 pass now (69 of 69, none suppressed, no noise).
+
+- **Authority marks.** A line in the brief and a search hit say when an entry is not accepted (`(proposed)`, `(deprecated)`), when its file is new, edited or staged and nobody approved it (`local, unapproved`), when its review date passed (`review due`), when it is challenged locally, and how many sources it has. Accepted, committed entries carry no mark. See [Marks](../concepts/04-context-layers.md#marks).
+- **Safe deduplication.** Search merged hits whose first 90 normalized characters matched, so one of two different claims vanished. Now only proven copies are dropped (the same URI, an adapter's copy of a local entry, a full-text match); a look-alike is shown under the first one with what differs.
+- **Changed since the last brief.** The brief lists, in at most five lines, the knowledge added, changed or removed since this worktree's last brief (the last 14 days without one), and says which entry a new one supersedes. A brief without changes adds nothing. See [Changed since the last brief](../concepts/04-context-layers.md#changed).
+- **Review dates.** `review_by: YYYY-MM-DD` on any entry; past it the entry is marked in the brief, search and `kontext status`, never hidden. Optional per-kind default `[store.kinds.<kind>] review_after = "90d"`, off by default. See [Review dates](../concepts/02-knowledge-store.md#review-by).
+- **Evidence.** Captures take `evidence: [{ref, quote?}]` with references `pr:`, `issue:`, `task:`, `code:<repo>@<rev>:<path>#L<a>-<b>` and `url:`, kept in `extra.external_refs`. A quote of a code reference into this repository is checked against that revision; anything else is marked unverifiable, never refused. See [Evidence](../concepts/02-knowledge-store.md#evidence).
+- **Challenges and retirement.** `ctx_challenge` / `kontext challenge` record that an entry no longer holds; `ctx_prepare_commit retire=[id]` retires it (status `deprecated` and a `## Retired` note, staged) or a replacement supersedes it. Retire and supersede work for every kind. See [Challenges](../concepts/03-capture-and-review.md#challenges).
+- **Related knowledge.** `ctx_capture` names the entries a new one may duplicate, extend or contradict, with the reason (similar wording, the same paths); the old note that said "update it instead" is gone. A model is asked only on request, through `entries.related`, and its answer is cached.
+- **Search.** A whole-query phrase bonus ranks an exact wording first (on the evaluation set the exact-phrase query moved from rank 2 to 1; queries in one's own words kept their rank). `[search] adapters = "fallback"` asks the search adapters only when local hits are fewer than `min_local_hits`, or when asked (`adapters: true`, `--adapters`); the default stays `always`.
+- **Application API.** New operations `entries.related`, `drafts.retire` and `drafts.revise` (listed in `status.capabilities`); `drafts.capture`, `drafts.stage` and `drafts.formalize` also return `evidence` and `related_entries`, and `drafts.stage` `resolved_challenges`; entries carry `review_by`, and working reads `publication.blob_hash`, a per-entry content revision. See [Knowledge maintenance](../reference/05-application-api.md#maintenance).
+
 Applications can use a shared knowledge engine through the [application API](../reference/05-application-api.md):
 versioned JSON CLI and structured MCP, configured-store queries, path applicability, read-only extraction,
 idempotent draft staging and committed exports pinned to an explicit review ref. Existing human CLI
 commands and agent tools remain compatible.
+
+**Migration.** Nothing in `.ai/` needs to change. Things a script or client may notice:
+
+- `kontext search` (text) no longer prints `accepted` among a hit's metadata, and prints a look-alike hit as an unnumbered `↳ similar, differs: …` line; `--json` hits may carry `similar_to`.
+- The brief's decision lines may carry marks after the title, a new *Changed since …* section may appear, and the brief writes a small cache (`brief-head`) into the worktree's local state under `.git/kontext/`.
+- `ctx_capture` and `kontext capture` notes say `related, check: … <kx:id> — <reason>` instead of `similar existing entry: … — update it instead`.
+- `review_by` (and `review-by`) are entry fields now: as an `extra` key in `drafts.*` they are refused as reserved; pass `entry.review_by` instead.
+- `inbox.list` can return candidates of kind `challenge`; they cannot be staged as entries (`invalid_input`).
 
 ## 0.2.1 (2026-10-03)
 

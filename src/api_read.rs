@@ -20,6 +20,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "entries.search" => search(app, input),
         "entries.governing" => governing(app, input),
         "entries.export" => export(app, input),
+        "entries.related" => related(app, input),
         _ => Err(crate::api::error("unsupported_operation", format!("unknown read operation '{operation}'"))),
     }?;
     if operation == "status" || operation == "entries.export" { Ok(result) } else { working_result(app, result) }
@@ -39,7 +40,7 @@ pub fn entry_json(entry: &Entry) -> Value {
         .collect();
     let mut out = json!({
         "id":entry.id,"kind":entry.kind,"title":entry.title,"body":entry.body,
-        "summary":entry.summary_text(usize::MAX),"status":entry.status,"date":entry.date,
+        "summary":entry.summary_text(usize::MAX),"status":entry.status,"date":entry.date,"review_by":entry.review_by,
         "paths":entry.paths,"tags":entry.tags,"file":entry.rel_path,"markdown":entry.markdown(),
         "style":entry.style,"supersedes":entry.supersedes,"superseded_by":entry.superseded_by,
         "commits":entry.commits,"author":entry.author,"visibility":entry.visibility,"origin":entry.origin,
@@ -54,6 +55,8 @@ pub fn entry_json(entry: &Entry) -> Value {
 struct WorkingView {
     revision: Option<String>,
     changes: Vec<(String, String)>,
+    /// Index blob ids of the knowledge files, for `publication.blob_hash` (empty when not loaded).
+    blobs: std::collections::HashMap<String, String>,
 }
 
 impl WorkingView {
@@ -80,7 +83,27 @@ impl WorkingView {
                 Some((String::from_utf8_lossy(&record[3..]).to_string(), String::from_utf8_lossy(&record[..2]).to_string()))
             })
             .collect();
-        Ok(Self { revision: app.repo.head(), changes })
+        Ok(Self { revision: app.repo.head(), changes, blobs: Default::default() })
+    }
+
+    /// With the index blob of every knowledge file (one `git ls-files`): a per-entry content
+    /// revision that, unlike `revision` (HEAD), changes only when the entry's own file changes.
+    fn with_blobs(app: &App) -> Result<Self> {
+        let mut view = Self::new(app)?;
+        let dirs: Vec<String> = app.cfg().kind_names().iter().map(|kind| app.cfg().kind_path(kind)).collect();
+        let mut args = vec!["--literal-pathspecs", "ls-files", "-s", "-z", "--"];
+        args.extend(dirs.iter().map(String::as_str));
+        let data = app.repo.git_bytes(&args)?;
+        for record in data.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let record = String::from_utf8_lossy(record);
+            // <mode> <blob> <stage>\t<path>
+            if let Some((meta, path)) = record.split_once('\t')
+                && let Some(blob) = meta.split_whitespace().nth(1)
+            {
+                view.blobs.insert(path.to_string(), blob.to_string());
+            }
+        }
+        Ok(view)
     }
     fn annotate(&self, entry: &mut Value) {
         let Some(file) = entry.get("file").and_then(Value::as_str) else { return };
@@ -102,18 +125,30 @@ impl WorkingView {
         } else {
             "committed"
         };
-        entry["publication"] = json!({"state":state,"revision":self.revision,"staged":staged,"modified":modified});
+        // the blob is the file's content only while the working tree matches the index
+        let blob = (!untracked && !modified).then(|| self.blobs.get(file)).flatten();
+        entry["publication"] = json!({"state":state,"revision":self.revision,"blob_hash":blob,"staged":staged,"modified":modified});
     }
+}
+
+/// Knowledge files that differ from HEAD in the working tree or the index: drafts, edits and staged
+/// changes nobody has approved yet.
+pub(crate) fn unapproved_files(app: &App) -> Vec<String> {
+    WorkingView::new(app).map(|v| v.changes.into_iter().map(|(path, _)| path).collect()).unwrap_or_default()
+}
+
+pub(crate) fn is_unapproved(files: &[String], file: &str) -> bool {
+    files.iter().any(|path| path == file || (path.ends_with('/') && file.starts_with(path.as_str())))
 }
 
 pub fn entry_json_in(app: &App, entry: &Entry) -> Result<Value> {
     let mut value = entry_json(entry);
-    WorkingView::new(app)?.annotate(&mut value);
+    WorkingView::with_blobs(app)?.annotate(&mut value);
     Ok(value)
 }
 
 fn working_result(app: &App, mut result: Value) -> Result<Value> {
-    let view = WorkingView::new(app)?;
+    let view = WorkingView::with_blobs(app)?;
     if let Some(entry) = result.get_mut("entry") {
         view.annotate(entry);
     }
@@ -308,6 +343,23 @@ fn search(app: &App, input: &Value) -> Result<Value> {
     let total = selected.len();
     let entries: Vec<Value> = selected.into_iter().take(limit).map(entry_json).collect();
     Ok(json!({"entries":entries,"total":total}))
+}
+
+fn related(app: &App, input: &Value) -> Result<Value> {
+    let text = input
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty() && s.len() <= 20_000)
+        .ok_or_else(|| crate::api::error("invalid_input", "text must be a non-empty string of at most 20000 bytes"))?;
+    let paths = strings(input, "paths")?;
+    let exclude = strings(input, "exclude_ids")?;
+    let model = match input.get("llm") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => crate::related::Model::CachedOnly,
+        Some(Value::Bool(true)) => crate::related::Model::Ask(None),
+        Some(Value::String(name)) if !name.trim().is_empty() => crate::related::Model::Ask(Some(name.as_str())),
+        _ => return Err(crate::api::error("invalid_input", "llm must be a boolean or an adapter name")),
+    };
+    crate::related::related(app, text, &paths, &exclude, model)
 }
 
 fn validate_path(path: &str) -> Result<String> {
@@ -655,8 +707,14 @@ mod tests {
         assert_eq!(get()["entry"]["publication"]["state"], "staged");
         f.git(&["commit", "-qm", "rule"]);
         assert_eq!(get()["entry"]["publication"]["state"], "committed");
+        let blob = f.git(&["rev-parse", &format!("HEAD:{path}")]);
+        assert_eq!(get()["entry"]["publication"]["blob_hash"], blob.as_str());
+        f.write("other.txt", "unrelated");
+        f.commit();
+        assert_eq!(get()["entry"]["publication"]["blob_hash"], blob.as_str(), "an unrelated commit keeps the entry's blob");
         f.write(path, &format!("{original}Changed.\n"));
         assert_eq!(get()["entry"]["publication"]["state"], "modified");
+        assert!(get()["entry"]["publication"]["blob_hash"].is_null(), "an unstaged edit has no blob yet");
         assert_eq!(get()["view"], "working_tree");
         assert_eq!(get()["entry"]["status"], "accepted");
     }

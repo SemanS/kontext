@@ -74,6 +74,9 @@ enum Cmd {
         /// Print hits as JSON
         #[arg(long)]
         json: bool,
+        /// Ask the search adapters even when local hits suffice (`[search] adapters = "fallback"`)
+        #[arg(long)]
+        adapters: bool,
     },
     /// Read a URI: kx:<id>, file:<path>[#section], git:<sha>, inbox:<id>, adapter URIs (viking://…)
     Read {
@@ -161,6 +164,19 @@ enum Cmd {
         /// Inbox ids to discard (repeatable)
         #[arg(long)]
         drop: Vec<String>,
+        /// Entries challenged in this worktree to retire, with the challenge as the reason (repeatable)
+        #[arg(long)]
+        retire: Vec<String>,
+    },
+    /// Say that an entry no longer holds, and why (a local challenge, resolved by retire or supersede)
+    Challenge {
+        /// The entry: kx:<id>, an id or its unique prefix
+        id: String,
+        /// Why it no longer holds
+        why: Vec<String>,
+        /// Keep the challenge personal
+        #[arg(long)]
+        private: bool,
     },
     /// Validate knowledge files and scan them for secrets
     Check {
@@ -305,6 +321,9 @@ struct CaptureArgs {
     /// proposed | accepted (decisions default to accepted)
     #[arg(long)]
     status: Option<String>,
+    /// When it should be looked at again (YYYY-MM-DD), e.g. for a temporary rule
+    #[arg(long)]
+    review_by: Option<String>,
     /// Keep it personal (never promoted; mirrored to personal adapters)
     #[arg(long)]
     private: bool,
@@ -619,13 +638,14 @@ fn run(cli: Cli) -> Result<i32> {
                 _ => print!("{text}"),
             }
         }
-        Cmd::Search { query, kind, source, limit, json } => {
+        Cmd::Search { query, kind, source, limit, json, adapters } => {
             let app = open(&dir)?;
             let q = query.join(" ");
             if q.trim().is_empty() {
                 bail!("give a query");
             }
-            let (hits, notes) = ops::search(&app, &ops::SearchReq { query: q, kinds: kind, sources: source, limit })?;
+            let (hits, notes) =
+                ops::search(&app, &ops::SearchReq { query: q, kinds: kind, sources: source, limit, adapters: adapters.then_some(true) })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&json!({"hits": hits, "notes": notes}))?);
             } else {
@@ -665,6 +685,7 @@ fn run(cli: Cli) -> Result<i32> {
                     supersedes: a.supersedes,
                     status: a.status,
                     promote: a.promote,
+                    review_by: a.review_by,
                     origin: "cli".into(),
                     ..Default::default()
                 },
@@ -740,9 +761,18 @@ fn run(cli: Cli) -> Result<i32> {
             let app = open(&dir)?;
             print!("{}", ops::why(&app, &target, limit)?);
         }
-        Cmd::PrepareCommit { promote, drop } => {
+        Cmd::Challenge { id, why, private } => {
             let app = open(&dir)?;
-            print!("{}", ops::prepare_commit(&app, &ops::PrepareReq { promote, drop })?);
+            let c = ops::challenge(&app, &id, &why.join(" "), Some(if private { "private" } else { "team" }))?;
+            println!(
+                "challenged {} as inbox:{} — resolve it with a retirement or a replacement before committing",
+                c.get_extra("against").unwrap_or_default(),
+                c.id
+            );
+        }
+        Cmd::PrepareCommit { promote, drop, retire } => {
+            let app = open(&dir)?;
+            print!("{}", ops::prepare_commit(&app, &ops::PrepareReq { promote, drop, retire })?);
         }
         Cmd::Check { staged } => {
             let app = open(&dir)?;
@@ -1055,6 +1085,19 @@ fn status(app: &App) -> Result<()> {
                 freshness::render_list(&stale, usize::MAX, &name)
             );
         }
+    }
+    let due = freshness::review_due(&entries, &crate::util::today());
+    if due.is_empty() {
+        println!("review    no active entry is past its review_by date");
+    } else {
+        let refs = ops::Refs::new(entries.iter().map(|e| e.id.as_str()));
+        let name = |d: &freshness::Due| entries.iter().find(|e| e.id == d.id).map(|e| refs.of(e)).unwrap_or_else(|| d.id.clone());
+        println!(
+            "review    {} entr{} due for review: {}",
+            due.len(),
+            if due.len() == 1 { "y" } else { "ies" },
+            freshness::render_due(&due, usize::MAX, &name)
+        );
     }
     let inbox = inbox::Inbox::open(&app.repo).list();
     let private = inbox.iter().filter(|e| e.visibility.as_deref() == Some("private")).count();

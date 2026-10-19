@@ -58,6 +58,10 @@ max_modules = 14
 [freshness]
 threshold_commits = 20
 
+[search]
+adapters = "always"
+min_local_hits = 3
+
 [capture]
 default_visibility = "team"
 redact = true
@@ -92,6 +96,7 @@ pub struct Config {
     pub index: IndexCfg,
     pub brief: BriefCfg,
     pub freshness: FreshnessCfg,
+    pub search: SearchCfg,
     pub capture: CaptureCfg,
     pub hooks: HooksCfg,
     pub secrets: SecretsCfg,
@@ -145,6 +150,25 @@ pub struct KindCfg {
     pub numbering: Option<Numbering>,
     /// Commit trailer key added by the prepare-commit-msg hook, e.g. `Decision`.
     pub trailer: Option<String>,
+    /// Default review date for new entries of this kind, relative to their date: `90d`, `12w`,
+    /// `6m` (months of 30 days) or `1y`. Unset (the default): no review date.
+    pub review_after: Option<String>,
+}
+
+/// Days in a `review_after` period (`90d`, `12w`, `6m`, `1y`).
+pub fn period_days(text: &str) -> Option<i64> {
+    let t = text.trim();
+    let (n, unit) = t.split_at(t.find(|c: char| !c.is_ascii_digit())?);
+    let n: i64 = n.parse().ok().filter(|n| *n > 0)?;
+    Some(
+        n * match unit.trim() {
+            "d" => 1,
+            "w" => 7,
+            "m" => 30,
+            "y" => 365,
+            _ => return None,
+        },
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -175,6 +199,15 @@ pub struct BriefCfg {
 pub struct FreshnessCfg {
     /// Flag an active decision once this many commits touched its `paths` since its date (0 = off).
     pub threshold_commits: usize,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SearchCfg {
+    /// When `ctx_search` asks the adapters with a search op: "always", or "fallback" — only when the
+    /// local sources found fewer than `min_local_hits` hits (or the caller asks for them).
+    pub adapters: String,
+    pub min_local_hits: usize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
