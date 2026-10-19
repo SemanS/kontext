@@ -2,7 +2,7 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
-## Unreleased
+## 0.3.0 (2026-10-19)
 
 **Knowledge that stays correct after it is written.** The brief and search no longer let a proposal pass for an accepted rule, merging sources no longer drops a different claim that happens to start the same way, and recorded knowledge can now carry a review date and its sources, be challenged and be retired, always through review. Measured on a new [evaluation set](https://github.com/SemanS/kontext/tree/main/tests/eval) of 33 scenarios: 8 passed on 0.2.1 (23 of 64 expectations found, 2 hits wrongly suppressed, 1 noisy); all 33 pass now (69 of 69, none suppressed, no noise).
 

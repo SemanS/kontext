@@ -2,7 +2,7 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## Nevydané
+## 0.3.0 (2026-10-19)
 
 **Znalosti, ktoré ostanú správne aj po zápise.** Brief a vyhľadávanie už nenechajú návrh vyzerať ako prijaté pravidlo, spájanie zdrojov už nezahodí iné tvrdenie len preto, že začína rovnako, a zaznamenané znalosti môžu niesť termín kontroly a svoje zdroje, dajú sa napadnúť a vyradiť, vždy cez review. Merané novou [evaluačnou sadou](https://github.com/SemanS/kontext/tree/main/tests/eval) s 33 scenármi: na 0.2.1 prešlo 8 (nájdených 23 zo 64 očakávaní, 2 výsledky nesprávne potlačené, 1 so šumom); teraz prejde všetkých 33 (69 zo 69, nič potlačené, žiadny šum).
 
