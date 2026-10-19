@@ -184,10 +184,23 @@ rank = { "<kx:2026-01-10-orders-live-in-postgresql>" = 2 }
 [[scenario]]
 name = "query with an exact phrase"
 item = "3.3"
-pending = "3.3"
 [[scenario.step]]
 run = ["search", "idempotency key per checkout attempt"]
 rank = { "<kx:2026-02-03-retry-payments-with-idempotency-keys>" = 1 }
+
+[[scenario]]
+name = "query with an exact phrase from an incident"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "client certificate expired"]
+rank = { "<kx:2026-04-02-checkout-outage-from-an-expired-certificate>" = 1 }
+
+[[scenario]]
+name = "query in own words about money"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "never store money as floating point numbers"]
+rank = { "<kx:money-is-integer-cents>" = 1 }
 
 [[scenario]]
 name = "why a path is the way it is"
