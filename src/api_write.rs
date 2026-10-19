@@ -409,6 +409,12 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
         let (mut e, n, notes, evidence) = if let Some(id) = candidate {
             let cand = inbox.get(id).ok_or_else(|| error("not_found", "no such inbox candidate"))?;
             owned(app, &cand)?;
+            if cand.kind == "challenge" {
+                return Err(error(
+                    "invalid_input",
+                    "a challenge is not an entry: resolve it with drafts.retire or by staging an entry that supersedes the challenged one",
+                ));
+            }
             journal.candidate_id = Some(cand.id.clone());
             (cand, 0, Vec::new(), Vec::new())
         } else {

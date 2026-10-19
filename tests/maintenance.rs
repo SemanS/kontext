@@ -195,6 +195,8 @@ fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
     assert_eq!(inbox["entries"][0]["kind"], "challenge");
     assert_eq!(inbox["entries"][0]["extra"]["against"], "2026-01-10-use-cron");
     assert_eq!(inbox["entries"][0]["extra"]["against_revision"], head.as_str());
+    let staged = r.api("drafts.stage", json!({"operation_id":"stage-challenge","candidate_id":cid}));
+    assert_eq!(staged["error"]["code"], "invalid_input", "{staged}");
     let o = r.cmd(env!("CARGO_BIN_EXE_kontext")).args(["promote", &cid]).output().unwrap();
     assert!(!o.status.success() && String::from_utf8_lossy(&o.stderr).contains("is a challenge"));
     assert_eq!(r.read(".ai/decisions/2026-01-10-use-cron.md"), original, "nothing changed in place");
