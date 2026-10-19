@@ -151,6 +151,7 @@ fn tool_list() -> Vec<Value> {
                 "source": s("Where it was found, e.g. thread claude:4f1c2a9b (kept in the inbox only)"),
                 "status": s("Decisions: proposed | accepted (default)"),
                 "review_by": s("When the entry should be looked at again, YYYY-MM-DD (a temporary rule, a workaround); optional"),
+                "evidence": {"type": "array", "description": "Sources it rests on: {ref, quote?}. ref is pr:<id>, issue:<id>, task:<id>, code:<repo>@<rev>:<path>#L<a>-<b> or url:<url>; a quote (≤200 chars) of a code ref is checked against that revision", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "quote": {"type": "string"}}, "required": ["ref"]}},
                 "promote": {"type": "boolean", "description": "Write into the repo store now instead of the inbox"}
             }, "required": ["kind", "title", "body"]}
         }),
@@ -312,6 +313,19 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 source: str_arg(args, "source"),
                 commits: list_arg(args, "commits"),
                 review_by: str_arg(args, "review_by"),
+                evidence: args
+                    .get("evidence")
+                    .and_then(Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|i| {
+                                let r = i.as_str().or_else(|| i.get("ref").and_then(Value::as_str))?;
+                                Some((r.to_string(), i.get("quote").and_then(Value::as_str).map(String::from)))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             };
             let out = ops::capture(app, req)?;
             let mut text = if out.promoted {

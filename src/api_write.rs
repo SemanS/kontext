@@ -35,7 +35,27 @@ fn strings(input: &Value, key: &str) -> Result<Vec<String>> {
         _ => Err(error("invalid_input", format!("{key} must be an array"))),
     }
 }
-fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<(Entry, usize, Vec<String>)> {
+fn evidence_input(value: &Value) -> Result<Vec<(String, Option<String>)>> {
+    let bad = || error("invalid_input", "evidence must be an array of {ref, quote?} objects with single-line strings");
+    match value.get("evidence") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                let reference = item.get("ref").and_then(Value::as_str).filter(|s| !s.contains(['\r', '\n'])).ok_or_else(bad)?;
+                let quote = match item.get("quote") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(q)) if !q.contains(['\r', '\n']) => Some(q.clone()),
+                    _ => return Err(bad()),
+                };
+                Ok((reference.to_string(), quote))
+            })
+            .collect(),
+        Some(_) => Err(bad()),
+    }
+}
+
+fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<ops::Prepared> {
     if !value.is_object() {
         return Err(error("invalid_input", "entry must be an object"));
     }
@@ -65,11 +85,13 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<(Entry, usi
         supersedes: strings(value, "supersedes")?,
         commits: strings(value, "commits")?,
         review_by: optional(value, "review_by")?.map(String::from),
+        evidence: evidence_input(value)?,
         origin: "application".into(),
         source: source.map(String::from),
         ..Default::default()
     };
-    let (mut entry, redactions, notes) = ops::prepare_capture(app, req).map_err(|e| error("invalid_input", e.to_string()))?;
+    let (mut entry, redactions, notes, evidence) = ops::prepare_capture(app, req).map_err(|e| error("invalid_input", e.to_string()))?;
+    let checked_refs: Option<Vec<String>> = (!evidence.is_empty()).then(|| evidence.iter().map(|c| c.reference.clone()).collect());
     if optional(value, "status")?.is_none() && entry.kind == "decision" {
         entry.status = Some("proposed".into());
     }
@@ -138,6 +160,14 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<(Entry, usi
                 ),
                 _ => return Err(error("invalid_input", "extra values must be strings or string arrays")),
             };
+            // references given as plain extra keep their place; checked evidence is added after them
+            let fm = match (k.as_str(), fm, &checked_refs) {
+                ("external_refs", FmValue::List(mut given), Some(checked)) => {
+                    given.extend(checked.iter().filter(|r| !given.contains(r)).cloned().collect::<Vec<_>>());
+                    FmValue::List(given)
+                }
+                (_, fm, _) => fm,
+            };
             entry.set_extra(k, fm);
         }
     }
@@ -146,7 +176,7 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<(Entry, usi
             return Err(error("invalid_input", "paths must be repository-relative paths or globs"));
         }
     }
-    Ok((entry, redactions, notes))
+    Ok((entry, redactions, notes, evidence))
 }
 
 fn is_initialized(app: &App) -> bool {
@@ -175,6 +205,8 @@ struct Journal {
     notes: Vec<String>,
     #[serde(default)]
     redactions: usize,
+    #[serde(default)]
+    evidence: Value,
 }
 #[derive(Serialize, Deserialize)]
 struct Change {
@@ -294,7 +326,7 @@ fn operation_get(app: &App, input: &Value) -> Result<Value> {
 }
 
 fn capture(app: &App, input: &Value) -> Result<Value> {
-    let (entry, redactions, notes) = prepare(app, input.get("entry").unwrap_or(&Value::Null), optional(input, "source")?)?;
+    let (entry, redactions, notes, evidence) = prepare(app, input.get("entry").unwrap_or(&Value::Null), optional(input, "source")?)?;
     if !is_initialized(app) && entry.visibility.as_deref() != Some("private") {
         return Err(error("not_initialized", "run setup before capturing team knowledge"));
     }
@@ -326,7 +358,7 @@ fn capture(app: &App, input: &Value) -> Result<Value> {
         ops::kick_outbox(app);
         e
     };
-    let result = json!({"id":entry.id,"location":format!("inbox:{}",entry.id),"entry":local_entry_json(&entry,"local"),"notes":notes,"redactions":redactions,"replayed":false});
+    let result = json!({"id":entry.id,"location":format!("inbox:{}",entry.id),"entry":local_entry_json(&entry,"local"),"notes":notes,"redactions":redactions,"evidence":evidence,"replayed":false});
     journal.result = Some(result.clone());
     if let Some(p) = receipt {
         save(&p, &journal)?;
@@ -361,11 +393,11 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
         if candidate.is_some() && input.get("entry").is_some_and(|v| !v.is_null()) {
             return Err(error("invalid_input", "provide entry or candidate_id, not both"));
         }
-        let (mut e, n, notes) = if let Some(id) = candidate {
+        let (mut e, n, notes, evidence) = if let Some(id) = candidate {
             let cand = inbox.get(id).ok_or_else(|| error("not_found", "no such inbox candidate"))?;
             owned(app, &cand)?;
             journal.candidate_id = Some(cand.id.clone());
-            (cand, 0, Vec::new())
+            (cand, 0, Vec::new(), Vec::new())
         } else {
             let mut draft = input.get("entry").cloned().unwrap_or(Value::Null);
             if draft.is_object() && draft.get("kind").is_none_or(Value::is_null) {
@@ -417,6 +449,7 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
         journal.markdown = Some(e.markdown());
         journal.notes = notes.clone();
         journal.redactions = n;
+        journal.evidence = serde_json::to_value(&evidence)?;
         save(&receipt, &journal)?;
         (e, n, notes)
     };
@@ -448,7 +481,8 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
     // Preserve canonical parsed form in responses (including ADR field styles).
     entry = Entry::parse(&entry.rel_path, &entry.markdown(), &entry.kind);
     let result = json!({"entry":entry_json_in(app,&entry)?,"path":entry.rel_path,"staged":true,"publication":"staged","replayed":false,
-        "related":journal.related.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),"notes":notes,"redactions":redactions});
+        "related":journal.related.iter().map(|c| c.path.clone()).collect::<Vec<_>>(),"notes":notes,"redactions":redactions,
+        "evidence":if journal.evidence.is_null() { json!([]) } else { journal.evidence.clone() }});
     journal.result = Some(result.clone());
     save(&receipt, &journal)?;
     Ok(result)
@@ -460,7 +494,7 @@ fn local_entry_json(entry: &Entry, state: &str) -> Value {
 }
 
 fn formalize(app: &App, input: &Value) -> Result<Value> {
-    let (mut entry, _, mut notes) = prepare(app, input.get("entry").unwrap_or(&Value::Null), None)?;
+    let (mut entry, _, mut notes, _) = prepare(app, input.get("entry").unwrap_or(&Value::Null), None)?;
     let explicit = optional(input, "llm")?;
     let sources = strings(input, "sources")?;
     let context = optional(input, "context")?.unwrap_or("");
@@ -497,7 +531,7 @@ fn guidance(app: &App, input: &Value) -> Result<Value> {
     );
     let value = distill::generate_json(app, optional(input, "llm")?, &prompt)?;
     let tags = optional(input, "profile_tag")?.map(|s| vec![s.to_string()]).unwrap_or_default();
-    let (entry, _, notes) =
+    let (entry, _, notes, _) =
         prepare(app, &json!({"kind":"convention","title":required(&value,"title")?,"body":required(&value,"body")?,"tags":tags}), None)?;
     Ok(json!({"entry":local_entry_json(&entry,"draft"),"notes":notes}))
 }

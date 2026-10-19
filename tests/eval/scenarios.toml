@@ -299,10 +299,11 @@ expect = ['"review_by":"20']
 [[scenario]]
 name = "evidence: sources counted in the brief, listed on read"
 item = "2.1"
-pending = "2.1"
 [[scenario.step]]
-run = ["api", "drafts.stage", '{"operation_id":"ev-1","entry":{"kind":"decision","status":"accepted","title":"Refund through the original payment method","body":"Refunds go back to the card or wallet that paid.","paths":["src/payments/**"],"evidence":[{"ref":"task:shop-12"},{"ref":"task:shop-15"},{"ref":"pr:41"}]}}']
+run = ["api", "drafts.stage", '{"operation_id":"ev-1","requested_path":".ai/decisions/refund-through-the-original-payment-method.md","entry":{"kind":"decision","status":"accepted","title":"Refund through the original payment method","body":"Refunds go back to the card or wallet that paid.","paths":["src/payments/**"],"evidence":[{"ref":"task:shop-12"},{"ref":"task:shop-15"},{"ref":"pr:41"}]}}']
 expect = ['"external_refs":["task:shop-12","task:shop-15","pr:41"]']
+[[scenario.step]]
+git = ["commit", "-qm", "refunds"]
 [[scenario.step]]
 run = ["brief", "--focus", "src/payments", "--no-adapters"]
 expect = ["Refund through the original payment method (3 sources)"]
@@ -313,7 +314,6 @@ expect = ["sources (3): task:shop-12, task:shop-15, pr:41"]
 [[scenario]]
 name = "evidence: a code quote is verified against its revision"
 item = "2.1"
-pending = "2.1"
 [[scenario.step]]
 run = ["api", "drafts.stage", '{"operation_id":"ev-2","entry":{"kind":"learning","title":"Payment retries share one key","body":"Retries reuse the attempt key.","evidence":[{"ref":"code:shop@{head}:src/payments/retry.rs#L1","quote":"one idempotency key per checkout attempt"},{"ref":"code:shop@{head}:src/payments/retry.rs#L1-2","quote":"two keys per attempt"},{"ref":"url:https://example.invalid/provider-docs","quote":"keys expire"}]}}']
 expect = ['"verification":"verified"', '"verification":"quote_not_found"', '"verification":"unverifiable"']

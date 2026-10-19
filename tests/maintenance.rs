@@ -106,5 +106,35 @@ fn brief_and_search_say_when_an_entry_is_not_accepted_or_not_approved() {
     let brief = r.kontext(&["brief", "--focus", "src", "--no-adapters"]);
     assert!(brief.contains("Use postgres for orders (local, unapproved)"), "{brief}");
     assert!(r.kontext(&["search", "postgres orders"]).contains("local, unapproved"));
-    let _ = json!({});
+}
+
+#[test]
+fn evidence_is_kept_as_references_with_checked_quotes() {
+    let r = Repo::new();
+    r.write("src/retry.rs", "// one key per attempt\npub fn retry() {}\n");
+    let head = r.commit("seed");
+    let input = json!({"operation_id":"ev","requested_path":".ai/decisions/retry-with-one-key.md","entry":{
+        "kind":"decision","title":"Retry with one key","body":"Each attempt reuses its key.",
+        "extra":{"external_refs":["ticket://7"]},
+        "evidence":[{"ref":"task:shop-1"},{"ref":format!("code:maint@{head}:src/retry.rs#L1"),"quote":"one key per attempt"},
+                    {"ref":format!("code:maint@{head}:src/retry.rs"),"quote":"two keys"},{"ref":"code:elsewhere@abc:x.rs","quote":"anything"}]}});
+    let out = r.ok("drafts.stage", input);
+    let checked: Vec<&str> = out["evidence"].as_array().unwrap().iter().map(|c| c["verification"].as_str().unwrap()).collect();
+    assert_eq!(checked, vec!["none", "verified", "quote_not_found", "unverifiable"]);
+    let refs = out["entry"]["extra"]["external_refs"].as_array().unwrap();
+    assert_eq!(refs[0], "ticket://7", "plain references keep their place");
+    assert_eq!(refs.len(), 5);
+    let file = r.read(".ai/decisions/retry-with-one-key.md");
+    assert!(file.contains("## Evidence"), "{file}");
+    assert!(file.contains("\"one key per attempt\" (verified)"), "{file}");
+    assert!(file.contains("\"two keys\" (quote not found at that revision)"), "{file}");
+    assert!(out["notes"].to_string().contains("not at that revision"));
+    let bad = r.api(
+        "drafts.stage",
+        json!({"operation_id":"bad","entry":{"kind":"learning","title":"T","body":"B","evidence":[{"ref":"someone@example.com"}]}}),
+    );
+    assert_eq!(bad["error"]["code"], "invalid_input", "{bad}");
+    r.commit("evidence");
+    assert!(r.kontext(&["brief", "--no-adapters"]).contains("Retry with one key (proposed; 5 sources)"));
+    assert!(r.kontext(&["read", "kx:retry-with-one-key", "--level", "1"]).contains("sources (5): ticket://7, task:shop-1"));
 }

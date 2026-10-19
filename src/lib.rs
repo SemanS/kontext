@@ -10,6 +10,7 @@ mod config;
 mod connect;
 mod distill;
 mod events;
+mod evidence;
 mod freshness;
 mod glob;
 mod hooks;

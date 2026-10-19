@@ -177,9 +177,14 @@ impl Marks {
     }
 
     /// ` (proposed; local, unapproved)` after a title, or nothing for accepted, approved knowledge.
+    /// The brief also counts the sources an entry rests on; their detail is in `ctx_read`.
     pub(crate) fn suffix(&self, e: &Entry) -> String {
         let mut all: Vec<String> = e.status.iter().filter(|s| s.as_str() != "accepted").cloned().collect();
         all.extend(self.flags(e));
+        let sources = e.extra.iter().find(|(k, _)| k == "external_refs").map(|(_, v)| v.as_list().len()).unwrap_or(0);
+        if sources > 0 {
+            all.push(format!("{sources} source{}", if sources == 1 { "" } else { "s" }));
+        }
         if all.is_empty() { String::new() } else { format!(" ({})", all.join("; ")) }
     }
 
@@ -350,6 +355,13 @@ fn render_entry(e: &Entry, level: u8) -> String {
             if !e.paths.is_empty() {
                 let _ = write!(s, "\npaths: {}", e.paths.join(", "));
             }
+            let refs = e.extra.iter().find(|(k, _)| k == "external_refs").map(|(_, v)| v.as_list()).unwrap_or_default();
+            if !refs.is_empty() {
+                let _ = write!(s, "\nsources ({}): {}", refs.len(), refs.join(", "));
+            }
+            if let Some(r) = &e.review_by {
+                let _ = write!(s, "\nreview by: {r}");
+            }
             let _ = write!(s, "\n\n{}", util::truncate_chars(e.body.trim(), 4000));
             s
         }
@@ -445,6 +457,9 @@ pub struct CaptureReq {
     pub commits: Vec<String>,
     /// When it should be looked at again (`YYYY-MM-DD`); else the kind's `review_after` default.
     pub review_by: Option<String>,
+    /// Where it comes from: references (`pr:12`, `task:x`, `code:<repo>@<rev>:<path>#L1-3`, `url:…`)
+    /// with an optional short quote.
+    pub evidence: Vec<(String, Option<String>)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -457,8 +472,10 @@ pub struct CaptureOut {
     pub notes: Vec<String>,
 }
 
+pub(crate) type Prepared = (Entry, usize, Vec<String>, Vec<crate::evidence::Checked>);
+
 /// Canonical validation, normalization and redaction for every capture client.
-pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, usize, Vec<String>)> {
+pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared> {
     // `--paths a,` or an agent's [""] must not become an entry's paths, tags or supersedes
     for list in [&mut req.paths, &mut req.tags, &mut req.supersedes] {
         list.iter_mut().for_each(|v| *v = v.trim().to_string());
@@ -543,11 +560,30 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<(Entry, 
     if let Some(src) = req.source.as_deref().filter(|s| !s.is_empty()) {
         entry.set_extra("source", crate::store::FmValue::Str(src.to_string()));
     }
-    Ok((entry, redactions, notes))
+    let masked: Vec<(String, Option<String>)> = req
+        .evidence
+        .iter()
+        .map(|(r, q)| (crate::distill::mask_text(app, r), q.as_deref().map(|q| crate::distill::mask_text(app, q))))
+        .collect();
+    let evidence = crate::evidence::check(app, &masked)?;
+    if !evidence.is_empty() {
+        let mut refs: Vec<String> = Vec::new();
+        for c in &evidence {
+            if !refs.contains(&c.reference) {
+                refs.push(c.reference.clone());
+            }
+            if c.verification == "quote_not_found" {
+                notes.push(format!("evidence: the quote for {} is not at that revision; it is marked, check it", c.reference));
+            }
+        }
+        entry.set_extra("external_refs", crate::store::FmValue::List(refs));
+        entry.body.push_str(&crate::evidence::section(&evidence));
+    }
+    Ok((entry, redactions, notes, evidence))
 }
 
 pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
-    let (mut entry, redactions, mut notes) = prepare_capture(app, req.clone())?;
+    let (mut entry, redactions, mut notes, _) = prepare_capture(app, req.clone())?;
     let visibility = entry.visibility.clone().unwrap_or_else(|| "team".into());
     let kind = entry.kind.clone();
     // similar entries already in the store?
