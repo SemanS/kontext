@@ -323,7 +323,6 @@ expect = ['"verification":"verified"', '"verification":"quote_not_found"', '"ver
 [[scenario]]
 name = "changed since the last brief, then quiet"
 item = "2.5"
-pending = "2.5"
 [[scenario.step]]
 run = ["brief", "--no-adapters"]
 [[scenario.step]]
@@ -357,7 +356,6 @@ forbid = ["## Changed since", "## Changed in the last"]
 [[scenario]]
 name = "changed recently when the brief cache is missing"
 item = "2.5"
-pending = "2.5"
 [[scenario.step]]
 write = ".ai/conventions/amounts-carry-a-currency.md"
 content = """---

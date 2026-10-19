@@ -138,3 +138,40 @@ fn evidence_is_kept_as_references_with_checked_quotes() {
     assert!(r.kontext(&["brief", "--no-adapters"]).contains("Retry with one key (proposed; 5 sources)"));
     assert!(r.kontext(&["read", "kx:retry-with-one-key", "--level", "1"]).contains("sources (5): ticket://7, task:shop-1"));
 }
+
+#[test]
+fn the_brief_says_what_changed_since_the_last_one() {
+    let r = Repo::new();
+    r.decision("2026-01-10-use-cron", "Use cron for exports", "accepted", "");
+    r.commit("seed");
+    // no cache yet: the last 14 days, which includes the seed commit
+    let first = r.kontext(&["brief", "--no-adapters"]);
+    assert!(first.contains("## Changed in the last 14 days\n- [2026-01-10-use] Use cron for exports (new)"), "{first}");
+    let quiet = r.kontext(&["brief", "--no-adapters"]);
+    assert!(!quiet.contains("## Changed"), "{quiet}");
+    let out = r.ok("drafts.stage", json!({"operation_id":"q","requested_path":".ai/decisions/2026-02-01-use-a-queue.md","entry":{
+        "kind":"decision","status":"accepted","title":"Use a queue for exports","body":"A queue replaces cron.","supersedes":["2026-01-10-use-cron"]}}));
+    assert_eq!(out["related"], json!([".ai/decisions/2026-01-10-use-cron.md"]));
+    let before = r.git(&["rev-parse", "--short=8", "HEAD"]);
+    r.commit("queue");
+    let second = r.kontext(&["brief", "--no-adapters"]);
+    assert!(
+        second.contains(&format!("## Changed since {before}\n- [2026-02-01-use] Use a queue for exports (new, supersedes [2026-01-10-use] Use cron for exports)\n")),
+        "{second}"
+    );
+    assert!(!r.kontext(&["brief", "--no-adapters"]).contains("## Changed"));
+    // a full budget drops the section first, and it stays due
+    r.decision("2026-03-01-keep-csv", "Keep CSV as the export format", "accepted", "");
+    for i in 0..8 {
+        r.decision(
+            &format!("2026-03-0{}-rule-{i}", i + 2),
+            &format!("Rule number {i} about the nightly export pipeline, its retries, its alerting and its storage layout"),
+            "accepted",
+            "",
+        );
+    }
+    r.commit("csv");
+    let tight = r.kontext(&["brief", "--no-adapters", "--budget", "300"]);
+    assert!(!tight.contains("## Changed"), "{tight}");
+    assert!(r.kontext(&["brief", "--no-adapters"]).contains("Keep CSV as the export format (new)"));
+}

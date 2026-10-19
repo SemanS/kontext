@@ -858,6 +858,78 @@ fn local_notes(app: &App, focus: &Focus, h2: &str, prefix: &str) -> String {
     s
 }
 
+/// Knowledge that changed since this worktree's last brief: entries added, changed or removed between
+/// the knowledge-store HEAD the last brief saw (a disposable cache in `.git/kontext`) and HEAD now.
+/// Without the cache, the last 14 days. `None` when nothing changed. At most five lines.
+fn changed_since(app: &App, entries: &[Entry], refs: &dyn Fn(&Entry) -> String) -> Option<(String, Option<String>)> {
+    let head = app.repo.head()?;
+    let cache = app.repo.worktree_state_dir().join("brief-head");
+    let seen = std::fs::read_to_string(&cache).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if seen.as_deref() == Some(head.as_str()) {
+        return None;
+    }
+    let store = app.store();
+    let mut dirs: Vec<String> = app.cfg().kind_names().iter().map(|k| app.cfg().kind_path(k)).collect();
+    dirs.sort();
+    dirs.dedup();
+    let known = seen.as_deref().filter(|s| app.repo.git_status_ok(&["cat-file", "-e", &format!("{s}^{{commit}}")]));
+    let (heading, listing) = match known {
+        Some(s) => {
+            let mut args = vec!["diff", "--name-status", "--no-renames", s, &head, "--"];
+            args.extend(dirs.iter().map(String::as_str));
+            (format!("Changed since {}", &s[..s.len().min(8)]), app.repo.git(&args).ok()?)
+        }
+        None => {
+            let since = (chrono::Local::now() - chrono::Duration::days(14)).format("--since=%Y-%m-%dT%H:%M:%S").to_string();
+            let mut args = vec!["log", &since, "--name-status", "--no-renames", "--format=", &head, "--"];
+            args.extend(dirs.iter().map(String::as_str));
+            ("Changed in the last 14 days".to_string(), app.repo.git(&args).ok()?)
+        }
+    };
+    // newest first in a log; a path once, with its latest state
+    let mut seen_paths = HashSet::new();
+    let mut changes: Vec<(char, String)> = Vec::new();
+    for line in listing.lines() {
+        let Some((st, path)) = line.split_once('\t') else { continue };
+        let st = st.chars().next().unwrap_or('M');
+        if store.is_entry_path(path) && seen_paths.insert(path.to_string()) {
+            changes.push((st, path.to_string()));
+        }
+    }
+    if changes.is_empty() {
+        return Some((String::new(), Some(head)));
+    }
+    let superseders: Vec<&Entry> =
+        changes.iter().filter_map(|(_, p)| entries.iter().find(|e| &e.rel_path == p)).filter(|e| !e.supersedes.is_empty()).collect();
+    let mut lines: Vec<String> = Vec::new();
+    for (st, path) in &changes {
+        match entries.iter().find(|e| &e.rel_path == path) {
+            Some(e) => {
+                // the replaced entry is named on its replacement's line
+                if superseders.iter().any(|n| n.supersedes.iter().any(|s| e.id == *s || e.id.starts_with(&format!("{s}-")))) {
+                    continue;
+                }
+                let what = if *st == 'A' { "new" } else { "changed" };
+                let replaces: Vec<String> = e
+                    .supersedes
+                    .iter()
+                    .map(|s| entries.iter().find(|o| o.id == *s).map(|o| format!("[{}] {}", refs(o), o.title)).unwrap_or_else(|| s.clone()))
+                    .collect();
+                let replaces = if replaces.is_empty() { String::new() } else { format!(", supersedes {}", replaces.join(", ")) };
+                lines.push(format!("- [{}] {} ({what}{replaces})", refs(e), e.title));
+            }
+            None if *st == 'D' => lines.push(format!("- {path} (removed)")),
+            None => {}
+        }
+    }
+    let total = lines.len();
+    lines.truncate(5);
+    if total > 5 {
+        lines.push(format!("- … {} more: `ctx_log`", total - 5));
+    }
+    Some((format!("\n## {heading}\n{}\n", lines.join("\n")), Some(head)))
+}
+
 fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, part: Part, elsewhere: &[Elsewhere]) -> String {
     let cfg = app.cfg();
     let (entries, errors) = app.entries();
@@ -988,6 +1060,10 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         all.extend(nested_rules.iter().map(|s| format!("{}{s}", part.prefix)));
         add(&mut out, &format!("Rules for agents: read {}\n", all.join(", ")), &mut budget_left);
     }
+    // what changed since the last brief goes here, but only if room is left once everything else
+    // is in: it is the first thing a full budget drops (and then it stays due for the next brief)
+    let changed_at = out.len();
+    let changed = if part.section || !app.is_set_up() { None } else { changed_since(app, &entries, &|e: &Entry| reference(e)) };
 
     // the repositories this work reaches into: a submodule's team knowledge gets its own section,
     // anything further a pointer
@@ -1218,6 +1294,21 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
                     add(&mut out, &format!("\n## From {name}\n{clipped}\n"), &mut budget_left);
                 }
             }
+        }
+    }
+
+    if let Some((section, head)) = changed {
+        const OWN_BUDGET: isize = 200;
+        let cost = util::est_tokens(&section) as isize;
+        let delivered = section.is_empty() || (cost <= OWN_BUDGET && cost <= budget_left);
+        if delivered && !section.is_empty() {
+            out.insert_str(changed_at, &section);
+            budget_left -= cost;
+        }
+        if delivered && let Some(head) = head {
+            let dir = app.repo.worktree_state_dir();
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = util::write_atomic(&dir.join("brief-head"), &head);
         }
     }
 
