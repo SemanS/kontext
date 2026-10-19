@@ -43,6 +43,7 @@ kind: decision
 title: Prices are integer cents
 status: accepted            # proposed | accepted | superseded | deprecated | rejected
 date: 2026-09-28
+review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -91,7 +92,43 @@ ID je názov súboru bez prípony (alebo `id` vo front matter). Všade, kde sa �
 
 ## Stavy a nahrádzanie
 
-Rozhodnutia sú *aktívne*, pokiaľ nie sú `superseded`, `deprecated` alebo `rejected`. Keď zachytíš rozhodnutie so `supersedes: [0003]`, starý záznam sa označí ako `superseded` a dostane spätný odkaz (`superseded_by`); pri ADR v štýle polí sa riadok `**Status:**` upraví na mieste. `kontext log --all` ukáže reťazce.
+Záznamy sú *aktívne*, pokiaľ nie sú `superseded`, `deprecated` alebo `rejected`. Keď zachytíš záznam so `supersedes: [0003]`, starý záznam sa označí ako `superseded` a dostane spätný odkaz (`superseded_by`); pri ADR v štýle polí sa riadok `**Status:**` upraví na mieste. `kontext log --all` ukáže reťazce. Funguje to pre každý druh, nielen pre rozhodnutia.
+
+Záznam, ktorý už neplatí a nemá náhradu, sa *vyradí*: jeho stav bude `deprecated` a pribudne sekcia `## Retired` s dátumom a dôvodom, takže tvrdenie aj dôvod, prečo padlo, ostanú čitateľné. Nič sa neprepisuje na mieste. Vyradenie prechádza review ako každá zmena: agent záznam [napadne](./03-capture-and-review.md#challenges) a vyradenie sa stagne s commitom (`ctx_prepare_commit retire=[id]` alebo `drafts.retire` v [aplikačnom API](../reference/05-application-api.md#retire)).
+
+## Termín kontroly {#review-by}
+
+`review_by: YYYY-MM-DD` hovorí, kedy sa má niekto na záznam znova pozrieť: pravidlo, ktoré platí počas migrácie, dočasné obchádzanie po incidente. Je to termín kontroly, nie koniec platnosti. Po ňom je záznam označený *review due* v briefe (na svojom riadku aj v *State*), vo vyhľadávaní a v `kontext status`; nič sa neskryje. Potvrď ho (posuň dátum), nahraď alebo vyraď. Zlý dátum alebo dátum pred `date` záznamu je chyba validácie. V pochybnostiach pole vynechaj.
+
+Druh môže novým záznamom dávať predvolenú lehotu cez `review_after` (`90d`, `12w`, `6m`, `1y`), napríklad pre incidenty:
+
+```toml
+[store.kinds.incident]
+review_after = "90d"
+```
+
+Bez nastavenia je vypnutá.
+
+## Evidencia {#evidence}
+
+Záznam môže povedať, odkiaľ pochádza. Jeho zdroje sú odkazy v `external_refs` (vo front matter, alebo v riadku *Kontext metadata* pri ADR v štýle polí):
+
+| Odkaz | Príklad |
+| --- | --- |
+| pull request, issue, úloha | `pr:123`, `issue:45`, `task:krk-335` |
+| riadky súboru v revízii | `code:kontext@3f2a91c:src/x.rs#L10-20` |
+| čokoľvek iné, čo sa dá otvoriť | `url:https://…` |
+
+Odkaz na súbor bez revízie sa časom posunie, preto `code:` revíziu vždy nesie. Zachytenie môže k odkazu pridať krátky citát (do 200 znakov). Citát pri odkaze `code:` do tohto repozitára sa pri zachytení alebo stagingu overí cez `git show <rev>:<cesta>`; čokoľvek iné sa overiť nedá a tak sa aj označí, nikdy sa neodmietne. Citáty a ich výsledok idú do sekcie `## Evidence` v tele, kde ich číta reviewer:
+
+```markdown
+## Evidence
+
+- code:kontext@3f2a91c:src/payments/retry.rs#L4 — "one idempotency key per checkout attempt" (verified)
+- url:https://provider.example/docs/keys — "keys expire after 24 hours" (not verified)
+```
+
+Brief povie iba, koľko zdrojov záznam má (`(3 sources)`); `ctx_read` na úrovni 1 ich vypíše. E-mailové adresy a id sessions do odkazov nepatria.
 
 ## Záznamy nech sú stručné
 

@@ -21,3 +21,11 @@ reported but not asserted; every other scenario must pass in `cargo test` (and C
 Milliseconds come from a debug build on a developer machine and are only comparable within one run.
 
 [`baseline.md`](baseline.md) is the table measured on 0.2.1, before the knowledge-maintenance work.
+
+| | scenarios passing | expectations found | wrongly suppressed | noise |
+| --- | --- | --- | --- | --- |
+| 0.2.1 ([baseline](baseline.md)) | 8 / 29 | 23 / 64 | 2 | 1 |
+| 0.3.0 | 33 / 33 | 69 / 69 | 0 | 0 |
+
+Four scenarios were added with the work they measure (two ranking checks for the phrase bonus,
+the hub that is named in fallback mode, and a model answer about entries it was not shown).

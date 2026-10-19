@@ -43,6 +43,7 @@ kind: decision
 title: Prices are integer cents
 status: accepted            # proposed | accepted | superseded | deprecated | rejected
 date: 2026-09-28
+review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -91,7 +92,43 @@ The id is the file stem (or the front-matter `id`). Anywhere an id is expected y
 
 ## Statuses and supersession
 
-Decisions are *active* unless `superseded`, `deprecated` or `rejected`. Capturing a decision with `supersedes: [0003]` marks the old entry `superseded` and links it back (`superseded_by`); for fields-style ADRs the `**Status:**` line is edited in place. `kontext log --all` shows the chains.
+Entries are *active* unless `superseded`, `deprecated` or `rejected`. Capturing an entry with `supersedes: [0003]` marks the old entry `superseded` and links it back (`superseded_by`); for fields-style ADRs the `**Status:**` line is edited in place. `kontext log --all` shows the chains. This works for every kind, not only decisions.
+
+An entry that no longer holds and has no replacement is *retired*: its status becomes `deprecated` and a `## Retired` section with the date and the reason is appended, so the claim and why it was dropped stay readable. Nothing is rewritten in place. Retirement goes through review like any change: an agent [challenges](./03-capture-and-review.md#challenges) the entry, and the retirement is staged with the commit (`ctx_prepare_commit retire=[id]`, or `drafts.retire` in the [application API](../reference/05-application-api.md#retire)).
+
+## Review dates {#review-by}
+
+`review_by: YYYY-MM-DD` says when someone should look at an entry again: a rule that holds while a migration runs, an incident's temporary workaround. It is a review date, not an expiry. Once it passes, the entry is marked *review due* in the brief (on its line and in *State*), in search and in `kontext status`; nothing is hidden. Confirm it (move the date), supersede it or retire it. A malformed date, or one before the entry's `date`, is a validation error. When in doubt, leave the field out.
+
+A kind can give its new entries a default with `review_after` (`90d`, `12w`, `6m`, `1y`), for example for incidents:
+
+```toml
+[store.kinds.incident]
+review_after = "90d"
+```
+
+It is off unless set.
+
+## Evidence {#evidence}
+
+An entry can say where it comes from. Its sources are references in `external_refs` (kept in the front matter, or in the *Kontext metadata* line of a fields-style ADR):
+
+| Reference | Example |
+| --- | --- |
+| a pull request, an issue, a task | `pr:123`, `issue:45`, `task:krk-335` |
+| lines of a file at a revision | `code:kontext@3f2a91c:src/x.rs#L10-20` |
+| anything else that opens | `url:https://…` |
+
+A file reference without a revision drifts as the file changes, so `code:` always names one. A capture can add a short quote (up to 200 characters) to a reference. A quote of a `code:` reference into this repository is checked with `git show <rev>:<path>` when it is captured or staged; anything else cannot be checked and is marked so, never refused. Quotes and their verdicts go into a `## Evidence` section of the body, where the reviewer reads them:
+
+```markdown
+## Evidence
+
+- code:kontext@3f2a91c:src/payments/retry.rs#L4 — "one idempotency key per checkout attempt" (verified)
+- url:https://provider.example/docs/keys — "keys expire after 24 hours" (not verified)
+```
+
+The brief says only how many sources an entry has (`(3 sources)`); `ctx_read` at level 1 lists them. E-mail addresses and session ids do not belong in references.
 
 ## Keep entries brief
 

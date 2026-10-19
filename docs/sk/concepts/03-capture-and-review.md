@@ -59,11 +59,23 @@ Report vypíše:
 
 1. stagnutú zmenu (alebo pracovný strom, keď nie je nič stagnuté),
 2. zapísané znalosti, ktorých `paths` pokrývajú zmenené súbory (*over, že stále platia*),
-3. kandidátov z inboxu, najprv tých, ktorí sa týkajú zmenených súborov,
-4. výsledky validácie a skenovania tajných údajov pre stagnuté znalosti (chyby commit zablokujú),
-5. dokumenty modulov, ktoré možno treba obnoviť (veľa zmenených súborov alebo pridané/odobrané súbory),
-6. trailery commitu a či ich pridá hook prepare-commit-msg (klon bez hookov kontextu ich potrebuje dopísať ručne, alebo `kontext hooks install`),
-7. pripomienku, keď veľká zmena nenesie vôbec žiadne znalosti.
+3. námietky z tohto worktree a dva spôsoby, ako ich vybaviť ([nižšie](#challenges)),
+4. kandidátov z inboxu, najprv tých, ktorí sa týkajú zmenených súborov,
+5. výsledky validácie a skenovania tajných údajov pre stagnuté znalosti (chyby commit zablokujú),
+6. dokumenty modulov, ktoré možno treba obnoviť (veľa zmenených súborov alebo pridané/odobrané súbory),
+7. trailery commitu a či ich pridá hook prepare-commit-msg (klon bez hookov kontextu ich potrebuje dopísať ručne, alebo `kontext hooks install`),
+8. pripomienku, keď veľká zmena nenesie vôbec žiadne znalosti.
+
+Zachytenie tiež pomenuje zaznamenané záznamy, ktoré môže duplikovať, rozširovať alebo im protirečiť (`related, check: … <kx:id> — governs the same paths (src/pricing/**)`). Je to výzva pozrieť sa, nikdy pokyn nahradiť: či nový záznam niečo nahrádza, rozhoduje autor a reviewer.
+
+## Námietky {#challenges}
+
+Niekedy agent zistí, že zaznamenaná znalosť už neplatí. Povie to cez `ctx_challenge <id> "prečo"` (alebo `kontext challenge`): lokálny kandidát v inboxe druhu `challenge`, voči záznamu a commitu, v ktorom bol prečítaný. Námietka sama nič nemení a povýšiť sa nedá. Brief označí záznam `challenged locally` a `ctx_prepare_commit` ponúkne dva spôsoby, ako ju vybaviť v zmene na review:
+
+- **vyradiť** záznam (`retire=[id]`): jeho súbor dostane stav `deprecated` a poznámku `## Retired` s námietkou ako dôvodom, stagnuté;
+- **nahradiť** ho: zachyť nové pravidlo so `supersedes: [id]` a povýš ho.
+
+Oboje vezme námietku z inboxu spolu s commitom. Ak sa záznam od námietky zmenil, report to povie; námietku, ktorá sa ukázala ako mylná, zahoď. Námietka je vybavená, až keď zmena prejde review a merge, nie keď ju jeden worktree pripravil. Zdieľané námietky s počítaním nezávislých hlasov patria aplikácii, napríklad Peer Hubu; kontext drží lokálnu, posúdenú časť.
 
 ## Review
 

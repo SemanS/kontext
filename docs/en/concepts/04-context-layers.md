@@ -10,6 +10,7 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | --- | --- |
 | Header | project, repository id, branch, *About* (overview summary), *Stack* |
 | Rules for agents | `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, Copilot instructions, and nested `AGENTS.md` files on the focus paths |
+| Changed since … | knowledge added, changed or removed since this worktree's last brief, at most five lines ([below](#changed)) |
 | Decisions | active decisions, most relevant to the focus first, one line each (up to `brief.max_decisions`) |
 | Conventions · Learnings & pitfalls · Incidents | one line each, focus-ranked |
 | Modules | module summaries (up to `brief.max_modules`); for focused modules the start of their overview |
@@ -17,9 +18,29 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Local notes | notes in this clone's inbox (team candidates and private notes) that match the focus, or the newest three |
 | Related docs and history | in a repository without a store, once a search has built the local index: the docs and commits that match the focus |
 | From adapters | sections from adapters that have a `brief` op (e.g. a session primer) |
-| State | inbox counts, bootstrap progress, decisions that may need a refresh, missing git hooks, warnings; its room is kept aside, so a full brief does not drop it |
+| State | inbox counts, bootstrap progress, entries due for review, decisions that may need a refresh, missing git hooks, warnings; its room is kept aside, so a full brief does not drop it |
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags. When every focus path lies in another repository, the brief is that repository's ([Several repositories](09-several-repositories.md)).
+
+### Marks {#marks}
+
+A short line must not let a proposal pass for an accepted rule. An entry's line is marked when it is anything short of accepted, approved knowledge:
+
+| Mark | When |
+| --- | --- |
+| `(proposed)`, `(deprecated)`, … | its status is not `accepted` |
+| `local, unapproved` | its file is new, edited or staged in the working tree: nobody has approved that text yet |
+| `review due` | its [`review_by`](./02-knowledge-store.md#review-by) date has passed |
+| `challenged locally` | this clone's inbox holds a [challenge](./03-capture-and-review.md#challenges) against it |
+| `N sources` | it carries [evidence](./02-knowledge-store.md#evidence) |
+
+Several marks share one pair of parentheses: `Use queues for exports (proposed; local, unapproved)`. An accepted, committed entry carries none, so the common line costs no extra tokens. Search results carry the same marks in their brackets.
+
+### Changed since the last brief {#changed}
+
+Each brief records the commit it saw in a cache of the worktree's local state (`.git/kontext/…/brief-head`). The next brief lists, in at most five lines, the knowledge entries added, changed or removed since then; a new entry that supersedes another names it (`(new, supersedes [0007] Prices are integer cents)`). Without the cache — a new worktree, a deleted cache — it shows the last 14 days instead. A brief without changes has no such section, so a routine step adds nothing.
+
+The section has its own small budget and is the first thing a full brief drops; the cache moves on only when the section was shown, so a dropped change comes up in the next brief.
 
 An entry is referred to by the shortest unique prefix of its id (`[2026-09-28-adapters]` rather than the id that repeats the whole title), or by its ADR number. `ctx_read` resolves either.
 
@@ -34,6 +55,8 @@ A decision is written once, but the code it governs keeps moving. The brief's *S
 ```
 
 Commits from the decision's own day and merge commits are not counted. A commit counts once however many of its files match, and renaming code out of a governed path counts too. Decisions without a `date` or `paths` are never flagged. A flag is a prompt to check, not a verdict: if the decision still holds, nothing needs to change; if it does not, supersede it.
+
+Entries of any kind can also carry a [review date](./02-knowledge-store.md#review-by). Past it, the brief's *State* lists them as *Due for review* and their lines are marked `review due`; `kontext status` lists them all. Both signals live in one place (`src/freshness.rs`).
 
 The counts come from one `git log` for all decisions, from the oldest decision's date (bounded by `index.max_commits`), and are cached per `HEAD` under the worktree's state directory: a brief adds no git call per decision, and none at all until the next commit. Set `threshold_commits = 0` to turn it off.
 

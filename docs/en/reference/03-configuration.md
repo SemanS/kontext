@@ -32,7 +32,7 @@ The user directory is `$KONTEXT_CONFIG_DIR`, else `$XDG_CONFIG_HOME/kontext`, el
 | `index_file` | `true` | maintain `<dir>/README.md` |
 | `max_body_lines` | `80` | warn above this many non-empty body lines (0 = off) |
 
-### `[store.kinds.<kind>]`
+### `[store.kinds.<kind>]` {#store-kinds}
 
 | Key | Default | |
 | --- | --- | --- |
@@ -41,8 +41,15 @@ The user directory is `$KONTEXT_CONFIG_DIR`, else `$XDG_CONFIG_HOME/kontext`, el
 | `style` | `store.style` | |
 | `numbering` | `date` for decisions, `none` otherwise | `date`, `sequential`, `none` |
 | `trailer` | `Decision`, `Convention`, `Learning`, `Incident` | commit trailer key; none for architecture |
+| `review_after` | none | default `review_by` for new entries of this kind, counted from their date: `90d`, `12w`, `6m` (30-day months) or `1y`. Off unless set |
 
 Custom kinds work too: add a table with a `dir`.
+
+```toml
+# temporary workarounds should be looked at again within a quarter
+[store.kinds.incident]
+review_after = "90d"
+```
 
 ## `[sources]`
 
@@ -76,6 +83,18 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | Key | Default | |
 | --- | --- | --- |
 | `threshold_commits` | `20` | flag an active decision once this many commits touched its `paths` since its date; `0` turns it off (see [Freshness](../concepts/04-context-layers.md#freshness)) |
+
+## `[search]` {#search}
+
+| Key | Default | |
+| --- | --- | --- |
+| `adapters` | `always` | when `ctx_search` and `kontext search` ask the adapters with a `search` op: `always`, or `fallback` — only when the local sources found fewer than `min_local_hits` hits. Naming an adapter in `sources`, or passing `adapters: true` (`--adapters`), always asks |
+| `min_local_hits` | `3` | the local hits that are enough in `fallback` mode |
+
+`fallback` saves an adapter's round trip when the local answer is already there (on the evaluation
+set, a hub with one second of latency added about a second to every search in `always` mode and nothing
+in `fallback` mode). It also means a semantic memory is not asked when BM25 found anything, which is
+why `always` stays the default.
 
 ## `[capture]`
 

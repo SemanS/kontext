@@ -50,6 +50,7 @@ Runs scan → history → render → wire → deepen. Safe to re-run.
 | `-s, --source <name>` | all | `local` and/or adapter names (repeatable) |
 | `-n, --limit <n>` | 10 | maximum hits |
 | `--json` | | hits as JSON |
+| `--adapters` | | ask the search adapters even when local hits suffice (see [`[search]`](./03-configuration.md#search)) |
 
 ### `kontext read <uri>`
 
@@ -84,6 +85,11 @@ Runs scan → history → render → wire → deepen. Safe to re-run.
 | `--status <status>` | `proposed` or `accepted` (decisions default to accepted) |
 | `--private` | keep it personal (never promoted) |
 | `--promote` | write into the store now instead of the inbox |
+| `--review-by <YYYY-MM-DD>` | when to look at it again (else the kind's `review_after`, if set) |
+
+### `kontext challenge <id> <why…> [--private]`
+
+Say that an entry no longer holds, and why. The challenge waits in the local inbox; `prepare-commit` offers to retire the entry or to record a replacement that supersedes it.
 
 ### `kontext inbox [list | show <id> | drop <id…>]`
 
@@ -93,9 +99,9 @@ Local candidates. `list` is the default.
 
 Write candidates into the store and `git add` them.
 
-### `kontext prepare-commit [--promote <id>]… [--drop <id>]…`
+### `kontext prepare-commit [--promote <id>]… [--drop <id>]… [--retire <id>]…`
 
-The report agents get from `ctx_prepare_commit`.
+The report agents get from `ctx_prepare_commit`. `--retire` retires an entry challenged in this worktree: status `deprecated`, the challenge as the reason in a `## Retired` note, staged.
 
 ### `kontext distill [<file>…] [--claude <id|last>]… [--codex <id|last>]… [--superset [<workspace>]]`
 
@@ -148,7 +154,7 @@ Validate all entries (or exactly what is staged) and scan them for secrets. Exit
 
 | Command | Meaning |
 | --- | --- |
-| `kontext status` | identity, config layers, store, index, decisions that may need a refresh, inbox, init progress, adapters, hooks, outbox |
+| `kontext status` | identity, config layers, store, index, decisions that may need a refresh, entries past their `review_by` date, inbox, init progress, adapters, hooks, outbox |
 | `kontext reindex` | rebuild the local search index |
 
 ## Environment variables

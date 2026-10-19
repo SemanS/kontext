@@ -22,11 +22,13 @@ Code-shaped words are expanded so both forms match: `orderTotal` also indexes `o
 
 ### Ranking
 
-BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5) and body. Local results have weight 1.0; adapters default to 0.9 (`weight` per adapter).
+BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5) and body. The whole query also counts as a phrase (boost 2): it ranks an entry with the exact wording first without adding hits of its own. Local results have weight 1.0; adapters default to 0.9 (`weight` per adapter).
 
 ## Federated search
 
-`ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. Sources are fused by weighted reciprocal rank (each hit scores `weight / (8 + rank)`), so no source's score scale (BM25 here, cosine similarity there) crowds the others out, and a single source keeps its own order. Hits are de-duplicated by URI, by near-identical title/snippet, and when an adapter returns its copy of a local entry (a `sync`ed `…/<id>.md`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
+`ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. With [`[search] adapters = "fallback"`](../reference/03-configuration.md#search) it does so only when the local sources found fewer than `min_local_hits` hits, or when the caller names an adapter or passes `adapters: true`; the default, `always`, asks them every time. Sources are fused by weighted reciprocal rank (each hit scores `weight / (8 + rank)`), so no source's score scale (BM25 here, cosine similarity there) crowds the others out, and a single source keeps its own order.
+
+Only proven copies are dropped: a hit with a URI seen before, an adapter's copy of a local entry (a `sync`ed `…/<id>.md`), and a hit whose whole normalized title and text equal an earlier one. Two claims with the same opening are not the same claim: a hit that only starts like an earlier one is kept and shown under it with the part that differs (`↳ similar, differs: …`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
 
 Restrict a search with `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) and `sources` (`local` and/or adapter names).
 

@@ -8,11 +8,11 @@ Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol vers
 `input` and optional `dir`. It returns `structuredContent` and `outputSchema` as well as a complete
 JSON text copy. Existing tools below retain their text results.
 
-Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
 
 ### Another repository: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -22,7 +22,7 @@ Every tool carries MCP annotations, which clients use to decide what needs appro
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | approximate size |
 | `adapters` | boolean | true | include adapter `brief` sections |
 
-References in brackets are the shortest unique prefix of an id (`[2026-09-28-adapters]`), which `ctx_read` resolves. The brief also lists *Local notes* (this clone's inbox) and, without a store, *Related docs and history*. See [Context layers](../concepts/04-context-layers.md).
+References in brackets are the shortest unique prefix of an id (`[2026-09-28-adapters]`), which `ctx_read` resolves. A line is marked when the entry is anything short of accepted, approved knowledge: its status when it is not `accepted` (`(proposed)`), `local, unapproved` when its file is new, edited or staged in the working tree, `review due`, `challenged locally`, and `N sources` when it carries evidence, e.g. `Move search to OpenSearch (proposed; 2 sources)`. An accepted, committed entry has no mark. `## Changed since <rev>` lists what changed since this worktree's last brief (at most five lines; *Changed in the last 14 days* without one). The brief also lists *Local notes* (this clone's inbox) and, without a store, *Related docs and history*. See [Context layers](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -32,9 +32,10 @@ References in brackets are the shortest unique prefix of an id (`[2026-09-28-ada
 | `kinds` | string[] | | `decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit` |
 | `sources` | string[] | all | `local` and/or adapter names |
 | `limit` | integer | 10 | maximum hits (up to 50) |
+| `adapters` | boolean | `[search] adapters` | `true` asks the search adapters even when local hits suffice, `false` never asks them |
 | `budget_tokens` | integer | 1200 | approximate size of the answer |
 
-Each hit: `N. title — snippet [kind · status · date · source] <uri>`.
+Each hit: `N. title — snippet [kind · status · date · source] <uri>`. The status is left out when it is `accepted`; marks such as `local, unapproved` and `review due` follow it. A hit that only opens like the one above it (the same first words, a different claim) is not dropped: it follows as `↳ similar, differs: … <uri>` with the part that differs. Only proven copies are dropped: the same URI, an adapter's copy of a local entry and a hit whose whole text equals an earlier one.
 
 The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *local note*) and submodules that keep their own team knowledge (marked with their path).
 
@@ -76,6 +77,20 @@ The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *
 | `promote` | boolean | false | write into the store now instead of the inbox |
 | `commits` | string[] | | short shas of the commits it came from |
 | `source` | string | | where it was found, e.g. a thread label from `ctx_threads` (kept in the inbox only) |
+| `review_by` | string | `review_after` of the kind | `YYYY-MM-DD`: when to look at it again (a rule that holds during a migration) |
+| `evidence` | object[] | | `{ref, quote?}`: `pr:<id>`, `issue:<id>`, `task:<id>`, `code:<repo>@<rev>:<path>#L<a>-<b>`, `url:<url>`; see [Evidence](./05-application-api.md#maintenance) |
+
+The answer lists related entries as notes (`related, check: <title> <kx:id> — <reason>`), with a model's label such as `possible conflict, check` when [`entries.related`](./05-application-api.md#related) already asked one for this text. Decide whether it supersedes anything; the note never says so.
+
+### `ctx_challenge`
+
+| Parameter | Type | Default | |
+| --- | --- | --- | --- |
+| `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
+| `why` | string | required | why it no longer holds |
+| `visibility` | `team` \| `private` | `team` | |
+
+Records that an entry no longer holds, as a local inbox candidate of kind `challenge` (against the entry and the commit it was read at). Nothing changes until review: the brief marks the entry `challenged locally`, and `ctx_prepare_commit` offers to retire it or to record a replacement that supersedes it.
 
 ### `ctx_threads`
 
@@ -100,6 +115,7 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 | --- | --- | --- |
 | `promote` | string[] | inbox ids to write into the store and stage |
 | `drop` | string[] | inbox ids to discard |
+| `retire` | string[] | entries challenged in this worktree (or the challenges): status `deprecated`, the challenge as the reason in a `## Retired` note, staged |
 
 Returns the report described in [Capture and review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). It lists the commit trailers and says whether the prepare-commit-msg hook adds them: a clone without kontext's hooks (a fresh clone, a Superset project) needs them added by hand, or `kontext hooks install`.
 
