@@ -118,8 +118,9 @@ Without a configured model, `llm: true` fails with `model_unavailable`.
 
 `drafts.retire` changes the entry's own file: status `deprecated` and a `## Retired` note with the
 date and the reason, then stages it. Nothing else is rewritten; the old claim stays readable in Git.
-`entry_revision` is the commit the caller read the entry at (`publication.revision` of `entries.get`).
-The operation fails with `operation_conflict` when the file at that revision differs from HEAD, when
+`entry_revision` is the commit the caller read the entry at (`publication.revision` of `entries.get`)
+or the entry's blob (`publication.blob_hash`); a later commit that did not touch the file does not
+make it stale. The operation fails with `operation_conflict` when the file at that revision differs from HEAD, when
 the file has local or staged changes, or when the entry is already inactive. It needs an
 `operation_id`, keeps a receipt and replays like `drafts.stage` (`replayed: true`,
 `operations.get`). Pending challenges of this worktree against the entry are resolved by it and
@@ -220,7 +221,10 @@ When a supplied `requested_path` selects a configured kind directory, staging ca
 
 An entry's `status` describes its content; publication evidence describes where that content exists.
 Working reads distinguish local drafts, modified files, staged changes and committed content. None
-of those states by itself proves team approval.
+of those states by itself proves team approval. `publication.revision` is the commit the read saw
+(HEAD, the same for every entry); `publication.blob_hash` is the Git blob of the entry's own file
+(null while the file has unstaged edits or is untracked), so it changes only when that entry changes.
+Use it to tell whether an entry changed since a client last showed it.
 
 For a reviewed export, supply a full commit SHA and a full local review ref, for example
 `refs/remotes/origin/main`. The revision must equal that ref's current tip. Export reads committed

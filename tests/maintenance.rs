@@ -213,6 +213,9 @@ fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
 
     // drafts.retire: a receipt, a replay, and the same refusal for a stale revision
     let input = json!({"operation_id":"retire-log","entry_id":"log-ids","entry_revision":head,"reason":"Tracing replaced it."});
+    // an unrelated commit after the read does not make the revision stale
+    r.write("unrelated.txt", "later commit");
+    r.commit("unrelated");
     let first = r.ok("drafts.retire", input.clone());
     assert_eq!(first["entry"]["status"], "deprecated");
     assert_eq!(first["entry"]["publication"]["state"], "staged");
@@ -222,6 +225,15 @@ fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
     assert_eq!(stale["error"]["code"], "operation_conflict");
     assert_eq!(r.api("drafts.retire", json!({"entry_id":"log-ids"}))["error"]["code"], "invalid_input", "operation_id is required");
     r.commit("retire log");
+    // the entry's blob (publication.blob_hash) works as entry_revision too
+    let blob = r.ok("entries.get", json!({"id":"2026-01-10-use-csv"}))["entry"]["publication"]["blob_hash"].clone();
+    assert!(blob.is_string(), "{blob}");
+    let by_blob = r.ok(
+        "drafts.retire",
+        json!({"operation_id":"retire-csv-blob","entry_id":"2026-01-10-use-csv","entry_revision":blob,"reason":"checked by blob"}),
+    );
+    assert_eq!(by_blob["entry"]["status"], "deprecated");
+    r.git(&["reset", "-q", "--hard"]);
 
     // a replacement that supersedes the entry resolves the challenge as well
     r.kontext(&["challenge", "2026-01-10-use-csv", "Partners want Parquet."]);

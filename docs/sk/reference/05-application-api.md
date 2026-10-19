@@ -116,7 +116,8 @@ model samy nevolajú. Bez nakonfigurovaného modelu skončí `llm: true` chybou 
 
 `drafts.retire` zmení vlastný súbor záznamu: stav `deprecated` a poznámku `## Retired` s dátumom a
 dôvodom, a stagne ho. Nič iné sa neprepisuje; pôvodné tvrdenie ostáva v Gite čitateľné.
-`entry_revision` je commit, v ktorom volajúci záznam čítal (`publication.revision` z `entries.get`).
+`entry_revision` je commit, v ktorom volajúci záznam čítal (`publication.revision` z `entries.get`),
+alebo blob záznamu (`publication.blob_hash`); neskorší commit, ktorý súbor nezmenil, ju nerobí zastaranou.
 Operácia skončí `operation_conflict`, keď sa súbor v tejto revízii líši od HEAD, keď má lokálne alebo
 stagnuté zmeny, alebo keď je záznam už neaktívny. Vyžaduje `operation_id`, ukladá potvrdenie a
 opakuje sa ako `drafts.stage` (`replayed: true`, `operations.get`). Otvorené námietky tohto worktree
@@ -214,7 +215,10 @@ z tejto konfigurácie. Klienti nemajú druh odhadovať z pevne určených názvo
 
 `status` záznamu opisuje obsah; dôkaz publikovania hovorí, kde tento obsah existuje. Pracovné čítanie
 rozlišuje lokálne návrhy, upravené súbory, staging a commitnutý obsah. Žiadny z týchto stavov sám
-osebe nedokazuje tímové schválenie.
+osebe nedokazuje tímové schválenie. `publication.revision` je commit, ktorý čítanie videlo
+(HEAD, rovnaký pre všetky záznamy); `publication.blob_hash` je Git blob vlastného súboru záznamu
+(null, kým má súbor nestagnuté úpravy alebo nie je sledovaný), takže sa zmení, len keď sa zmení ten
+záznam. Podľa neho klient zistí, či sa záznam zmenil, odkedy ho naposledy ukázal.
 
 Pri exporte dodajte celý SHA commitu a celý lokálny review ref, napríklad `refs/remotes/origin/main`.
 Revízia sa musí rovnať aktuálnemu tipu tohto refu. Export číta commitnuté bloby, nie checkout,

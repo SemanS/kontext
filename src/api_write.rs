@@ -282,7 +282,8 @@ fn replay(app: &App, mut result: Value, journal: &Journal) -> Result<Value> {
         let in_head = app.repo.git_opt(&["show", &format!("HEAD:{path}")]).is_some_and(|s| s.trim_end() == markdown.trim_end());
         result["staged"] = json!(in_index && !in_head);
         if let Some(entry) = result.get_mut("entry") {
-            entry["publication"] = json!({"state":if in_head {"committed"} else if in_index {"staged"} else {"draft"},"staged":in_index && !in_head,"modified":!in_index,"revision":app.repo.head()});
+            let blob = in_index.then(|| app.repo.git_opt(&["rev-parse", &format!(":{path}")])).flatten();
+            entry["publication"] = json!({"state":if in_head {"committed"} else if in_index {"staged"} else {"draft"},"staged":in_index && !in_head,"modified":!in_index,"revision":app.repo.head(),"blob_hash":blob});
         }
         result["publication"] = json!(if in_head {
             "committed"
@@ -515,12 +516,14 @@ fn stage(app: &App, input: &Value) -> Result<Value> {
     save(&receipt, &journal)?;
     Ok(result)
 }
-/// The entry's file changes only if it is still what the caller read: `entry_revision` (a commit,
-/// usually `publication.revision`) must hold the same blob for the file as HEAD, and the file must
-/// have no local or staged edits.
+/// The entry's file changes only if it is still what the caller read: `entry_revision` is either a
+/// commit (`publication.revision`) that holds the same blob for the file as HEAD — an unrelated later
+/// commit does not matter — or that blob itself (`publication.blob_hash`). The file must have no local
+/// or staged edits.
 fn check_revision(app: &App, entry: &Entry, revision: &str) -> Result<()> {
     let blob = |rev: &str| app.repo.git_opt(&["rev-parse", "--verify", "--quiet", &format!("{rev}:{}", entry.rel_path)]);
-    let Some(then) = blob(revision) else {
+    let then = if blob("HEAD").as_deref() == Some(revision) { Some(revision.to_string()) } else { blob(revision) };
+    let Some(then) = then else {
         return Err(error("operation_conflict", format!("{} does not exist at revision {revision}", entry.rel_path)));
     };
     if blob("HEAD").as_deref() != Some(then.as_str()) {
