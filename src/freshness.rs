@@ -1,7 +1,8 @@
 //! Knowledge freshness, the one place for both signals that an entry may need a look:
-//! * churn — active decisions whose governed `paths` saw many commits since the decision was made.
-//!   One `git log` covers every decision, and the counts are cached per HEAD: a brief pays one
-//!   `rev-parse` while nothing is committed;
+//! * churn — active decisions, conventions and learnings whose governed `paths` saw many commits
+//!   since someone last looked at them: the entry's `date`, its `checked` confirmation or the last
+//!   commit that changed its own file, whichever is latest. One `git log` covers every entry, and the
+//!   counts are cached per HEAD: a brief pays one `rev-parse` while nothing is committed;
 //! * review date — active entries whose `review_by` date has passed. A review date is not an
 //!   expiry: the entry stays where it is, marked, until someone confirms, supersedes or retires it.
 use crate::app::App;
@@ -12,7 +13,12 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// A decision whose paths changed in at least `freshness.threshold_commits` commits since its date.
+/// The kinds churn watches. Incidents record what happened and stay true; module maps are
+/// refreshed by init.
+const WATCHED_KINDS: &[&str] = &["decision", "convention", "learning"];
+
+/// An entry whose paths changed in at least `freshness.threshold_commits` commits since it was last
+/// looked at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stale {
     pub id: String,
@@ -26,15 +32,17 @@ struct Cache {
     counts: BTreeMap<String, usize>,
 }
 
-/// A decision under watch: from the first second (UTC) after its day, these path patterns.
+/// An entry under watch: from the first second (UTC) after its day (or its confirmation's), these
+/// path patterns — and only commits newer than the last one that changed `file`.
 struct Watched<'a> {
     id: &'a str,
+    file: &'a str,
     since: i64,
     paths: Vec<&'a str>,
 }
 
-/// The start of the UTC day after a decision's date. The decision's own day is left out: that is
-/// usually the change it was recorded with. `2025-01-01` and `2025-01-01T12:00:00Z` name the same day.
+/// The start of the UTC day after an entry's date (or confirmation). The day itself is left out: that
+/// is usually the change it was recorded with, or the one that prompted the look. `2025-01-01` and `2025-01-01T12:00:00Z` name the same day.
 fn cutoff(date: &str) -> Option<i64> {
     let day = date.get(..10)?;
     if !matches!(date.as_bytes().get(10), None | Some(b'T' | b' ')) {
@@ -43,16 +51,19 @@ fn cutoff(date: &str) -> Option<i64> {
     NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?.succ_opt()?.and_hms_opt(0, 0, 0).map(|d| d.and_utc().timestamp())
 }
 
+/// An entry needs a day to count from: its date or its confirmation. An edit of its file only
+/// moves that day later, so an undated entry is never flagged for the age of its file.
 fn watched(entries: &[Entry]) -> Vec<Watched<'_>> {
     entries
         .iter()
-        .filter(|e| e.kind == "decision" && e.is_active())
+        .filter(|e| WATCHED_KINDS.contains(&e.kind.as_str()) && e.is_active())
         .filter_map(|e| {
             let paths: Vec<&str> = e.paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
             if paths.is_empty() {
                 return None;
             }
-            Some(Watched { id: &e.id, since: cutoff(e.date.as_deref()?)?, paths })
+            let since = [e.date.as_deref(), e.checked.as_deref()].into_iter().flatten().filter_map(cutoff).max()?;
+            Some(Watched { id: &e.id, file: &e.rel_path, since, paths })
         })
         .collect()
 }
@@ -88,19 +99,25 @@ fn parse_history(history: &str) -> Vec<Commit<'_>> {
     commits
 }
 
-/// Matching commits per decision; a commit counts once, however many of its files match.
-fn count(decisions: &[Watched], commits: &[Commit]) -> BTreeMap<String, usize> {
-    decisions
+/// Matching commits per entry; a commit counts once, however many of its files match. `commits` are
+/// newest first, as `git log` lists them: a commit that changed the entry's own file (an edit, a
+/// confirmation) was a look at it, and only the commits listed before it count. Order rather than
+/// time decides, since commits made within one second share a timestamp.
+fn count(watched: &[Watched], commits: &[Commit]) -> BTreeMap<String, usize> {
+    watched
         .iter()
-        .map(|d| {
-            let n =
-                commits.iter().filter(|c| c.time >= d.since && c.paths.iter().any(|f| d.paths.iter().any(|p| path_matches(p, f)))).count();
-            (d.id.to_string(), n)
+        .map(|w| {
+            let looked = commits.iter().position(|c| c.paths.contains(&w.file)).unwrap_or(commits.len());
+            let n = commits[..looked]
+                .iter()
+                .filter(|c| c.time >= w.since && c.paths.iter().any(|f| w.paths.iter().any(|p| path_matches(p, f))))
+                .count();
+            (w.id.to_string(), n)
         })
         .collect()
 }
 
-/// One history read for every decision: non-merge commits of HEAD from a day before the oldest
+/// One history read for every entry: non-merge commits of HEAD from a day before the oldest
 /// cutoff (the count then compares exact times), a rename as both of its ends (moving code out of
 /// governed paths changes them too), and no signature output, which would land among the paths.
 fn read_history(app: &App, head: &str, oldest: i64) -> Option<String> {
@@ -124,20 +141,20 @@ fn read_history(app: &App, head: &str, oldest: i64) -> Option<String> {
         .ok()
 }
 
-/// Active decisions that may need a refresh, the most changed first. Empty when the threshold is 0,
-/// before the first commit, or when no decision has both a date and paths.
-pub fn stale_decisions(app: &App, entries: &[Entry]) -> Vec<Stale> {
+/// Active entries that may need a refresh, the most changed first. Empty when the threshold is 0,
+/// before the first commit, or when no watched entry has both a day to count from and paths.
+pub fn stale_entries(app: &App, entries: &[Entry]) -> Vec<Stale> {
     let threshold = app.cfg().freshness.threshold_commits;
     if threshold == 0 {
         return Vec::new();
     }
-    let decisions = watched(entries);
-    if decisions.is_empty() {
+    let watched = watched(entries);
+    if watched.is_empty() {
         return Vec::new();
     }
     let Some(head) = app.repo.head() else { return Vec::new() };
-    // the counts change with HEAD, the history read and the decisions' dates and paths
-    let fingerprint: String = decisions.iter().map(|d| format!("{}|{}|{};", d.id, d.since, d.paths.join(","))).collect();
+    // the counts change with HEAD, the history read and the entries' days, files and paths
+    let fingerprint: String = watched.iter().map(|w| format!("{}|{}|{}|{};", w.id, w.file, w.since, w.paths.join(","))).collect();
     let key = format!("{head}:{}:{}", app.cfg().index.max_commits, util::short_hash(&fingerprint));
     let path = app.repo.worktree_state_dir().join("freshness.json");
     let cached: Option<Cache> =
@@ -145,9 +162,9 @@ pub fn stale_decisions(app: &App, entries: &[Entry]) -> Vec<Stale> {
     let counts = match cached {
         Some(c) => c.counts,
         None => {
-            let oldest = decisions.iter().map(|d| d.since).min().unwrap_or_default();
+            let oldest = watched.iter().map(|w| w.since).min().unwrap_or_default();
             let Some(history) = read_history(app, &head, oldest) else { return Vec::new() };
-            let counts = count(&decisions, &parse_history(&history));
+            let counts = count(&watched, &parse_history(&history));
             if let Ok(text) = serde_json::to_string(&Cache { key, counts: counts.clone() }) {
                 let _ = std::fs::create_dir_all(app.repo.worktree_state_dir());
                 let _ = util::write_atomic(&path, &text);
@@ -192,7 +209,7 @@ pub struct Freshness {
 }
 
 pub fn check(app: &App, entries: &[Entry]) -> Freshness {
-    Freshness { stale: stale_decisions(app, entries), due: review_due(entries, &util::today()) }
+    Freshness { stale: stale_entries(app, entries), due: review_due(entries, &util::today()) }
 }
 
 /// `[ref] Title (review by 2026-01-31), …` for the first `max`.
@@ -230,7 +247,8 @@ mod tests {
     }
 
     #[test]
-    fn watches_only_active_dated_decisions_with_paths() {
+    fn watches_active_decisions_conventions_and_learnings_with_a_day_and_paths() {
+        let of = |kind: &str, id: &str| Entry { kind: kind.into(), ..decision(id, Some("2026-01-05"), &["src/**"], None) };
         let entries = vec![
             decision("a", Some("2026-01-05"), &["src/billing/**"], None),
             decision("no-paths", Some("2026-01-05"), &[], None),
@@ -238,10 +256,39 @@ mod tests {
             decision("no-date", None, &["src/**"], None),
             decision("bad-date", Some("last week"), &["src/**"], None),
             decision("old", Some("2026-01-05"), &["src/**"], Some("superseded")),
-            Entry { kind: "convention".into(), ..decision("conv", Some("2026-01-05"), &["src/**"], None) },
+            Entry { checked: Some("2026-02-01".into()), ..decision("confirmed-only", None, &["src/**"], None) },
+            of("convention", "conv"),
+            of("learning", "learn"),
+            of("incident", "inc"),
+            of("architecture", "map"),
         ];
         let ids: Vec<&str> = watched(&entries).iter().map(|w| w.id).collect();
-        assert_eq!(ids, vec!["a"]);
+        assert_eq!(ids, vec!["a", "confirmed-only", "conv", "learn"]);
+    }
+
+    #[test]
+    fn a_confirmation_or_an_edit_of_the_entry_resets_the_count() {
+        let day = |d: &str, h: u32| NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap().and_hms_opt(h, 0, 0).unwrap().and_utc().timestamp();
+        let rule = |id: &str, checked: Option<&str>| Entry {
+            checked: checked.map(str::to_string),
+            rel_path: format!(".ai/decisions/{id}.md"),
+            ..decision(id, Some("2026-01-05"), &["src/**"], None)
+        };
+        let entries =
+            vec![rule("plain", None), rule("confirmed", Some("2026-02-01")), rule("stale-check", Some("2025-12-01")), rule("edited", None)];
+        let commits = vec![
+            Commit { time: day("2026-03-01", 9), paths: vec!["src/a.rs"] },
+            Commit { time: day("2026-02-20", 9), paths: vec!["src/b.rs"] },
+            // the same second as the next one: the order in the log decides, not the time
+            Commit { time: day("2026-02-10", 9), paths: vec!["src/c.rs"] },
+            Commit { time: day("2026-02-10", 9), paths: vec![".ai/decisions/edited.md", "src/d.rs"] },
+            Commit { time: day("2026-01-20", 9), paths: vec!["src/e.rs"] },
+        ];
+        let counts = count(&watched(&entries), &commits);
+        assert_eq!(counts["plain"], 5);
+        assert_eq!(counts["confirmed"], 4, "counted from the day after the confirmation");
+        assert_eq!(counts["stale-check"], 5, "a confirmation older than the date does not move it back");
+        assert_eq!(counts["edited"], 3, "the commit that edited the entry and the older ones do not count");
     }
 
     #[test]

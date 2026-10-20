@@ -2,10 +2,11 @@
 id: 2026-10-03-decision-freshness-counts-later-commits-on-its-paths-from
 kind: decision
 title: Decision freshness counts later commits on its paths from one cached git log
-status: accepted
+status: superseded
 date: 2026-10-03
 summary: Flag decisions whose paths saw freshness.threshold_commits+ commits since their date, counted from one git log that is cached per HEAD.
 paths: [src/freshness.rs, src/config.rs, src/ops.rs]
+superseded_by: [2026-10-20-freshness-counts-commits-since-the-last-look-at-an-entry]
 author: SemanS
 origin: agent
 ---

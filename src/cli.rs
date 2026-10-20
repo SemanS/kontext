@@ -1099,16 +1099,17 @@ fn status(app: &App) -> Result<()> {
     if threshold == 0 {
         println!("freshness off (freshness.threshold_commits = 0)");
     } else {
-        let stale = freshness::stale_decisions(app, &entries);
+        let stale = freshness::stale_entries(app, &entries);
         if stale.is_empty() {
-            println!("freshness no active decision has {threshold}+ commits on its paths since it was made");
+            println!("freshness no active entry has {threshold}+ commits on its paths since it was last looked at");
         } else {
             // the whole list here: the brief shows three and points to this
             let refs = ops::Refs::new(entries.iter().map(|e| e.id.as_str()));
             let name = |s: &freshness::Stale| entries.iter().find(|e| e.id == s.id).map(|e| refs.of(e)).unwrap_or_else(|| s.id.clone());
             println!(
-                "freshness {} decision(s) may need a refresh ({threshold}+ commits on their paths since): {}",
+                "freshness {} entr{} may need a refresh ({threshold}+ commits on their paths since they were made, edited or confirmed): {}",
                 stale.len(),
+                if stale.len() == 1 { "y" } else { "ies" },
                 freshness::render_list(&stale, usize::MAX, &name)
             );
         }

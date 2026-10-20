@@ -217,7 +217,8 @@ touch = "src/exports/nightly.rs"
 times = 4
 [[scenario.step]]
 run = ["brief", "--no-adapters"]
-expect = ["May need a refresh", "Export orders nightly with cron (5 commits)"]
+# the fixture commit added the decision with its code: it was a look, so only the four later commits count
+expect = ["May need a refresh", "Export orders nightly with cron (4 commits)"]
 
 [[scenario]]
 name = "candidates of another worktree stay there"

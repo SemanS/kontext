@@ -127,7 +127,7 @@ fn knowledge_freshness_in_brief_and_status() {
         ("superseded", "decision", "superseded", "2025-01-01", "src/**"),
         ("deprecated", "decision", "deprecated", "2025-01-01", "src/**"),
         ("rejected", "decision", "rejected", "2025-01-01", "src/**"),
-        ("convention", "convention", "accepted", "2025-01-01", "src/**"),
+        ("incident", "incident", "accepted", "2025-01-01", "src/**"),
         ("undated", "decision", "accepted", "", "src/**"),
         ("bad-date", "decision", "accepted", "yesterday", "src/**"),
         ("unscoped", "decision", "accepted", "2025-01-01", ""),
@@ -168,14 +168,11 @@ fn knowledge_freshness_in_brief_and_status() {
     let brief = s.kontext(&["brief", "--no-adapters", "--budget", "300"]);
     assert!(
         brief.contains("## State")
-            && brief.contains("May need a refresh (2+ commits on their paths since they were made): [use-cache] Use cache (2 commits)"),
+            && brief.contains("May need a refresh (2+ commits on their paths since they were made, edited or confirmed): [use-cache] Use cache (2 commits)"),
         "{brief}"
     );
     let status = s.kontext(&["status"]);
-    assert!(
-        status.contains("freshness 1 decision(s) may need a refresh") && status.contains("[use-cache] Use cache (2 commits)"),
-        "{status}"
-    );
+    assert!(status.contains("freshness 1 entry may need a refresh") && status.contains("[use-cache] Use cache (2 commits)"), "{status}");
 
     // Reviewing the decision and advancing its date resets the warning, even before commit.
     let decision_path = ".ai/decisions/use-cache.md";
@@ -215,7 +212,7 @@ fn knowledge_freshness_in_brief_and_status() {
         .count();
     assert_eq!(history_calls, 1, "all decisions must share one git log call");
     let status = s.kontext(&["status"]);
-    assert!(status.contains("freshness 4 decision(s) may need a refresh"), "{status}");
+    assert!(status.contains("freshness 4 entries may need a refresh"), "{status}");
     for id in ["cache-a", "cache-b", "cache-c", "use-cache"] {
         assert!(status.contains(&format!("[{id}]")), "{status}");
     }
@@ -492,13 +489,34 @@ fn stale_decisions() {
     s.ok_git(&["commit", "-q", "-m", "feat(api): start"]);
 
     let brief = s.kontext(&["brief", "--no-adapters"]);
-    assert!(brief.contains("May need a refresh (3+ commits on their paths since they were made): [2020-01-01-prices]"), "{brief}");
+    assert!(
+        brief.contains("May need a refresh (3+ commits on their paths since they were made, edited or confirmed): [2020-01-01-prices]"),
+        "{brief}"
+    );
     assert!(brief.contains("Prices are integer cents (3 commits)") && !brief.contains("Routes live in one file (1"), "{brief}");
     // the second run is answered from the cache keyed by HEAD
     assert!(s.repo.join(".git/kontext/worktrees").exists());
     assert_eq!(s.kontext(&["brief", "--no-adapters"]), brief);
     let status = s.kontext(&["status"]);
-    assert!(status.contains("freshness 1 decision(s) may need a refresh"), "{status}");
+    assert!(status.contains("freshness 1 entry may need a refresh"), "{status}");
+
+    // a commit that edits the entry was a look at it: the count starts again after it
+    let prices = ".ai/decisions/2020-01-01-prices-are-integer-cents.md";
+    let original = std::fs::read_to_string(s.repo.join(prices)).unwrap();
+    s.write(prices, &original.replace("All money is integer cents.", "All money is integer cents, taxes too."));
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "docs: prices cover taxes"]);
+    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    for i in 3..6 {
+        s.write("libs/pricing/src/index.ts", &format!("export const v = {i};\n"));
+        s.ok_git(&["add", "-A"]);
+        s.ok_git(&["commit", "-q", "-m", &format!("feat(pricing): change {i}")]);
+    }
+    assert!(s.kontext(&["brief", "--no-adapters"]).contains("Prices are integer cents (3 commits)"));
+    // so does a confirmation, before it is even committed
+    assert!(s.kontext(&["confirm", "2020-01-01-prices"]).contains("confirmed 2020-01-01-prices-are-integer-cents"));
+    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(s.kontext(&["status"]).contains("freshness no active entry has 3+ commits"));
 
     s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 0\n");
     assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
