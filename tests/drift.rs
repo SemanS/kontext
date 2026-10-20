@@ -224,3 +224,42 @@ fn prepare_commit_reads_the_working_tree_when_nothing_is_staged() {
     let tool = r.kontext(&["call", "ctx_prepare_commit", "{}"]);
     assert!(tool.contains("read the working tree's changes against HEAD") && tool.contains("ctx_confirm"), "{tool}");
 }
+
+#[test]
+fn ci_checks_every_entry_and_warns_or_fails_on_drift() {
+    let r = Repo::new();
+    r.entry("conventions", "money-in-cents", "convention", "src/billing/**", "");
+    let base = r.commit("seed");
+    // the default base is where HEAD left origin's default branch
+    r.git(&["update-ref", "refs/remotes/origin/main", &base]);
+    r.write("src/billing/invoice.rs", "pub fn total() -> u64 { 0 }\n");
+    r.commit("feat(billing): totals in cents");
+    // uncommitted changes are not CI's business
+    r.write("src/api/routes.rs", "changed\n");
+
+    let warn = r.run(&["ci"]);
+    let text = String::from_utf8_lossy(&warn.stdout).to_string();
+    assert_eq!(warn.status.code(), Some(0), "drift alone is a warning: {text}");
+    assert!(text.contains("check: 1 file(s) checked, 0 error(s)") && text.contains("<kx:money-in-cents>"), "{text}");
+    assert_eq!(r.run(&["ci", "--strict"]).status.code(), Some(2));
+    let md = r.kontext(&["ci", "--format", "markdown", "--base", &base]);
+    assert!(md.starts_with("## kontext\n\n**Check:** 1 file(s) checked, 0 error(s), 0 warning(s)\n"), "{md}");
+    assert!(md.contains("### Knowledge drift (`") && md.contains("| Rule money-in-cents (`money-in-cents`, [file](.ai/conventions/money-in-cents.md)) | convention | `src/billing/invoice.rs` |"), "{md}");
+    assert_eq!(r.run(&["ci", "--format", "html"]).status.code(), Some(1));
+
+    // check errors fail the job whatever the drift says
+    r.write(".ai/conventions/bad.md", "---\nid: bad\nkind: convention\ntitle: Bad\nchecked: someday\n---\nBody.\n");
+    r.commit("a bad entry");
+    let failed = r.run(&["ci"]);
+    assert_eq!(failed.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&failed.stdout).contains("checked 'someday' is not a YYYY-MM-DD date"));
+    r.git(&["rm", "-q", ".ai/conventions/bad.md"]);
+    r.kontext(&["confirm", "money-in-cents"]);
+    r.commit("rule confirmed");
+    let clean = r.run(&["ci", "--strict"]);
+    assert_eq!(clean.status.code(), Some(0), "{}", String::from_utf8_lossy(&clean.stdout));
+    assert!(String::from_utf8_lossy(&clean.stdout).contains("No knowledge drift"));
+    // a clone without the default branch's history has an empty range, and says so
+    r.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+    assert!(r.kontext(&["ci"]).contains("fetch-depth: 0"));
+}

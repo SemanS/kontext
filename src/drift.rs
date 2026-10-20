@@ -224,6 +224,42 @@ pub fn render_text(report: &Report, agent: bool) -> String {
     out
 }
 
+/// The report as Markdown, for a CI job summary or a pull request comment.
+pub fn render_markdown(report: &Report) -> String {
+    let mut out = String::new();
+    let n = report.entries.len();
+    let _ = writeln!(out, "### Knowledge drift (`{}`)\n", report.range());
+    if n == 0 {
+        let _ = writeln!(out, "No drift: every entry that governs a changed file was edited or confirmed in this range.");
+        return out;
+    }
+    let _ = writeln!(
+        out,
+        "{n} entr{} govern{} files changed in this range but {} not edited or confirmed:\n",
+        if n == 1 { "y" } else { "ies" },
+        if n == 1 { "s" } else { "" },
+        if n == 1 { "was" } else { "were" }
+    );
+    let _ = writeln!(out, "| Entry | Kind | Changed files | Commits |\n| --- | --- | --- | --- |");
+    let cell = |s: &str| s.replace('|', "\\|").replace(['\r', '\n'], " ");
+    for d in &report.entries {
+        let changed: Vec<String> = d.changed.iter().map(|f| format!("`{}`", cell(f))).collect();
+        let commits: Vec<String> = d.commits.iter().map(|(sha, _)| format!("`{}`", &sha[..sha.len().min(8)])).collect();
+        let _ = writeln!(
+            out,
+            "| {} (`{}`, [file]({})) | {} | {} | {} |",
+            cell(&d.entry.title),
+            cell(&d.entry.id),
+            cell(&d.entry.rel_path),
+            d.entry.kind,
+            list(&changed, 5),
+            if commits.is_empty() { "—".to_string() } else { list(&commits, 5) }
+        );
+    }
+    let _ = writeln!(out, "\n{}", advice(false));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +381,10 @@ mod tests {
         assert!(r.head.is_none() && r.entries[0].commits.is_empty());
         assert_eq!(r.to_json()["head"], "working");
         assert!(render_text(&r, false).contains("`kontext confirm <id>`"));
+        assert!(
+            render_markdown(&r)
+                .contains("| Billing (`billing`, [file](.ai/conventions/billing.md)) | convention | `src/billing/untracked.rs` | — |")
+        );
         // confirming (or any edit of the entry) in the working tree counts as a look
         f.write(
             ".ai/conventions/billing.md",

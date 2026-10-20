@@ -196,6 +196,18 @@ enum Cmd {
         #[arg(long)]
         fail: bool,
     },
+    /// CI report: check every entry, and list the knowledge the committed range base..HEAD left behind
+    Ci {
+        /// Start of the range (default: where HEAD left origin's default branch)
+        #[arg(long, value_name = "REV")]
+        base: Option<String>,
+        /// text | markdown (for a job summary or a pull request comment)
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Also fail (exit 2) when drift lists an entry; otherwise drift is a warning
+        #[arg(long)]
+        strict: bool,
+    },
     /// Confirm that entries still hold: sets `checked` to today in each entry's file and stages it
     Confirm {
         /// The entries: kx:<id>, ids or unique prefixes
@@ -810,6 +822,24 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(2);
             }
         }
+        Cmd::Ci { base, format, strict } => {
+            let markdown = match format.as_str() {
+                "text" => false,
+                "markdown" | "md" => true,
+                other => bail!("unknown format '{other}' (text or markdown)"),
+            };
+            let app = open(&dir)?;
+            let rep = ops::check_all(&app);
+            // committed only: CI has no working tree changes of its own to judge
+            let report = crate::drift::drift(&app, base.as_deref(), Some("HEAD"), &[])?;
+            print!("{}", ci_report(&rep, &report, base.is_none(), markdown));
+            if rep.errors() > 0 {
+                return Ok(1);
+            }
+            if strict && !report.entries.is_empty() {
+                return Ok(2);
+            }
+        }
         Cmd::Confirm { ids } => {
             let app = open(&dir)?;
             let mut failed = 0;
@@ -985,6 +1015,37 @@ fn run(cli: Cli) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// `kontext ci`: the check of every entry, then the drift of the range.
+fn ci_report(rep: &ops::CheckReport, report: &crate::drift::Report, default_base: bool, markdown: bool) -> String {
+    use std::fmt::Write;
+    let warnings = rep.issues.len() + rep.secrets.len() - rep.errors();
+    let summary = format!("{} file(s) checked, {} error(s), {warnings} warning(s)", rep.checked, rep.errors());
+    let issues = ops::render_check(rep);
+    // a shallow clone has no merge base with the default branch, and the range is then empty
+    let empty_range = default_base && report.head.as_deref() == Some(report.base.as_str());
+    let hint = "The range is empty: base is HEAD. Fetch the default branch with history (e.g. actions/checkout with `fetch-depth: 0`) or pass `--base`.";
+    let mut out = String::new();
+    if markdown {
+        let _ = writeln!(out, "## kontext\n\n**Check:** {summary}\n");
+        if !issues.is_empty() {
+            let _ = writeln!(out, "```text\n{}```\n", issues);
+        }
+        out.push_str(&crate::drift::render_markdown(report));
+        if empty_range {
+            let _ = writeln!(out, "\n> {hint}");
+        }
+    } else {
+        let _ = writeln!(out, "check: {summary}");
+        out.push_str(&issues);
+        let _ = writeln!(out);
+        out.push_str(&crate::drift::render_text(report, false));
+        if empty_range {
+            let _ = writeln!(out, "\n{hint}");
+        }
+    }
+    out
 }
 
 fn adapters_cmd(app: &App, action: AdaptersCmd) -> Result<()> {
