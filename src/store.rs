@@ -48,8 +48,9 @@ pub struct Entry {
     /// When someone should look at the entry again (`YYYY-MM-DD`). A review date, not an expiry:
     /// past it the entry is marked, never hidden.
     pub review_by: Option<String>,
-    /// The last day someone confirmed the entry still holds (`YYYY-MM-DD`). Freshness and drift
-    /// count changes from here, as they do from an edit of the entry's own file.
+    /// When someone last confirmed the entry still holds: a day (`YYYY-MM-DD`) or, as `kontext
+    /// confirm` writes it, a UTC second (`YYYY-MM-DDTHH:MM:SSZ`). Freshness and drift count changes
+    /// from here, as they do from an edit of the entry's own file.
     pub checked: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
@@ -902,11 +903,18 @@ impl<'a> Store<'a> {
             }
         }
         if let Some(c) = &e.checked {
-            match chrono::NaiveDate::parse_from_str(c, "%Y-%m-%d") {
-                Err(_) => push(Level::Error, format!("checked '{c}' is not a YYYY-MM-DD date")),
-                // a confirmation is written in UTC; a hand-written local date may be a day ahead of it
-                Ok(day) if day > latest_today() => push(Level::Error, format!("checked {c} is in the future")),
-                Ok(_) => {}
+            let future = match parse_checked(c) {
+                None => {
+                    push(Level::Error, format!("checked '{c}' is not a YYYY-MM-DD date or a YYYY-MM-DDTHH:MM:SSZ time"));
+                    false
+                }
+                // a hand-written local date may be a day ahead of UTC
+                Some(Checked::Day(day)) => day > latest_today(),
+                // a few minutes of clock skew between machines is not the future
+                Some(Checked::At(at)) => at > chrono::Utc::now() + chrono::Duration::minutes(5),
+            };
+            if future {
+                push(Level::Error, format!("checked {c} is in the future"));
             }
         }
         let lines = e.body.lines().filter(|l| !l.trim().is_empty()).count();
@@ -1020,6 +1028,25 @@ fn kind_heading(k: &str) -> String {
             s
         }
     }
+}
+
+/// A confirmation: a day, or the UTC second `kontext confirm` writes so that confirming again the
+/// same day still changes the file (a change of the file is what drift counts as a look).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Checked {
+    Day(chrono::NaiveDate),
+    At(chrono::DateTime<chrono::Utc>),
+}
+
+pub(crate) fn parse_checked(c: &str) -> Option<Checked> {
+    let c = c.trim();
+    if c.len() == 10 {
+        return chrono::NaiveDate::parse_from_str(c, "%Y-%m-%d").ok().map(Checked::Day);
+    }
+    if c.len() == 20 {
+        return chrono::NaiveDateTime::parse_from_str(c, "%Y-%m-%dT%H:%M:%SZ").ok().map(|t| Checked::At(t.and_utc()));
+    }
+    None
 }
 
 /// The later of today in UTC and today here: no clock in the team is ahead of it.
@@ -1224,9 +1251,28 @@ mod tests {
         };
         assert!(errors(&e).is_empty());
         let bad = Entry { checked: Some("last week".into()), ..e.clone() };
-        assert_eq!(errors(&bad), vec!["checked 'last week' is not a YYYY-MM-DD date"]);
+        assert_eq!(errors(&bad), vec!["checked 'last week' is not a YYYY-MM-DD date or a YYYY-MM-DDTHH:MM:SSZ time"]);
         let future = Entry { checked: Some("2999-01-01".into()), ..e.clone() };
         assert_eq!(errors(&future), vec!["checked 2999-01-01 is in the future"]);
+        let at = Entry { checked: Some("2026-03-01T09:30:15Z".into()), ..e.clone() };
+        assert!(errors(&at).is_empty());
+        let later = Entry { checked: Some("2999-01-01T00:00:00Z".into()), ..e.clone() };
+        assert_eq!(errors(&later), vec!["checked 2999-01-01T00:00:00Z is in the future"]);
+        for odd in ["2026-03-01T09:30:15", "2026-03-01T09:30:15+02:00", "2026-03-01 09:30:15Z", "2026-13-01"] {
+            assert_eq!(errors(&Entry { checked: Some(odd.into()), ..e.clone() }).len(), 1, "{odd}");
+        }
+        // the time survives both styles and the canonical writer
+        let t = text.replace("checked: 2026-03-01", "checked: 2026-03-01T09:30:15Z");
+        let timed = Entry::parse(".ai/conventions/cache.md", &t, "convention");
+        assert_eq!(timed.checked.as_deref(), Some("2026-03-01T09:30:15Z"));
+        assert!(timed.markdown().contains("\nchecked: 2026-03-01T09:30:15Z\n"));
+        let adr = Entry::parse(
+            "docs/adr/0003-x.md",
+            "# 0003 — X\n\n**Status:** accepted\n**Checked:** 2026-03-01T09:30:15Z\n\nBody.\n",
+            "decision",
+        );
+        assert_eq!(adr.checked.as_deref(), Some("2026-03-01T09:30:15Z"));
+        assert!(adr.markdown().contains("**Checked:** 2026-03-01T09:30:15Z\n"));
     }
 
     #[test]

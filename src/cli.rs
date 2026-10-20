@@ -208,7 +208,7 @@ enum Cmd {
         #[arg(long)]
         strict: bool,
     },
-    /// Confirm that entries still hold: sets `checked` to today in each entry's file and stages it
+    /// Confirm that entries still hold: sets `checked` to now (UTC) in each entry's file and stages it
     Confirm {
         /// The entries: kx:<id>, ids or unique prefixes
         #[arg(required = true)]

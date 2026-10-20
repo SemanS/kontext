@@ -605,9 +605,10 @@ fn retire(app: &App, input: &Value) -> Result<Value> {
     Ok(result)
 }
 
-/// Record that an entry still holds: `checked` becomes today (UTC) in its own file, nothing else
-/// changes, and the file is staged so the confirmation is reviewed with the change that prompted it.
-/// Confirming twice on one day changes nothing the second time.
+/// Record that an entry still holds: `checked` becomes now (UTC, to the second) in its own file,
+/// nothing else changes, and the file is staged so the confirmation is reviewed with the change that
+/// prompted it. A time rather than a day: confirming again later the same day must change the file,
+/// since a change of the file is what drift counts as a look.
 pub(crate) fn confirm(app: &App, input: &Value) -> Result<Value> {
     let id = required(input, "id")?;
     let _file = write_guard(app)?;
@@ -629,15 +630,15 @@ pub(crate) fn confirm(app: &App, input: &Value) -> Result<Value> {
     if state.as_bytes().get(1).is_some_and(|b| *b != b' ') {
         return Err(error("operation_conflict", format!("{} has unstaged changes: stage or revert them first", entry.rel_path)));
     }
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let before = std::fs::read_to_string(app.repo.abs(&entry.rel_path))?;
-    let after = Store::checked_text(entry, &today, &before)
+    let after = Store::checked_text(entry, &now, &before)
         .ok_or_else(|| error("invalid_input", format!("{} has no title heading to record the confirmation under", entry.rel_path)))?;
     if after != before {
         util::write_atomic(&app.repo.abs(&entry.rel_path), &after)?;
     }
     app.repo.git(&["add", "--", &entry.rel_path])?;
-    Ok(json!({"id":entry.id,"path":entry.rel_path,"checked":today}))
+    Ok(json!({"id":entry.id,"path":entry.rel_path,"checked":now}))
 }
 
 fn local_entry_json(entry: &Entry, state: &str) -> Value {

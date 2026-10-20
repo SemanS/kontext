@@ -191,7 +191,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_confirm",
-            "description": "Say that a recorded entry still holds after the code it governs changed: sets its `checked` date to today and stages its file, so the confirmation is reviewed with the change. Freshness and drift count from it. Only when you checked the entry against the code; if it no longer holds, use ctx_challenge or record a replacement.",
+            "description": "Say that a recorded entry still holds after the code it governs changed: sets its `checked` time to now (UTC) and stages its file, so the confirmation is reviewed with the change. Freshness and drift count from it. Only when you checked the entry against the code; if it no longer holds, use ctx_challenge or record a replacement.",
             "inputSchema": {"type": "object", "properties": {
                 "id": s("The entry: kx:<id>, an id or its unique prefix")
             }, "required": ["id"]}

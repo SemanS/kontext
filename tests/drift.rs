@@ -102,19 +102,23 @@ fn confirm_sets_checked_stages_it_and_refuses_what_it_cannot_confirm() {
     r.commit("seed");
     let before = r.read(".ai/conventions/money-in-cents.md");
     let out = r.kontext(&["confirm", "money-in-cents"]);
-    let today = chrono_today();
-    assert!(out.contains(&format!("confirmed money-in-cents — checked {today} in .ai/conventions/money-in-cents.md (staged)")), "{out}");
     let after = r.read(".ai/conventions/money-in-cents.md");
-    assert_eq!(after, before.replace("date: 2026-01-10\n", &format!("date: 2026-01-10\nchecked: {today}\n")), "one line and nothing else");
+    let at = r.ok("entries.get", json!({"id":"money-in-cents"}))["entry"]["checked"].as_str().unwrap().to_string();
+    assert!(is_utc_second(&at) && at.starts_with(&chrono_today()), "a UTC time to the second: {at}");
+    assert!(out.contains(&format!("confirmed money-in-cents — checked {at} in .ai/conventions/money-in-cents.md (staged)")), "{out}");
+    assert_eq!(after, before.replace("date: 2026-01-10\n", &format!("date: 2026-01-10\nchecked: {at}\n")), "one line and nothing else");
     assert_eq!(r.git(&["diff", "--cached", "--name-only"]), ".ai/conventions/money-in-cents.md");
-    assert_eq!(r.ok("entries.get", json!({"id":"money-in-cents"}))["entry"]["checked"], today.as_str());
-    // a second confirmation the same day changes nothing
+    // confirming again later the same day changes the line, and only the line
+    std::thread::sleep(std::time::Duration::from_millis(1100));
     let again = r.ok("drafts.confirm", json!({"id":"money-in-cents"}));
+    let later = again["checked"].as_str().unwrap().to_string();
+    assert!(is_utc_second(&later) && later > at, "{later} after {at}");
     assert_eq!(
         again,
-        json!({"id":"money-in-cents","path":".ai/conventions/money-in-cents.md","checked":today,"repository":again["repository"]})
+        json!({"id":"money-in-cents","path":".ai/conventions/money-in-cents.md","checked":later,"repository":again["repository"]})
     );
-    assert_eq!(r.read(".ai/conventions/money-in-cents.md"), after);
+    let after = r.read(".ai/conventions/money-in-cents.md");
+    assert_eq!(after, before.replace("date: 2026-01-10\n", &format!("date: 2026-01-10\nchecked: {later}\n")));
     assert!(r.kontext(&["check"]).contains("0 error(s)"));
 
     assert_eq!(r.api("drafts.confirm", json!({"id":"nope"}))["error"]["code"], "not_found");
@@ -133,9 +137,45 @@ fn confirm_sets_checked_stages_it_and_refuses_what_it_cannot_confirm() {
     assert!(String::from_utf8_lossy(&tool.stderr).contains("no entry 'nope'"));
 }
 
-/// Today in UTC, as a confirmation writes it.
+/// Today in UTC, the day of a confirmation.
 fn chrono_today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ`, as a confirmation writes it.
+fn is_utc_second(s: &str) -> bool {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ").is_ok() && s.len() == 20
+}
+
+#[test]
+fn confirming_again_the_same_day_clears_drift_after_later_commits() {
+    let r = Repo::new();
+    r.entry("conventions", "money-in-cents", "convention", "src/billing/**", "");
+    let base = r.commit("seed");
+    r.write("src/billing/invoice.rs", "pub fn total() -> u64 { 0 }\n");
+    r.commit("feat(billing): totals in cents");
+    r.kontext(&["confirm", "money-in-cents"]);
+    let confirmed = r.commit("docs: money rule still holds");
+    assert_eq!(r.ok("entries.drift", json!({"base":base,"head":"HEAD"}))["entries"], json!([]));
+    // later the same day the code moves again: the morning's confirmation is outside the new range
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    r.write("src/billing/invoice.rs", "pub fn total() -> u64 { 1 }\n");
+    r.commit("fix(billing): rounding");
+    let listed = r.ok("entries.drift", json!({"base":confirmed,"head":"HEAD"}));
+    assert_eq!(listed["entries"][0]["id"], "money-in-cents");
+    assert!(listed["entries"][0]["checked"].as_str().unwrap().starts_with(&chrono_today()));
+    r.kontext(&["confirm", "money-in-cents"]);
+    assert!(!r.git(&["diff", "--cached", "--name-only"]).is_empty(), "the second confirmation changed the file");
+    assert_eq!(r.ok("entries.drift", json!({"base":confirmed}))["entries"], json!([]), "staged, it counts as a look");
+    r.commit("docs: money rule still holds after the fix");
+    assert_eq!(r.ok("entries.drift", json!({"base":confirmed,"head":"HEAD"}))["entries"], json!([]));
+    // a date written by hand keeps working
+    let path = ".ai/conventions/money-in-cents.md";
+    let text = r.read(path);
+    let line = text.lines().find(|l| l.starts_with("checked: ")).unwrap().to_string();
+    r.write(path, &text.replace(&line, "checked: 2026-01-11"));
+    assert_eq!(r.ok("entries.get", json!({"id":"money-in-cents"}))["entry"]["checked"], "2026-01-11");
+    assert!(r.kontext(&["check"]).contains("0 error(s)"));
 }
 
 #[test]

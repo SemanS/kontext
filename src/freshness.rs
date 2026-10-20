@@ -51,6 +51,15 @@ fn cutoff(date: &str) -> Option<i64> {
     NaiveDate::parse_from_str(day, "%Y-%m-%d").ok()?.succ_opt()?.and_hms_opt(0, 0, 0).map(|d| d.and_utc().timestamp())
 }
 
+/// Where a confirmation starts the count: a time after its second (the commits of that very second
+/// were what the confirmation looked at), a day (like a date) from the start of the next UTC day.
+fn confirmed_since(checked: &str) -> Option<i64> {
+    match crate::store::parse_checked(checked)? {
+        crate::store::Checked::At(at) => Some(at.timestamp() + 1),
+        crate::store::Checked::Day(_) => cutoff(checked),
+    }
+}
+
 /// An entry needs a day to count from: its date or its confirmation. An edit of its file only
 /// moves that day later, so an undated entry is never flagged for the age of its file.
 fn watched(entries: &[Entry]) -> Vec<Watched<'_>> {
@@ -62,7 +71,8 @@ fn watched(entries: &[Entry]) -> Vec<Watched<'_>> {
             if paths.is_empty() {
                 return None;
             }
-            let since = [e.date.as_deref(), e.checked.as_deref()].into_iter().flatten().filter_map(cutoff).max()?;
+            let confirmed = e.checked.as_deref().and_then(confirmed_since);
+            let since = e.date.as_deref().and_then(cutoff).into_iter().chain(confirmed).max()?;
             Some(Watched { id: &e.id, file: &e.rel_path, since, paths })
         })
         .collect()
@@ -277,8 +287,14 @@ mod tests {
             rel_path: format!(".ai/decisions/{id}.md"),
             ..decision(id, Some("2026-01-05"), &["src/**"], None)
         };
-        let entries =
-            vec![rule("plain", None), rule("confirmed", Some("2026-02-01")), rule("stale-check", Some("2025-12-01")), rule("edited", None)];
+        let entries = vec![
+            rule("plain", None),
+            rule("confirmed", Some("2026-02-01")),
+            rule("stale-check", Some("2025-12-01")),
+            rule("edited", None),
+            rule("confirmed-day", Some("2026-02-10")),
+            rule("confirmed-at", Some("2026-02-10T08:00:00Z")),
+        ];
         let commits = vec![
             Commit { time: day("2026-03-01", 9), paths: vec!["src/a.rs"] },
             Commit { time: day("2026-02-20", 9), paths: vec!["src/b.rs"] },
@@ -291,6 +307,8 @@ mod tests {
         assert_eq!(counts["plain"], 5);
         assert_eq!(counts["confirmed"], 4, "counted from the day after the confirmation");
         assert_eq!(counts["stale-check"], 5, "a confirmation older than the date does not move it back");
+        assert_eq!(counts["confirmed-day"], 2, "a day counts from the start of the next one");
+        assert_eq!(counts["confirmed-at"], 4, "a time counts after its second, the rest of its day included");
         assert_eq!(counts["edited"], 3, "the commit that edited the entry and the older ones do not count");
     }
 
