@@ -137,3 +137,71 @@ fn confirm_sets_checked_stages_it_and_refuses_what_it_cannot_confirm() {
 fn chrono_today() -> String {
     chrono::Utc::now().format("%Y-%m-%d").to_string()
 }
+
+#[test]
+fn drift_lists_what_a_range_left_behind_and_a_look_takes_it_off() {
+    let r = Repo::new();
+    r.entry("conventions", "money-in-cents", "convention", "src/billing/**", "");
+    r.entry("learnings", "routes-are-flat", "learning", "src/api/**", "checked: 2026-02-01\n");
+    r.entry("decisions", "notes-in-docs", "decision", "docs/**", "");
+    let base = r.commit("seed");
+    r.write("src/billing/invoice.rs", "pub fn total() -> u64 { 0 }\n");
+    let billing = r.commit("feat(billing): totals in cents");
+    r.write("src/api/routes.rs", "pub fn routes() -> u8 { 1 }\n");
+    r.write(".ai/learnings/routes-are-flat.md", &r.read(".ai/learnings/routes-are-flat.md").replace("for the record", "still flat"));
+    let head = r.commit("feat(api): one more route, rule edited with it");
+
+    // committed range: the edited entry looked at its change, the convention did not
+    let out = r.ok("entries.drift", json!({"base":base,"head":"HEAD"}));
+    assert_eq!(
+        out["entries"],
+        json!([{"id":"money-in-cents","kind":"convention","title":"Rule money-in-cents","path":".ai/conventions/money-in-cents.md",
+            "date":"2026-01-10","changed":["src/billing/invoice.rs"],"commits":[{"sha":billing,"subject":"feat(billing): totals in cents"}]}])
+    );
+    assert_eq!(out["base"], base.as_str());
+    assert_eq!(out["head"], head.as_str());
+    let text = r.kontext(&["drift", "--base", &base, "--head", "HEAD"]);
+    assert!(text.contains("- [convention] Rule money-in-cents <kx:money-in-cents> — .ai/conventions/money-in-cents.md"), "{text}");
+    assert!(
+        text.contains("  changed: src/billing/invoice.rs") && text.contains(&format!("  commits: {} feat(billing)", &billing[..8])),
+        "{text}"
+    );
+    assert!(text.contains("`kontext confirm <id>`"), "{text}");
+    assert_eq!(r.run(&["drift", "--base", &base, "--head", "HEAD", "--fail"]).status.code(), Some(2));
+    let json: Value = serde_json::from_str(&r.kontext(&["drift", "--base", &base, "--head", "HEAD", "--json"])).unwrap();
+    assert_eq!(json["entries"][0]["id"], "money-in-cents");
+    let tool = r.kontext(&["call", "ctx_drift", &json!({"base":base,"head":"HEAD"}).to_string()]);
+    assert!(tool.contains("<kx:money-in-cents>") && tool.contains("ctx_confirm"), "{tool}");
+
+    // the working tree: uncommitted and untracked changes count without a head, with no commits
+    let quiet = r.ok("entries.drift", json!({"base":head}));
+    assert_eq!(quiet["entries"], json!([]));
+    assert_eq!(quiet["head"], "working");
+    r.write("docs/new-guide.md", "Untracked.\n");
+    let working = r.ok("entries.drift", json!({"base":head}));
+    assert_eq!(working["entries"][0]["id"], "notes-in-docs");
+    assert_eq!(working["entries"][0]["changed"], json!(["docs/new-guide.md"]));
+    assert_eq!(working["entries"][0]["commits"], json!([]));
+    assert_eq!(r.run(&["drift", "--base", &head, "--fail"]).status.code(), Some(2));
+    // no base: the fork point from origin's default branch (none here, so HEAD), plus the working tree
+    assert_eq!(r.ok("entries.drift", json!({}))["base"], head.as_str());
+
+    // a confirmation is a look: it is staged and the entry leaves the list
+    r.kontext(&["confirm", "notes-in-docs"]);
+    assert!(r.git(&["diff", "--cached", "--name-only"]).contains(".ai/decisions/notes-in-docs.md"));
+    assert_eq!(r.ok("entries.drift", json!({"base":head}))["entries"], json!([]));
+    assert!(r.kontext(&["drift", "--base", &head]).contains("No knowledge drift"));
+    r.commit("docs: guide, rule confirmed");
+    assert_eq!(r.ok("entries.drift", json!({"base":head,"head":"HEAD"}))["entries"], json!([]), "committed, it still counts");
+
+    // kinds, and bad input
+    let decisions = r.ok("entries.drift", json!({"base":base,"head":"HEAD","kinds":["decision"]}));
+    assert_eq!(decisions["entries"], json!([]));
+    assert_eq!(r.api("entries.drift", json!({"base":"--output=/tmp/x"}))["error"]["code"], "invalid_input");
+    assert_eq!(r.api("entries.drift", json!({"head":"no-such-branch"}))["error"]["code"], "invalid_input");
+    assert_eq!(r.api("entries.drift", json!({"kinds":"decision"}))["error"]["code"], "invalid_input");
+    let status = r.ok("status", json!({}));
+    for op in ["entries.drift", "drafts.confirm"] {
+        assert!(status["capabilities"].as_array().unwrap().iter().any(|c| c == op), "{op}");
+    }
+}

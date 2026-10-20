@@ -178,6 +178,24 @@ enum Cmd {
         #[arg(long)]
         private: bool,
     },
+    /// Recorded knowledge whose governed files changed in a range of commits (and the working tree) without the entry being edited or confirmed
+    Drift {
+        /// Start of the range (default: where HEAD left origin's default branch, else HEAD)
+        #[arg(long, value_name = "REV")]
+        base: Option<String>,
+        /// End of the range (default: the working tree — HEAD plus uncommitted and untracked changes)
+        #[arg(long, value_name = "REV")]
+        head: Option<String>,
+        /// Kinds to check (repeatable; default: decision, convention, learning, incident)
+        #[arg(long, short)]
+        kind: Vec<String>,
+        /// Print the result as JSON (the entries.drift result)
+        #[arg(long)]
+        json: bool,
+        /// Exit with status 2 when an entry is listed
+        #[arg(long)]
+        fail: bool,
+    },
     /// Confirm that entries still hold: sets `checked` to today in each entry's file and stages it
     Confirm {
         /// The entries: kx:<id>, ids or unique prefixes
@@ -779,6 +797,18 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::PrepareCommit { promote, drop, retire } => {
             let app = open(&dir)?;
             print!("{}", ops::prepare_commit(&app, &ops::PrepareReq { promote, drop, retire })?);
+        }
+        Cmd::Drift { base, head, kind, json, fail } => {
+            let app = open(&dir)?;
+            let report = crate::drift::drift(&app, base.as_deref(), head.as_deref(), &kind)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report.to_json())?);
+            } else {
+                print!("{}", crate::drift::render_text(&report, false));
+            }
+            if fail && !report.entries.is_empty() {
+                return Ok(2);
+            }
         }
         Cmd::Confirm { ids } => {
             let app = open(&dir)?;

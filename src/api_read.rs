@@ -21,9 +21,11 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "entries.governing" => governing(app, input),
         "entries.export" => export(app, input),
         "entries.related" => related(app, input),
+        "entries.drift" => drift(app, input),
         _ => Err(crate::api::error("unsupported_operation", format!("unknown read operation '{operation}'"))),
     }?;
-    if operation == "status" || operation == "entries.export" { Ok(result) } else { working_result(app, result) }
+    // drift entries describe a range, not the working view of one entry
+    if matches!(operation, "status" | "entries.export" | "entries.drift") { Ok(result) } else { working_result(app, result) }
 }
 
 pub fn entry_json(entry: &Entry) -> Value {
@@ -360,6 +362,15 @@ fn related(app: &App, input: &Value) -> Result<Value> {
         _ => return Err(crate::api::error("invalid_input", "llm must be a boolean or an adapter name")),
     };
     crate::related::related(app, text, &paths, &exclude, model)
+}
+
+fn drift(app: &App, input: &Value) -> Result<Value> {
+    let revision = |key: &str| match input.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => string(input, key).map(Some),
+    };
+    let report = crate::drift::drift(app, revision("base")?, revision("head")?, &strings(input, "kinds")?)?;
+    Ok(report.to_json())
 }
 
 fn validate_path(path: &str) -> Result<String> {

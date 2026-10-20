@@ -374,6 +374,40 @@ impl Repo {
         Ok(out)
     }
 
+    /// The regular files under `dirs` in commit `rev` and their contents, read with one `ls-tree`
+    /// and one `cat-file --batch`; nothing is checked out.
+    pub fn files_at(&self, rev: &str, dirs: &[String]) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut args = vec!["--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree", rev, "--"];
+        args.extend(dirs.iter().map(String::as_str));
+        let listing = self.git_bytes(&args)?;
+        let mut blobs: Vec<(String, String)> = Vec::new();
+        for rec in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let rec = String::from_utf8_lossy(rec);
+            let Some((meta, path)) = rec.split_once('\t') else { continue };
+            let mut meta = meta.split_whitespace();
+            if let (Some("100644" | "100755"), Some("blob"), Some(sha)) = (meta.next(), meta.next(), meta.next()) {
+                blobs.push((path.to_string(), sha.to_string()));
+            }
+        }
+        if blobs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let input: String = blobs.iter().map(|(_, s)| format!("{s}\n")).collect();
+        let data = self.git_with_stdin_bytes(&["cat-file", "--batch"], &input)?;
+        let mut rest: &[u8] = &data;
+        let mut out = Vec::new();
+        for (path, _) in blobs {
+            let Some(nl) = rest.iter().position(|b| *b == b'\n') else { break };
+            let header = String::from_utf8_lossy(&rest[..nl]).to_string();
+            rest = &rest[nl + 1..];
+            let Some(size) = header.split_whitespace().nth(2).and_then(|s| s.parse::<usize>().ok()) else { continue };
+            let size = size.min(rest.len());
+            out.push((path, rest[..size].to_vec()));
+            rest = rest.get(size + 1..).unwrap_or(&[]);
+        }
+        Ok(out)
+    }
+
     /// Working tree changes (staged or not) — used when nothing is staged yet.
     pub fn changed_paths(&self) -> Result<Vec<(char, String)>> {
         let out = self.git_bytes(&["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"])?;

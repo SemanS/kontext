@@ -73,30 +73,33 @@ struct Commit<'a> {
     paths: Vec<&'a str>,
 }
 
-/// `git log -z --name-only --format=%x00%ct`: a NUL-prefixed timestamp starts a commit, and its paths
-/// follow NUL-terminated (tabs and newlines included), the first one after a newline git inserts.
-fn parse_history(history: &str) -> Vec<Commit<'_>> {
-    let mut commits: Vec<Commit<'_>> = Vec::new();
+/// `git log -z --name-only --format=%x00<header>`: a NUL-prefixed header starts a commit, and its
+/// paths follow NUL-terminated (tabs and newlines included), the first one after a newline git inserts.
+pub(crate) fn parse_log(history: &str) -> Vec<(&str, Vec<&str>)> {
+    let mut commits: Vec<(&str, Vec<&str>)> = Vec::new();
     let mut header = true;
     let mut first_path = false;
     for field in history.split('\0') {
         if field.is_empty() {
             header = true;
         } else if header {
-            if let Ok(time) = field.parse() {
-                commits.push(Commit { time, paths: Vec::new() });
-                first_path = true;
-            }
+            commits.push((field, Vec::new()));
+            first_path = true;
             header = false;
-        } else if let Some(commit) = commits.last_mut() {
+        } else if let Some((_, paths)) = commits.last_mut() {
             let path = if first_path { field.strip_prefix('\n').unwrap_or(field) } else { field };
             first_path = false;
             if !path.is_empty() {
-                commit.paths.push(path);
+                paths.push(path);
             }
         }
     }
     commits
+}
+
+/// The history read with `--format=%x00%ct`: commit times and paths.
+fn parse_history(history: &str) -> Vec<Commit<'_>> {
+    parse_log(history).into_iter().filter_map(|(header, paths)| Some(Commit { time: header.parse().ok()?, paths })).collect()
 }
 
 /// Matching commits per entry; a commit counts once, however many of its files match. `commits` are

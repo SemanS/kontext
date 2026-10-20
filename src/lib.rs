@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod connect;
 mod distill;
+mod drift;
 mod events;
 mod evidence;
 mod freshness;

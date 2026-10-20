@@ -13,6 +13,7 @@ pub const OPERATIONS: &[&str] = &[
     "entries.governing",
     "entries.export",
     "entries.related",
+    "entries.drift",
     "inbox.list",
     "inbox.drop",
     "drafts.capture",

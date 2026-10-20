@@ -66,6 +66,7 @@ fn annotations(name: &str) -> Value {
         "ctx_challenge" => ("Challenge a knowledge entry", false, false),
         // sets one line of the entry's own file and stages it for review
         "ctx_confirm" => ("Confirm a knowledge entry still holds", false, false),
+        "ctx_drift" => ("Knowledge a change left behind", true, false),
         "ctx_prepare_commit" => ("Prepare the commit", false, false),
         "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
         "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
@@ -178,6 +179,15 @@ fn tool_list() -> Vec<Value> {
                 "why": s("Why it no longer holds: what changed, with a source if there is one"),
                 "visibility": {"type": "string", "enum": ["team", "private"]}
             }, "required": ["id", "why"]}
+        }),
+        json!({
+            "name": "ctx_drift",
+            "description": "Recorded knowledge a change left behind: active entries whose `paths` cover files changed in base..head (without head: up to HEAD plus uncommitted and untracked changes, which is how a jj working copy looks) and whose own file was not edited or confirmed in the same range. Deterministic; no model. Before committing or pushing, check each one listed.",
+            "inputSchema": {"type": "object", "properties": {
+                "base": s("Start of the range, a git revision (default: where HEAD left origin's default branch)"),
+                "head": s("End of the range, a git revision (default: the working tree)"),
+                "kinds": arr("Kinds to check (default decision, convention, learning, incident)")
+            }}
         }),
         json!({
             "name": "ctx_confirm",
@@ -515,6 +525,11 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 }
                 other => bail!("unknown action '{other}'"),
             }
+        }
+        "ctx_drift" => {
+            let report =
+                crate::drift::drift(app, str_arg(args, "base").as_deref(), str_arg(args, "head").as_deref(), &list_arg(args, "kinds"))?;
+            Ok(crate::drift::render_text(&report, true))
         }
         "ctx_confirm" => {
             let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
