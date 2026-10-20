@@ -48,6 +48,9 @@ pub struct Entry {
     /// When someone should look at the entry again (`YYYY-MM-DD`). A review date, not an expiry:
     /// past it the entry is marked, never hidden.
     pub review_by: Option<String>,
+    /// The last day someone confirmed the entry still holds (`YYYY-MM-DD`). Freshness and drift
+    /// count changes from here, as they do from an edit of the entry's own file.
+    pub checked: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub paths: Vec<String>,
@@ -177,6 +180,7 @@ impl Entry {
         s("status", &self.status);
         s("date", &self.date);
         s("review_by", &self.review_by);
+        s("checked", &self.checked);
         s("summary", &self.summary);
         let mut l = |k: &str, val: &Vec<String>| {
             if !val.is_empty() {
@@ -228,6 +232,7 @@ impl Entry {
         field("Status", self.status.clone().unwrap_or_default());
         field("Date", self.date.clone().unwrap_or_default());
         field("Review by", self.review_by.clone().unwrap_or_default());
+        field("Checked", self.checked.clone().unwrap_or_default());
         field("Summary", self.summary.clone().unwrap_or_default());
         field("Tags", self.tags.join(", "));
         field("Paths", self.paths.join(", "));
@@ -412,6 +417,7 @@ const FIELD_KEYS: &[&str] = &[
     "review by",
     "review-by",
     "review_by",
+    "checked",
     "tags",
     "paths",
     "supersedes",
@@ -518,6 +524,7 @@ impl Entry {
             }
             "summary" | "description" => self.summary = Some(v.as_str()),
             "review_by" | "review-by" | "review by" => self.review_by = Some(v.as_str()).filter(|s| !s.trim().is_empty()),
+            "checked" => self.checked = Some(v.as_str()).filter(|s| !s.trim().is_empty()),
             "tags" => self.tags = v.as_list(),
             "paths" | "scope" if matches!(v, FmValue::List(_)) || key == "paths" => self.paths = v.as_list(),
             "supersedes" => self.supersedes = v.as_list(),
@@ -841,6 +848,21 @@ impl<'a> Store<'a> {
         }
     }
 
+    /// The text of `entry` confirmed on `date`: its `checked` field set (or added) and every other
+    /// byte left as it was, so the review diff is the one line. The canonical writer would reorder keys,
+    /// requote values and reflow lists.
+    /// None when an ADR has no title heading to hang the field under.
+    pub(crate) fn checked_text(entry: &Entry, date: &str, text: &str) -> Option<String> {
+        match entry.style {
+            Style::Frontmatter => Some(checked_frontmatter(date, text).unwrap_or_else(|| {
+                let mut e = entry.clone();
+                e.checked = Some(date.to_string());
+                e.markdown()
+            })),
+            Style::Fields => checked_fields(date, text),
+        }
+    }
+
     pub fn validate(&self, e: &Entry, known_ids: &HashSet<String>, tracked: Option<&[String]>) -> Vec<Issue> {
         let mut issues = Vec::new();
         let mut push = |level, msg: String| issues.push(Issue { level, path: e.rel_path.clone(), msg });
@@ -877,6 +899,14 @@ impl<'a> Store<'a> {
                         push(Level::Error, format!("review_by {r} is before the entry's date {}", &e.date.as_deref().unwrap_or("")[..10]));
                     }
                 }
+            }
+        }
+        if let Some(c) = &e.checked {
+            match chrono::NaiveDate::parse_from_str(c, "%Y-%m-%d") {
+                Err(_) => push(Level::Error, format!("checked '{c}' is not a YYYY-MM-DD date")),
+                // a confirmation is written in UTC; a hand-written local date may be a day ahead of it
+                Ok(day) if day > latest_today() => push(Level::Error, format!("checked {c} is in the future")),
+                Ok(_) => {}
             }
         }
         let lines = e.body.lines().filter(|l| !l.trim().is_empty()).count();
@@ -992,6 +1022,95 @@ fn kind_heading(k: &str) -> String {
     }
 }
 
+/// The later of today in UTC and today here: no clock in the team is ahead of it.
+fn latest_today() -> chrono::NaiveDate {
+    chrono::Utc::now().date_naive().max(chrono::Local::now().date_naive())
+}
+
+/// Set `checked:` in front matter in place: the value of an existing key, else a new line after
+/// `review_by`/`date` (or before the closing `---`), in the file's own line endings.
+fn checked_frontmatter(date: &str, text: &str) -> Option<String> {
+    let bom = if text.starts_with('\u{feff}') { '\u{feff}'.len_utf8() } else { 0 };
+    let open = ["---\n", "---\r\n"].into_iter().find(|o| text[bom..].starts_with(o))?.len();
+    let mut at = bom + open;
+    let mut anchor: Option<usize> = None;
+    let mut eol = if open == 5 { "\r\n" } else { "\n" };
+    let mut lines = text[at..].split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_end();
+        let end = at + line.len();
+        if trimmed == "---" || trimmed == "..." {
+            let at = anchor.unwrap_or(at);
+            return Some(format!("{}checked: {date}{eol}{}", &text[..at], &text[at..]));
+        }
+        if line.ends_with('\n') {
+            eol = if line.ends_with("\r\n") { "\r\n" } else { "\n" };
+        }
+        let continued = |next: Option<&&str>| next.is_some_and(|n| n.starts_with([' ', '\t']) || n.starts_with("- "));
+        if !line.starts_with([' ', '\t'])
+            && let Some((key, _)) = trimmed.split_once(':')
+        {
+            match key.trim().to_lowercase().as_str() {
+                "checked" => {
+                    // the value and any continuation lines of it give way to the date
+                    let mut end = end;
+                    while continued(lines.peek()) {
+                        end += lines.next().map_or(0, str::len);
+                    }
+                    let ending = if line.ends_with('\n') { eol } else { "" };
+                    let colon = at + line.find(':')?;
+                    return Some(format!("{}: {date}{ending}{}", &text[..colon], &text[end..]));
+                }
+                "date" | "review_by" | "review-by" => anchor = (!continued(lines.peek()) && line.ends_with('\n')).then_some(end),
+                _ => {}
+            }
+        }
+        at = end;
+    }
+    None
+}
+
+/// Set the `Checked` field of a classic ADR in place: its value, else a new field line after the
+/// last one, written in the same shape (`**Status:** x` → `**Checked:** date`).
+fn checked_fields(date: &str, text: &str) -> Option<String> {
+    let (h1_off, _) = first_h1(text)?;
+    let mut at = text[h1_off..].find('\n').map_or(text.len(), |i| h1_off + i + 1);
+    let title_end = at;
+    let mut last: Option<(usize, String)> = None;
+    for line in text[at..].split_inclusive('\n') {
+        let start = at;
+        at += line.len();
+        let t = line.trim();
+        if t.starts_with("## ") || t.starts_with("# ") {
+            break;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        let Some(c) = FIELD.captures(t) else { break };
+        let key = c[1].trim().to_lowercase();
+        if !FIELD_KEYS.contains(&key.as_str()) {
+            break;
+        }
+        let lead = start + (line.len() - line.trim_start().len());
+        let (k, v) = (c.get(1)?, c.get(2)?);
+        if key == "checked" {
+            return Some(format!("{}{date}{}", &text[..lead + v.start()], &text[lead + v.end()..]));
+        }
+        let ending = &line[line.trim_end().len()..];
+        let indent = &line[..line.len() - line.trim_start().len()];
+        last = Some((at, format!("{indent}{}Checked{}{date}{}{ending}", &t[..k.start()], &t[k.end()..v.start()], &t[v.end()..])));
+    }
+    Some(match last {
+        Some((end, field)) => {
+            // the last field may end the file without a newline, and the new one then does too
+            let sep = if text[..end].ends_with('\n') { "" } else { "\n" };
+            format!("{}{sep}{field}{}", &text[..end], &text[end..])
+        }
+        None => format!("{}\n**Checked:** {date}\n{}", &text[..title_end], &text[title_end..]),
+    })
+}
+
 pub fn is_non_entry_name(name: &str) -> bool {
     let l = name.to_lowercase();
     l == "readme.md" || l == "index.md" || l.starts_with("template") || l.starts_with("0000-") || l.starts_with('_') || l.starts_with('.')
@@ -1080,6 +1199,82 @@ mod tests {
         assert_eq!(crate::config::period_days("2w"), Some(14));
         assert_eq!(crate::config::period_days("1y"), Some(365));
         assert_eq!(crate::config::period_days("soon"), None);
+    }
+
+    #[test]
+    fn checked_round_trips_is_validated_and_survives_rewrites() {
+        let text = "---\nid: cache\nkind: convention\ntitle: Cache reads\ndate: 2026-01-05\nchecked: 2026-03-01\npaths: [src/**]\n---\n\nCache reads.\n";
+        let e = Entry::parse(".ai/conventions/cache.md", text, "convention");
+        assert_eq!(e.checked.as_deref(), Some("2026-03-01"));
+        assert!(e.extra.is_empty(), "a field, not extra: {:?}", e.extra);
+        assert!(e.markdown().contains("date: 2026-01-05\nchecked: 2026-03-01\n"));
+        let retired = Entry::parse(&e.rel_path, &Store::retired_text(&e, "Gone.", "2026-04-01", text), "convention");
+        assert_eq!(retired.checked.as_deref(), Some("2026-03-01"), "retiring keeps it");
+        let superseded = Entry::parse(&e.rel_path, &Store::superseded_text(&e, "new", text), "convention");
+        assert_eq!(superseded.checked.as_deref(), Some("2026-03-01"), "superseding keeps it");
+        let adr = Entry::parse("docs/adr/0003-x.md", "# 0003 — X\n\n**Status:** accepted\n**Checked:** 2026-03-01\n\nBody.\n", "decision");
+        assert_eq!(adr.checked.as_deref(), Some("2026-03-01"));
+        assert!(adr.markdown().contains("**Checked:** 2026-03-01\n"));
+
+        let cfg: Config = toml::from_str(crate::config::DEFAULTS).unwrap();
+        let repo = crate::repo::Repo::discover(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let store = Store::new(&repo, &cfg);
+        let errors = |e: &Entry| {
+            store.validate(e, &HashSet::new(), None).into_iter().filter(|i| i.level == Level::Error).map(|i| i.msg).collect::<Vec<_>>()
+        };
+        assert!(errors(&e).is_empty());
+        let bad = Entry { checked: Some("last week".into()), ..e.clone() };
+        assert_eq!(errors(&bad), vec!["checked 'last week' is not a YYYY-MM-DD date"]);
+        let future = Entry { checked: Some("2999-01-01".into()), ..e.clone() };
+        assert_eq!(errors(&future), vec!["checked 2999-01-01 is in the future"]);
+    }
+
+    #[test]
+    fn confirming_changes_only_the_checked_line() {
+        let fm = |t: &str| Entry::parse(".ai/learnings/x.md", t, "learning");
+        // an odd but valid file: quoting, a dashed list and a comment the canonical writer would not keep
+        let text = "---\nid: x\nkind: learning\ntitle: 'Cache: reads'\ndate: 2026-01-05\npaths:\n  - src/**   # all of it\n---\n\nBody.\n";
+        assert_eq!(
+            Store::checked_text(&fm(text), "2026-10-20", text).unwrap(),
+            text.replace("date: 2026-01-05\n", "date: 2026-01-05\nchecked: 2026-10-20\n")
+        );
+        let again = text.replace("date: 2026-01-05\n", "date: 2026-01-05\nchecked: 2026-03-01\n");
+        assert_eq!(Store::checked_text(&fm(&again), "2026-10-20", &again).unwrap(), again.replace("2026-03-01", "2026-10-20"));
+        let review = "---\nid: x\ndate: 2026-01-05\nreview_by: 2026-12-01\ntags: [a]\n---\nBody.\n";
+        assert_eq!(
+            Store::checked_text(&fm(review), "2026-10-20", review).unwrap(),
+            "---\nid: x\ndate: 2026-01-05\nreview_by: 2026-12-01\nchecked: 2026-10-20\ntags: [a]\n---\nBody.\n"
+        );
+        let crlf = "---\r\nid: x\r\ntitle: X\r\n---\r\nBody.\r\n";
+        assert_eq!(
+            Store::checked_text(&fm(crlf), "2026-10-20", crlf).unwrap(),
+            "---\r\nid: x\r\ntitle: X\r\nchecked: 2026-10-20\r\n---\r\nBody.\r\n"
+        );
+        // a multi-line date value is never split: the new line goes before the closing delimiter
+        let block = "---\nid: x\ndate:\n  2026-01-05\n---\nBody.\n";
+        assert_eq!(
+            Store::checked_text(&fm(block), "2026-10-20", block).unwrap(),
+            "---\nid: x\ndate:\n  2026-01-05\nchecked: 2026-10-20\n---\nBody.\n"
+        );
+        assert_eq!(fm(&Store::checked_text(&fm(block), "2026-10-20", block).unwrap()).checked.as_deref(), Some("2026-10-20"));
+
+        let adr = |t: &str| Entry::parse("docs/adr/0002-orders.md", t, "decision");
+        let fields = "# 0002 — Orders\n\n* Status: accepted\n* Date: 2026-01-05\n\n## Decision\n\nOne database.\n";
+        let out = Store::checked_text(&adr(fields), "2026-10-20", fields).unwrap();
+        assert_eq!(out, fields.replace("* Date: 2026-01-05\n", "* Date: 2026-01-05\n* Checked: 2026-10-20\n"));
+        assert_eq!(adr(&out).checked.as_deref(), Some("2026-10-20"));
+        assert_eq!(Store::checked_text(&adr(&out), "2026-10-21", &out).unwrap(), out.replace("2026-10-20", "2026-10-21"));
+        let bold = "# 0002 — Orders\n\n**Status:** accepted";
+        assert_eq!(
+            Store::checked_text(&adr(bold), "2026-10-20", bold).unwrap(),
+            "# 0002 — Orders\n\n**Status:** accepted\n**Checked:** 2026-10-20"
+        );
+        let bare = "# Orders\n\nOne database.\n";
+        let out = Store::checked_text(&adr(bare), "2026-10-20", bare).unwrap();
+        assert_eq!(out, "# Orders\n\n**Checked:** 2026-10-20\n\nOne database.\n");
+        assert_eq!(adr(&out).checked.as_deref(), Some("2026-10-20"));
+        assert_eq!(adr(&out).body, "One database.\n");
+        assert!(Store::checked_text(&adr("No heading.\n"), "2026-10-20", "No heading.\n").is_none());
     }
 
     #[test]

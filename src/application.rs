@@ -14,6 +14,10 @@ pub struct CommittedEntry {
     pub body: String,
     pub summary: Option<String>,
     pub status: Option<String>,
+    /// The last day someone confirmed the entry still holds (`YYYY-MM-DD`), as written; it is
+    /// validated by `kontext check`, not here.
+    #[serde(default)]
+    pub checked: Option<String>,
     pub paths: Vec<String>,
     pub tags: Vec<String>,
     pub file: String,
@@ -118,6 +122,7 @@ impl KnowledgePolicy {
             body: entry.body,
             summary: entry.summary,
             status: entry.status,
+            checked: entry.checked,
             paths: entry.paths,
             tags: entry.tags,
             file: path.into(),
@@ -156,6 +161,10 @@ mod tests {
         assert!(policy.inspect("outside/0001-reviewed.md", text).is_err());
         let custom = "---\nid: custom\nkind: policy\ntitle: Custom\n---\nA reviewed policy.\n";
         assert_eq!(policy.inspect("knowledge/policies/custom.md", custom).unwrap().kind, "policy");
+        let confirmed =
+            policy.inspect("docs/adr/0001-reviewed.md", &text.replace("accepted\n", "accepted\n**Checked:** 2026-10-20\n")).unwrap();
+        assert_eq!(confirmed.checked.as_deref(), Some("2026-10-20"));
+        assert!(!confirmed.extra.contains_key("checked"), "a field of its own, not extra");
     }
     #[test]
     fn malformed_configuration_and_private_entries_are_rejected() {

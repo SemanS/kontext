@@ -123,6 +123,7 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<ops::Prepar
                         | "date"
                         | "review_by"
                         | "review-by"
+                        | "checked"
                         | "summary"
                         | "tags"
                         | "paths"
@@ -604,6 +605,41 @@ fn retire(app: &App, input: &Value) -> Result<Value> {
     Ok(result)
 }
 
+/// Record that an entry still holds: `checked` becomes today (UTC) in its own file, nothing else
+/// changes, and the file is staged so the confirmation is reviewed with the change that prompted it.
+/// Confirming twice on one day changes nothing the second time.
+pub(crate) fn confirm(app: &App, input: &Value) -> Result<Value> {
+    let id = required(input, "id")?;
+    let _file = write_guard(app)?;
+    let _local = app.write_lock.lock().unwrap();
+    let (entries, _) = app.entries();
+    let entry = Store::find(&entries, id).ok_or_else(|| error("not_found", format!("no entry '{id}'")))?;
+    if !entry.is_active() {
+        return Err(error(
+            "operation_conflict",
+            format!("{} is {}: there is nothing to confirm", entry.id, entry.status.as_deref().unwrap_or("inactive")),
+        ));
+    }
+    app.store().validate_reserved(entry).map_err(|e| error("invalid_input", e.to_string()))?;
+    // staging must not take a user's unstaged edits of the file along; staged ones are theirs already
+    let state = app.repo.git(&["status", "--porcelain=v1", "--untracked-files=all", "--", &entry.rel_path])?;
+    if state.starts_with("??") {
+        return Err(error("operation_conflict", format!("{} is not committed yet: there is nothing to confirm", entry.rel_path)));
+    }
+    if state.as_bytes().get(1).is_some_and(|b| *b != b' ') {
+        return Err(error("operation_conflict", format!("{} has unstaged changes: stage or revert them first", entry.rel_path)));
+    }
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let before = std::fs::read_to_string(app.repo.abs(&entry.rel_path))?;
+    let after = Store::checked_text(entry, &today, &before)
+        .ok_or_else(|| error("invalid_input", format!("{} has no title heading to record the confirmation under", entry.rel_path)))?;
+    if after != before {
+        util::write_atomic(&app.repo.abs(&entry.rel_path), &after)?;
+    }
+    app.repo.git(&["add", "--", &entry.rel_path])?;
+    Ok(json!({"id":entry.id,"path":entry.rel_path,"checked":today}))
+}
+
 fn local_entry_json(entry: &Entry, state: &str) -> Value {
     let mut value = entry_json(entry);
     value["publication"] = json!({"state":state,"revision":null,"staged":false,"modified":false});
@@ -752,6 +788,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "drafts.capture" => capture(app, input),
         "drafts.stage" => stage(app, input),
         "drafts.retire" => retire(app, input),
+        "drafts.confirm" => confirm(app, input),
         "drafts.revise" => revise(app, input),
         "drafts.extract" => {
             let text = required(input, "text")?;

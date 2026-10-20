@@ -64,6 +64,8 @@ fn annotations(name: &str) -> Value {
         "ctx_inbox" => ("Knowledge inbox", false, false),
         // a challenge is a local inbox note; it changes no knowledge by itself
         "ctx_challenge" => ("Challenge a knowledge entry", false, false),
+        // sets one line of the entry's own file and stages it for review
+        "ctx_confirm" => ("Confirm a knowledge entry still holds", false, false),
         "ctx_prepare_commit" => ("Prepare the commit", false, false),
         "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
         "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
@@ -81,8 +83,18 @@ fn annotations(name: &str) -> Value {
 }
 
 /// Tools that act on one repository and take `dir` for another (every `ctx_` tool accepts it).
-const TAKES_DIR: &[&str] =
-    &["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_log", "ctx_capture", "ctx_challenge", "ctx_inbox", "ctx_prepare_commit"];
+const TAKES_DIR: &[&str] = &[
+    "ctx_brief",
+    "ctx_search",
+    "ctx_read",
+    "ctx_why",
+    "ctx_log",
+    "ctx_capture",
+    "ctx_challenge",
+    "ctx_confirm",
+    "ctx_inbox",
+    "ctx_prepare_commit",
+];
 
 pub fn definitions() -> Vec<Value> {
     let mut defs = tool_list();
@@ -166,6 +178,13 @@ fn tool_list() -> Vec<Value> {
                 "why": s("Why it no longer holds: what changed, with a source if there is one"),
                 "visibility": {"type": "string", "enum": ["team", "private"]}
             }, "required": ["id", "why"]}
+        }),
+        json!({
+            "name": "ctx_confirm",
+            "description": "Say that a recorded entry still holds after the code it governs changed: sets its `checked` date to today and stages its file, so the confirmation is reviewed with the change. Freshness and drift count from it. Only when you checked the entry against the code; if it no longer holds, use ctx_challenge or record a replacement.",
+            "inputSchema": {"type": "object", "properties": {
+                "id": s("The entry: kx:<id>, an id or its unique prefix")
+            }, "required": ["id"]}
         }),
         json!({
             "name": "ctx_why",
@@ -496,6 +515,16 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 }
                 other => bail!("unknown action '{other}'"),
             }
+        }
+        "ctx_confirm" => {
+            let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
+            let out = crate::api_write::confirm(app, &json!({"id": id}))?;
+            Ok(format!(
+                "Confirmed {}: checked {} in {} (staged). Commit it with the change that prompted the look.",
+                out["id"].as_str().unwrap_or_default(),
+                out["checked"].as_str().unwrap_or_default(),
+                out["path"].as_str().unwrap_or_default()
+            ))
         }
         "ctx_prepare_commit" => {
             let promote = list_arg(args, "promote");

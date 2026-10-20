@@ -178,6 +178,12 @@ enum Cmd {
         #[arg(long)]
         private: bool,
     },
+    /// Confirm that entries still hold: sets `checked` to today in each entry's file and stages it
+    Confirm {
+        /// The entries: kx:<id>, ids or unique prefixes
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Validate knowledge files and scan them for secrets
     Check {
         /// Check exactly what is staged (what the pre-commit hook checks)
@@ -773,6 +779,27 @@ fn run(cli: Cli) -> Result<i32> {
         Cmd::PrepareCommit { promote, drop, retire } => {
             let app = open(&dir)?;
             print!("{}", ops::prepare_commit(&app, &ops::PrepareReq { promote, drop, retire })?);
+        }
+        Cmd::Confirm { ids } => {
+            let app = open(&dir)?;
+            let mut failed = 0;
+            for id in &ids {
+                match crate::api_write::confirm(&app, &json!({"id": id})) {
+                    Ok(out) => println!(
+                        "confirmed {} — checked {} in {} (staged)",
+                        out["id"].as_str().unwrap_or(id),
+                        out["checked"].as_str().unwrap_or(""),
+                        out["path"].as_str().unwrap_or("")
+                    ),
+                    Err(e) => {
+                        eprintln!("kontext: {id}: {e:#}");
+                        failed += 1;
+                    }
+                }
+            }
+            if failed > 0 {
+                return Ok(1);
+            }
         }
         Cmd::Check { staged } => {
             let app = open(&dir)?;

@@ -368,6 +368,9 @@ fn render_entry(e: &Entry, level: u8) -> String {
             if let Some(r) = &e.review_by {
                 let _ = write!(s, "\nreview by: {r}");
             }
+            if let Some(c) = &e.checked {
+                let _ = write!(s, "\nconfirmed: {c}");
+            }
             let _ = write!(s, "\n\n{}", util::truncate_chars(e.body.trim(), 4000));
             s
         }
