@@ -205,3 +205,22 @@ fn drift_lists_what_a_range_left_behind_and_a_look_takes_it_off() {
         assert!(status["capabilities"].as_array().unwrap().iter().any(|c| c == op), "{op}");
     }
 }
+
+#[test]
+fn prepare_commit_reads_the_working_tree_when_nothing_is_staged() {
+    let r = Repo::new();
+    r.entry("conventions", "money-in-cents", "convention", "src/billing/**", "");
+    r.commit("seed");
+    // a jj working copy: edits git sees as unstaged, and a new file
+    r.write("src/billing/invoice.rs", "pub fn total() -> u64 { 0 }\n");
+    r.write("src/billing/tax.rs", "pub const VAT: u64 = 20;\n");
+    let report = r.kontext(&["prepare-commit"]);
+    assert!(
+        report.contains("Nothing staged yet — read the working tree's changes against HEAD (untracked files included): 2 file(s)"),
+        "{report}"
+    );
+    assert!(report.contains("## Recorded knowledge covering this change — confirm it still holds"), "{report}");
+    assert!(report.contains("<kx:money-in-cents>") && report.contains("`kontext confirm <id>`"), "{report}");
+    let tool = r.kontext(&["call", "ctx_prepare_commit", "{}"]);
+    assert!(tool.contains("read the working tree's changes against HEAD") && tool.contains("ctx_confirm"), "{tool}");
+}

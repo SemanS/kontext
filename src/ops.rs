@@ -1866,7 +1866,12 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     let _ = writeln!(
         out,
         "\n{} {} file(s): {} code/docs, {} knowledge entr{}.",
-        if using_worktree { "Nothing staged yet — looking at the working tree:" } else { "Staged:" },
+        // jj never stages and runs no git hooks: its working copy is the change
+        if using_worktree {
+            "Nothing staged yet — read the working tree's changes against HEAD (untracked files included):"
+        } else {
+            "Staged:"
+        },
         staged.len(),
         code.len(),
         knowledge.len(),
@@ -1891,7 +1896,7 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
         }
         let _ = writeln!(
             out,
-            "If this change departs from one, record the new direction as a decision that supersedes it (`ctx_capture` kind=decision, `supersedes: [<id>]`, the paths) and promote it into this commit, so the pull request reviews both."
+            "Confirm each that still holds (`ctx_confirm <id>` / `kontext confirm <id>`: sets its `checked` date and stages it with this change). If this change departs from one, record the new direction as a decision that supersedes it (`ctx_capture` kind=decision, `supersedes: [<id>]`, the paths) and promote it into this commit, so the pull request reviews both."
         );
     }
 
@@ -2000,7 +2005,10 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
         );
     }
     if using_worktree {
-        let _ = writeln!(out, "\nStage your changes (`git add …`) and run this again for an exact report.");
+        let _ = writeln!(
+            out,
+            "\nStage your changes (`git add …`) and run this again for an exact report (with jj, this working-tree report is the one)."
+        );
     }
     Ok(out)
 }

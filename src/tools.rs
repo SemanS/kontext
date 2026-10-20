@@ -232,7 +232,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_prepare_commit",
-            "description": "Run before committing: the staged change, recorded knowledge it touches, inbox candidates to ship with it (promote=[ids] writes and stages them, drop=[ids] discards), checks of knowledge files, module docs to refresh, and the commit trailers (and whether a hook adds them).",
+            "description": "Run before committing: the staged change (with nothing staged, the working tree's changes against HEAD, which is how a jj change looks), recorded knowledge it touches (confirm what still holds with ctx_confirm), inbox candidates to ship with it (promote=[ids] writes and stages them, drop=[ids] discards), checks of knowledge files, module docs to refresh, and the commit trailers (and whether a hook adds them).",
             "inputSchema": {"type": "object", "properties": {
                 "promote": arr("Inbox ids to promote and stage"),
                 "drop": arr("Inbox ids to discard"),
