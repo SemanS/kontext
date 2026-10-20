@@ -82,7 +82,7 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 
 | Key | Default | |
 | --- | --- | --- |
-| `threshold_commits` | `20` | flag an active decision once this many commits touched its `paths` since its date; `0` turns it off (see [Freshness](../concepts/04-context-layers.md#freshness)) |
+| `threshold_commits` | `20` | flag an active decision, convention or learning once this many commits touched its `paths` since its date, its `checked` confirmation or the last commit that changed it, whichever is latest; `0` turns it off (see [Freshness](../concepts/04-context-layers.md#freshness)) |
 
 ## `[search]` {#search}
 

@@ -8,11 +8,11 @@ Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol vers
 `input` and optional `dir`. It returns `structuredContent` and `outputSchema` as well as a complete
 JSON text copy. Existing tools below retain their text results.
 
-Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
 
 ### Another repository: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -92,6 +92,24 @@ The answer lists related entries as notes (`related, check: <title> <kx:id> — 
 
 Records that an entry no longer holds, as a local inbox candidate of kind `challenge` (against the entry and the commit it was read at). Nothing changes until review: the brief marks the entry `challenged locally`, and `ctx_prepare_commit` offers to retire it or to record a replacement that supersedes it.
 
+### `ctx_confirm`
+
+| Parameter | Type | Default | |
+| --- | --- | --- | --- |
+| `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
+
+Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) date to today (UTC), changes nothing else in the file, and stages it, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead.
+
+### `ctx_drift`
+
+| Parameter | Type | Default | |
+| --- | --- | --- | --- |
+| `base` | string | merge base of `HEAD` with the remote's default branch, else `HEAD` | start of the range, a git revision |
+| `head` | string | the working tree | end of the range, a git revision; without it uncommitted and untracked changes count too |
+| `kinds` | string[] | decision, convention, learning, incident | kinds to check |
+
+The knowledge a change left behind: active entries whose `paths` cover files changed in the range and whose own file was not edited or confirmed in it, each with the changed files and commits and what to do about it. Deterministic, no model. See [Drift](../concepts/03-capture-and-review.md#drift); `entries.drift` in `ctx_api` returns the same as JSON.
+
 ### `ctx_threads`
 
 | Parameter | Type | Default | |
@@ -117,7 +135,7 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 | `drop` | string[] | inbox ids to discard |
 | `retire` | string[] | entries challenged in this worktree (or the challenges): status `deprecated`, the challenge as the reason in a `## Retired` note, staged |
 
-Returns the report described in [Capture and review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). It lists the commit trailers and says whether the prepare-commit-msg hook adds them: a clone without kontext's hooks (a fresh clone, a Superset project) needs them added by hand, or `kontext hooks install`.
+Returns the report described in [Capture and review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). With nothing staged it reads the working tree's changes against `HEAD` (as under jj) and says so. It lists the commit trailers and says whether the prepare-commit-msg hook adds them: a clone without kontext's hooks (a fresh clone, a Superset project) needs them added by hand, or `kontext hooks install`.
 
 ### `ctx_init`
 

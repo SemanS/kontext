@@ -2,6 +2,23 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.4.0 (2026-10-20)
+
+**Znalosti, ktoré idú za kódom, ktorý riadia.** Review jedného repozitára našlo asi desať záznamov, ktoré už nezodpovedali kódu. kontext už vypisoval záznamy pokrývajúce stagnutú zmenu, ale len z git hookov, ktoré tím commitujúci cez jj nikdy nespustí; aktuálnosť sa nevynulovala, ani keď niekto záznam overil, a sledovala len rozhodnutia; a nič neodpovedalo, ktoré záznamy rozsah commitov nechal za sebou. Teraz, bez modelu a rovnako pod gitom aj jj:
+
+- **Potvrdenia.** Záznam môže niesť `checked: YYYY-MM-DD`, posledný deň, keď niekto potvrdil, že stále platí. `kontext confirm <id>` / `ctx_confirm` / `drafts.confirm` ho nastavia na dnešok v súbore záznamu (jednoriadkový diff) a stagnú ho, takže potvrdenie prejde review so zmenou. Pozri [Potvrdenia](../concepts/02-knowledge-store.md#checked).
+- **Drift.** `kontext drift` / `ctx_drift` / `entries.drift` vypíšu aktívne záznamy, ktorých `paths` pokrývajú súbory zmenené v `base..head`, kým ich vlastný súbor sa v rozsahu neupravil, nevyradil ani nepotvrdil. Base je predvolene miesto, kde vetva opustila predvolenú vetvu remote; bez head sa počíta aj pracovný strom, čo je presne pracovná kópia jj. Pozri [Drift](../concepts/03-capture-and-review.md#drift).
+- **CI.** `kontext ci` skontroluje všetky záznamy a vypíše drift commitov pull requestu, ako text alebo Markdown pre súhrn jobu; drift je varovanie, kým nepoužiješ `--strict`. Workflow pre GitHub Actions na skopírovanie je vo [Validácii znalostí v CI](../guides/07-ci.md).
+- **Aktuálnosť** sleduje okrem rozhodnutí aj konvencie a poučenia a počíta commity od najneskoršieho z: dátumu záznamu, jeho potvrdenia a posledného commitu, ktorý zmenil jeho súbor. Pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness).
+- **prepare-commit bez stagnutej zmeny** povie, že prečítal zmeny pracovného stromu voči `HEAD`, a poradí, ako potvrdiť záznam, ktorý stále platí. S jj ho (alebo `kontext drift`) spusti pred `jj commit` / `jj git push`: pozri [jj](../concepts/07-git-integration.md#jj).
+- **Aplikačné API.** Nové operácie `entries.drift` a `drafts.confirm` (uvedené v `status.capabilities`); načítané záznamy aj `CommittedEntry` vo vkladacej fasáde nesú `checked`.
+
+**Migrácia.** `checked` je nové voliteľné pole; v `.ai/` netreba nič meniť. Čo si môžeš všimnúť:
+
+- `kontext status` a brief môžu teraz označiť aj konvencie a poučenia a píšu „N entr(y|ies) may need a refresh … since they were made, edited or confirmed“ namiesto „N decision(s) …“. Počty sú často nižšie: commit, ktorý naposledy zmenil súbor záznamu (zvyčajne ten, ktorý ho pridal), a commity pred ním sa už nepočítajú.
+- `checked` je pole záznamu: existujúci kľúč `checked:` sa presúva z `extra` do vlastného poľa v JSON záznamu aj v `CommittedEntry`, `kontext check` odmietne `checked`, ktorý nie je dátum alebo leží v budúcnosti, a `drafts.*` ho ako kľúč v `extra` odmietnu.
+- Riadok správy `prepare-commit` o pracovnom strome znie „Nothing staged yet — read the working tree's changes against HEAD (untracked files included): …“.
+
 ## 0.3.0 (2026-10-19)
 
 **Znalosti, ktoré ostanú správne aj po zápise.** Brief a vyhľadávanie už nenechajú návrh vyzerať ako prijaté pravidlo, spájanie zdrojov už nezahodí iné tvrdenie len preto, že začína rovnako, a zaznamenané znalosti môžu niesť termín kontroly a svoje zdroje, dajú sa napadnúť a vyradiť, vždy cez review. Merané novou [evaluačnou sadou](https://github.com/SemanS/kontext/tree/main/tests/eval) s 33 scenármi: na 0.2.1 prešlo 8 (nájdených 23 zo 64 očakávaní, 2 výsledky nesprávne potlačené, 1 so šumom); teraz prejde všetkých 33 (69 zo 69, nič potlačené, žiadny šum).

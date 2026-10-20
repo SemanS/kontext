@@ -57,8 +57,8 @@ Promotion writes a candidate into the store (with the right id, directory, style
 
 The report lists:
 
-1. the staged change (or the working tree, when nothing is staged),
-2. recorded knowledge whose `paths` cover the changed files (*confirm it still holds*),
+1. the staged change, or, when nothing is staged, the working tree's changes against `HEAD` (untracked files included) — the report says which it read,
+2. recorded knowledge whose `paths` cover the changed files (*confirm it still holds*: `ctx_confirm` / `kontext confirm <id>`),
 3. challenges raised in this worktree, with the two ways to resolve them ([below](#challenges)),
 4. inbox candidates, the ones touching changed files first,
 5. validation and secret-scan results for staged knowledge (errors will block the commit),
@@ -67,6 +67,26 @@ The report lists:
 8. a nudge when a large change carries no knowledge at all.
 
 A capture also names the recorded entries it may duplicate, extend or contradict (`related, check: … <kx:id> — governs the same paths (src/pricing/**)`). It is a prompt to look, never an instruction to replace: whether the new entry supersedes one is the author's call, and the reviewer's.
+
+## Drift: knowledge a change left behind {#drift}
+
+`ctx_prepare_commit` looks at one change. `kontext drift` (`ctx_drift`, `entries.drift`) looks at a range: it lists the active entries whose `paths` cover files changed in `base..head` and whose own file was **not** changed in the same range. Editing an entry, retiring it or [confirming](./02-knowledge-store.md#checked) it counts as having looked at it.
+
+```text
+$ kontext drift
+Knowledge drift in 3f2a91c4..working tree: 1 entry governs changed files but was not edited or confirmed in the range.
+
+- [convention] Prices are integer cents <kx:prices-are-integer-cents> — .ai/conventions/prices-are-integer-cents.md
+  changed: src/billing/invoice.rs, src/billing/tax.rs
+  commits: 9c1d2e3f feat(billing): VAT per line
+
+For each, read it against the change: if it still holds, confirm it (`kontext confirm <id>`); if it needs a correction, edit it; if it no longer holds, supersede it (`kontext capture --supersedes <id> …`) or retire it (`kontext challenge <id> "why"`, then `kontext prepare-commit --retire <id>`).
+```
+
+- `--base` defaults to where `HEAD` left the remote's default branch (the merge base with `origin/HEAD`, else `origin/main`, else `origin/master`), and to `HEAD` without a remote.
+- Without `--head` the working tree counts as well: commits `base..HEAD` plus uncommitted and untracked changes. That is how a [jj](./07-git-integration.md#jj) working copy looks to git, so drift works without commits or hooks. With `--head` only committed changes count, and the entries are read as committed there.
+- Decisions, conventions, learnings and incidents are checked (`--kind` to choose); module docs are refreshed by `kontext init`, not confirmed.
+- No model is involved: the answer is a deterministic function of the repository. `--json` prints the `entries.drift` result; `--fail` exits with status 2 when an entry is listed. [`kontext ci`](../guides/07-ci.md) runs it in CI.
 
 ## Challenges {#challenges}
 

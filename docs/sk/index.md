@@ -35,8 +35,8 @@ features:
     link: /sk/concepts/09-several-repositories
     linkText: Viac repozitárov
   - icon: ⏳
-    title: Neaktuálne rozhodnutia vyplávajú
-    details: Rozhodnutie sa zapíše raz, ale jeho kód sa ďalej mení. Rozhodnutie, ktorého cesty od jeho dátumu zasiahlo 20 a viac commitov (nastaviteľné), sa označí v briefe aj v kontext status.
+    title: Neaktuálne znalosti vyplávajú
+    details: Záznam sa zapíše raz, ale jeho kód sa ďalej mení. Záznam, ktorého cesty od posledného pohľadu naň zasiahlo 20 a viac commitov (nastaviteľné), sa označí v briefe, a kontext drift vypíše, čo vetva nechala za sebou.
     link: /sk/concepts/04-context-layers#freshness
     linkText: Aktuálnosť
   - icon: 🔒
@@ -69,7 +69,7 @@ budget_tokens = 1400     # what one brief may cost an agent
 max_decisions = 12
 
 [freshness]
-threshold_commits = 20   # flag a decision after this many commits on its paths
+threshold_commits = 20   # flag an entry after this many commits on its paths
 
 [hooks]
 validate = true          # malformed entries and secrets block the commit

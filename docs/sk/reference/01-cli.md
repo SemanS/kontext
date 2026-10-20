@@ -91,6 +91,22 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 Povie, že záznam už neplatí, a prečo. Námietka čaká v lokálnom inboxe; `prepare-commit` ponúkne vyradenie záznamu alebo zaznamenanie náhrady, ktorá ho nahrádza.
 
+### `kontext confirm <id…>`
+
+Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na dnešok (UTC) v súbore každého záznamu, nič iné nezmení a súbor stagne. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
+
+### `kontext drift`
+
+Záznamy, ktoré rozsah commitov nechal za sebou: aktívne záznamy, ktorých `paths` pokrývajú zmenené súbory, kým ich vlastný súbor sa v rozsahu neupravil ani nepotvrdil. Pozri [Drift](../concepts/03-capture-and-review.md#drift).
+
+| Voľba | Predvolene | Význam |
+| --- | --- | --- |
+| `--base <rev>` | merge base `HEAD` s `origin/HEAD` (`origin/main`, `origin/master`), inak `HEAD` | začiatok rozsahu |
+| `--head <rev>` | pracovný strom | koniec rozsahu; bez neho sa počítajú aj necommitnuté a nesledované zmeny |
+| `-k, --kind <druh>` | decision, convention, learning, incident | druhy na kontrolu (opakovateľné) |
+| `--json` | | výsledok `entries.drift` ako JSON |
+| `--fail` | | skončí so stavom 2, keď je vypísaný nejaký záznam |
+
 ### `kontext inbox [list | show <id> | drop <id…>]`
 
 Lokálni kandidáti. `list` je predvolený.
@@ -101,7 +117,7 @@ Zapíše kandidátov do úložiska a spraví `git add`.
 
 ### `kontext prepare-commit [--promote <id>]… [--drop <id>]… [--retire <id>]…`
 
-Report, ktorý agenti dostanú z `ctx_prepare_commit`. `--retire` vyradí záznam s námietkou z tohto worktree: stav `deprecated`, námietka ako dôvod v poznámke `## Retired`, stagnuté.
+Report, ktorý agenti dostanú z `ctx_prepare_commit`. Keď nie je nič stagnuté, prečíta zmeny pracovného stromu voči `HEAD` (vrátane nesledovaných súborov) a povie to; to treba spustiť pred `jj commit`. `--retire` vyradí záznam s námietkou z tohto worktree: stav `deprecated`, námietka ako dôvod v poznámke `## Retired`, stagnuté.
 
 ### `kontext distill [<súbor>…] [--claude <id|last>]… [--codex <id|last>]… [--superset [<workspace>]]`
 
@@ -119,6 +135,10 @@ Vytiahne znalosti z vlákien agentov do inboxu; bez vlákna vypíše vlákna toh
 ### `kontext check [--staged]`
 
 Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich na tajné údaje. Pri chybách skončí so stavom 1.
+
+### `kontext ci [--base <rev>] [--format text|markdown] [--strict]`
+
+Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad commitnutým rozsahom `base..HEAD` (`--base` má rovnaké predvolenie ako pri `drift`). `--format markdown` sa hodí do súhrnu jobu na GitHube alebo do komentára k pull requestu. Pri chybách kontroly skončí so stavom 1; s `--strict` aj so stavom 2, keď drift vypíše nejaký záznam, inak je drift len varovanie (stav 0). Pozri [Validácia znalostí v CI](../guides/07-ci.md).
 
 ## Git hooky
 
@@ -154,7 +174,7 @@ Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich 
 
 | Príkaz | Význam |
 | --- | --- |
-| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, rozhodnutia na prehodnotenie, záznamy po termíne `review_by`, inbox, postup initu, adaptéry, hooky, outbox |
+| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, záznamy na prehodnotenie, záznamy po termíne `review_by`, inbox, postup initu, adaptéry, hooky, outbox |
 | `kontext reindex` | zostaví lokálny vyhľadávací index od nuly |
 
 ## Premenné prostredia

@@ -18,7 +18,7 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Local notes | notes in this clone's inbox (team candidates and private notes) that match the focus, or the newest three |
 | Related docs and history | in a repository without a store, once a search has built the local index: the docs and commits that match the focus |
 | From adapters | sections from adapters that have a `brief` op (e.g. a session primer) |
-| State | inbox counts, bootstrap progress, entries due for review, decisions that may need a refresh, missing git hooks, warnings; its room is kept aside, so a full brief does not drop it |
+| State | inbox counts, bootstrap progress, entries due for review, entries that may need a refresh, missing git hooks, warnings; its room is kept aside, so a full brief does not drop it |
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags. When every focus path lies in another repository, the brief is that repository's ([Several repositories](09-several-repositories.md)).
 
@@ -48,17 +48,19 @@ Claude Code can receive the brief automatically at session start: see [Claude Co
 
 ### Freshness {#freshness}
 
-A decision is written once, but the code it governs keeps moving. The brief's *State* and `kontext status` list active decisions whose `paths` were touched by at least `freshness.threshold_commits` commits (default 20) since the decision's date, most-changed first:
+An entry is written once, but the code it governs keeps moving. The brief's *State* and `kontext status` list active decisions, conventions and learnings whose `paths` were touched by at least `freshness.threshold_commits` commits (default 20) since someone last looked at them, most-changed first:
 
 ```text
-- May need a refresh (20+ commits on their paths since they were made): [0007] Prices are integer cents (34 commits), … — check they still hold; supersede what no longer does.
+- May need a refresh (20+ commits on their paths since they were made, edited or confirmed): [0007] Prices are integer cents (34 commits), … — check them: confirm what still holds (`ctx_confirm`), supersede what no longer does.
 ```
 
-Commits from the decision's own day and merge commits are not counted. A commit counts once however many of its files match, and renaming code out of a governed path counts too. Decisions without a `date` or `paths` are never flagged. A flag is a prompt to check, not a verdict: if the decision still holds, nothing needs to change; if it does not, supersede it.
+The count starts at the latest of three moments: the entry's `date`, its [`checked`](./02-knowledge-store.md#checked) confirmation, and the last commit that changed the entry's own file (an edit counts as a look). Commits from the day of the date or confirmation and merge commits are not counted. A commit counts once however many of its files match, and renaming code out of a governed path counts too. Entries without `paths`, or without a `date` or `checked` to count from, are never flagged; incidents and module docs are not watched. A flag is a prompt to check, not a verdict: if the entry still holds, confirm it (`kontext confirm <id>`) and the count starts again; if it does not, supersede or retire it.
+
+For a range of commits rather than the whole history, see [drift](./03-capture-and-review.md#drift).
 
 Entries of any kind can also carry a [review date](./02-knowledge-store.md#review-by). Past it, the brief's *State* lists them as *Due for review* and their lines are marked `review due`; `kontext status` lists them all. Both signals live in one place (`src/freshness.rs`).
 
-The counts come from one `git log` for all decisions, from the oldest decision's date (bounded by `index.max_commits`), and are cached per `HEAD` under the worktree's state directory: a brief adds no git call per decision, and none at all until the next commit. Set `threshold_commits = 0` to turn it off.
+The counts come from one `git log` for all watched entries, from the oldest one's date (bounded by `index.max_commits`), and are cached per `HEAD` under the worktree's state directory: a brief adds no git call per entry, and none at all until the next commit. A confirmation or an edit in the working tree resets the count before it is committed. Set `threshold_commits = 0` to turn it off.
 
 ## Levels: L0 · L1 · L2
 

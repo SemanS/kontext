@@ -18,7 +18,7 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Lokálne poznámky | poznámky v inboxe tohto klonu (tímoví kandidáti aj súkromné poznámky), ktoré zodpovedajú focusu, inak tri najnovšie |
 | Súvisiace dokumenty a história | v repozitári bez úložiska, keď už vyhľadávanie postavilo lokálny index: dokumenty a commity, ktoré zodpovedajú focusu |
 | Z adaptérov | sekcie od adaptérov s operáciou `brief` (napr. primer zo sessions) |
-| Stav | počty v inboxe, postup zavádzania, záznamy na kontrolu, rozhodnutia na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
+| Stav | počty v inboxe, postup zavádzania, záznamy na kontrolu, záznamy na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami. Keď všetky cesty vo focuse ležia v inom repozitári, brief je briefom toho repozitára ([Viac repozitárov](09-several-repositories.md)).
 
@@ -48,17 +48,19 @@ Claude Code môže dostať brief automaticky na začiatku session. Pozri [Claude
 
 ### Aktuálnosť {#freshness}
 
-Rozhodnutie sa zapíše raz, ale kód, ktorý riadi, sa ďalej mení. *Stav* v briefe a `kontext status` vypíšu aktívne rozhodnutia, ktorých `paths` sa od dátumu rozhodnutia dotklo aspoň `freshness.threshold_commits` commitov (predvolene 20), najviac zmenené ako prvé:
+Záznam sa zapíše raz, ale kód, ktorý riadi, sa ďalej mení. *Stav* v briefe a `kontext status` vypíšu aktívne rozhodnutia, konvencie a poučenia, ktorých `paths` sa odvtedy, čo sa na ne niekto naposledy pozrel, dotklo aspoň `freshness.threshold_commits` commitov (predvolene 20), najviac zmenené ako prvé:
 
 ```text
-- May need a refresh (20+ commits on their paths since they were made): [0007] Prices are integer cents (34 commits), … — check they still hold; supersede what no longer does.
+- May need a refresh (20+ commits on their paths since they were made, edited or confirmed): [0007] Prices are integer cents (34 commits), … — check them: confirm what still holds (`ctx_confirm`), supersede what no longer does.
 ```
 
-Commity z dňa samotného rozhodnutia a merge commity sa nepočítajú. Commit sa počíta raz, nech sa zhoduje koľkokoľvek jeho súborov, a započíta sa aj presun kódu mimo riadenej cesty. Rozhodnutia bez `date` alebo `paths` sa neoznačia nikdy. Označenie je výzva na kontrolu, nie verdikt: ak rozhodnutie stále platí, netreba nič meniť; ak nie, nahraď ho novým (supersede).
+Počíta sa od najneskoršieho z troch okamihov: `date` záznamu, jeho potvrdenie [`checked`](./02-knowledge-store.md#checked) a posledný commit, ktorý zmenil súbor záznamu (aj úprava je pohľad naň). Commity z dňa dátumu či potvrdenia a merge commity sa nepočítajú. Commit sa počíta raz, nech sa zhoduje koľkokoľvek jeho súborov, a započíta sa aj presun kódu mimo riadenej cesty. Záznamy bez `paths` alebo bez `date` či `checked`, od ktorých by sa dalo počítať, sa neoznačia nikdy; incidenty a dokumenty modulov sa nesledujú. Označenie je výzva na kontrolu, nie verdikt: ak záznam stále platí, potvrď ho (`kontext confirm <id>`) a počíta sa odznova; ak nie, nahraď ho novým (supersede) alebo ho vyraď.
+
+Pre rozsah commitov namiesto celej histórie pozri [drift](./03-capture-and-review.md#drift).
 
 Záznamy každého druhu môžu niesť aj [termín kontroly](./02-knowledge-store.md#review-by). Po ňom ich *Stav* v briefe vypíše ako *Due for review* a ich riadky majú značku `review due`; `kontext status` vypíše všetky. Oba signály sú na jednom mieste (`src/freshness.rs`).
 
-Počty pochádzajú z jedného `git log` pre všetky rozhodnutia, od dátumu najstaršieho rozhodnutia (obmedzeného `index.max_commits`), a ukladajú sa do cache podľa `HEAD` v stavovom adresári worktree: brief nepridá žiadne volanie gitu na rozhodnutie a do ďalšieho commitu žiadne. `threshold_commits = 0` to vypne.
+Počty pochádzajú z jedného `git log` pre všetky sledované záznamy, od dátumu najstaršieho z nich (obmedzeného `index.max_commits`), a ukladajú sa do cache podľa `HEAD` v stavovom adresári worktree: brief nepridá žiadne volanie gitu na záznam a do ďalšieho commitu žiadne. Potvrdenie alebo úprava v pracovnom strome vynuluje počet ešte pred commitom. `threshold_commits = 0` to vypne.
 
 ## Úrovne: L0 · L1 · L2
 

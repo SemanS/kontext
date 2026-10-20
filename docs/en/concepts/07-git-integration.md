@@ -27,6 +27,16 @@ Bypass once with `KONTEXT_SKIP=1 git commit …` or `git commit --no-verify`.
 
 `kontext hooks status` shows what is installed; `kontext hooks uninstall` removes the blocks and restores chained originals.
 
+## jj (Jujutsu) {#jj}
+
+A colocated [jj](https://jj-vcs.github.io/jj/) repository is a git repository to kontext, with two differences: jj never runs git hooks, and it never stages. Nothing checks a commit for you, so run the checks by hand before `jj commit` / `jj describe` or `jj git push`:
+
+- `kontext prepare-commit` (or `ctx_prepare_commit`): with nothing staged it reads the working tree's changes against `HEAD`, which is the jj working copy, and lists the knowledge covering them;
+- `kontext drift`: the knowledge your change, committed or not, left behind since the default branch;
+- `kontext check`: validation and the secret scan the pre-commit hook would have run.
+
+`kontext confirm` and the promotions stage files in git's index; jj takes the files from the working copy and ignores the index, so this is harmless. Trailers are not added for you: write them into the description (`prepare-commit` lists them).
+
 ## Trailers
 
 For every knowledge file staged in a commit, `prepare-commit-msg` adds a trailer (`git interpret-trailers --if-exists addIfDifferent`):

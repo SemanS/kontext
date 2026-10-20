@@ -42,7 +42,7 @@ Every amount is stored and computed as an integer number of cents.
 budget_tokens = 1400     # what one brief may cost an agent
 
 [freshness]
-threshold_commits = 20   # flag a decision after this many commits on its paths
+threshold_commits = 20   # flag an entry after this many commits on its paths
 
 [hooks]
 trailers = true          # `Decision: <id>` on the commit that ships a decision

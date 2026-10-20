@@ -2,6 +2,23 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.4.0 (2026-10-20)
+
+**Knowledge that follows the code it governs.** A review of one repository found about ten entries that no longer matched the code. kontext already listed the entries covering a staged change, but only from git hooks, which a team committing with jj never runs; freshness never reset once someone checked an entry, and watched decisions only; and nothing answered which entries a range of commits left behind. Now, without a model and the same under git and jj:
+
+- **Confirmations.** An entry can carry `checked: YYYY-MM-DD`, the last day someone confirmed it still holds. `kontext confirm <id>` / `ctx_confirm` / `drafts.confirm` set it to today in the entry's own file (a one-line diff) and stage it, so the confirmation is reviewed with the change. See [Confirmations](../concepts/02-knowledge-store.md#checked).
+- **Drift.** `kontext drift` / `ctx_drift` / `entries.drift` list the active entries whose `paths` cover files changed in `base..head` while their own file was not edited, retired or confirmed in the range. The base defaults to where the branch left the remote's default branch; without a head the working tree counts too, which is what a jj working copy is. See [Drift](../concepts/03-capture-and-review.md#drift).
+- **CI.** `kontext ci` checks every entry and lists the drift of the pull request's commits, as text or as Markdown for a job summary; drift is a warning unless `--strict`. A ready-to-copy GitHub Actions workflow is in [Validate knowledge in CI](../guides/07-ci.md).
+- **Freshness** watches conventions and learnings as well as decisions, and counts commits since the latest of the entry's date, its confirmation and the last commit that changed its file. See [Freshness](../concepts/04-context-layers.md#freshness).
+- **prepare-commit without a staged change** says that it read the working tree's changes against `HEAD`, and tells how to confirm an entry that still holds. With jj, run it (or `kontext drift`) before `jj commit` / `jj git push`: see [jj](../concepts/07-git-integration.md#jj).
+- **Application API.** New operations `entries.drift` and `drafts.confirm` (listed in `status.capabilities`); read entries and the embedding facade's `CommittedEntry` carry `checked`.
+
+**Migration.** `checked` is a new optional field; nothing in `.ai/` needs to change. Things you may notice:
+
+- `kontext status` and the brief may flag conventions and learnings now, and say "N entr(y|ies) may need a refresh … since they were made, edited or confirmed" instead of "N decision(s) …". Counts are often lower: the commit that last changed an entry's own file (usually the one that added it) and the commits before it no longer count.
+- `checked` is an entry field: an existing `checked:` key moves from `extra` to its own field in entry JSON and in `CommittedEntry`, `kontext check` rejects a `checked` that is not a date or lies in the future, and `drafts.*` refuse it as an `extra` key.
+- The `prepare-commit` report's working-tree line reads "Nothing staged yet — read the working tree's changes against HEAD (untracked files included): …".
+
 ## 0.3.0 (2026-10-19)
 
 **Knowledge that stays correct after it is written.** The brief and search no longer let a proposal pass for an accepted rule, merging sources no longer drops a different claim that happens to start the same way, and recorded knowledge can now carry a review date and its sources, be challenged and be retired, always through review. Measured on a new [evaluation set](https://github.com/SemanS/kontext/tree/main/tests/eval) of 33 scenarios: 8 passed on 0.2.1 (23 of 64 expectations found, 2 hits wrongly suppressed, 1 noisy); all 33 pass now (69 of 69, none suppressed, no noise).

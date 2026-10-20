@@ -44,6 +44,7 @@ title: Prices are integer cents
 status: accepted            # proposed | accepted | superseded | deprecated | rejected
 date: 2026-09-28
 review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
+checked: 2026-10-20          # optional: the last day someone confirmed it still holds
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -78,7 +79,7 @@ Repozitáre, ktoré už ADR vedú, ich zvyčajne píšu takto a kontext ich čí
 …
 ```
 
-Rozpoznané polia: Status, Date, Tags, Paths, Supersedes, Superseded by, Summary, Commits, Author/Authors/Deciders/Owner. `Status: Superseded by 0009` nastaví stav aj odkaz naraz.
+Rozpoznané polia: Status, Date, Review by, Checked, Tags, Paths, Supersedes, Superseded by, Summary, Commits, Author/Authors/Deciders/Owner. `Status: Superseded by 0009` nastaví stav aj odkaz naraz.
 
 ## ID a názvy súborov
 
@@ -108,6 +109,12 @@ review_after = "90d"
 ```
 
 Bez nastavenia je vypnutá.
+
+## Potvrdenia {#checked}
+
+`checked: YYYY-MM-DD` je posledný deň, keď niekto potvrdil, že záznam stále platí. Kód sa mení, záznam ostáva, ako bol napísaný; keď sa naň niekto pozrie popri zmene a zistí, že stále platí, `kontext confirm <id>` (alebo `ctx_confirm`, či `drafts.confirm` v [aplikačnom API](../reference/05-application-api.md#confirm)) nastaví `checked` na dnešok (UTC) v súbore záznamu a stagne ho, takže potvrdenie prejde review spolu so zmenou, ktorá ho vyvolala. Nič iné sa v súbore nezmení, ani bajt: diff je jeden riadok (`**Checked:** …` v ADR v štýle polí).
+
+[Aktuálnosť](./04-context-layers.md#freshness) aj [drift](./03-capture-and-review.md#drift) počítajú od neho, rovnako ako od úpravy záznamu. `kontext check` odmietne `checked`, ktorý nie je dátum alebo leží v budúcnosti. Vyradenie aj nahradenie záznamu pole zachová.
 
 ## Evidencia {#evidence}
 
@@ -144,5 +151,5 @@ Záznamy majú čítať agenti v rámci tokenového rozpočtu. `kontext check` u
 
 | Úroveň | Kontrola |
 | --- | --- |
-| chyba | chýbajúci titulok, neznámy druh, duplicitné ID, tajný údaj s vysokou istotou |
+| chyba | chýbajúci titulok, neznámy druh, duplicitné ID, zlý `review_by` alebo `review_by` pred dátumom záznamu, `checked`, ktorý nie je dátum alebo leží v budúcnosti, tajný údaj s vysokou istotou |
 | varovanie | rozhodnutie bez stavu alebo dátumu, nezvyčajný stav, zlý formát dátumu, dlhý záznam, `supersedes` odkazujúce nikam, vzor v `paths`, ktorému nezodpovedá žiadny sledovaný súbor, tajný údaj so strednou istotou |

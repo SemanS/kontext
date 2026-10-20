@@ -35,8 +35,8 @@ features:
     link: /concepts/09-several-repositories
     linkText: Several repositories
   - icon: ⏳
-    title: Stale decisions surface
-    details: A decision is written once while its code keeps moving. One whose paths saw 20 or more commits since its date (configurable) is flagged in the brief and in kontext status.
+    title: Stale knowledge surfaces
+    details: An entry is written once while its code keeps moving. One whose paths saw 20 or more commits since someone last looked (configurable) is flagged in the brief, and kontext drift lists what a branch left behind.
     link: /concepts/04-context-layers#freshness
     linkText: Freshness
   - icon: 🔒
@@ -69,7 +69,7 @@ budget_tokens = 1400     # what one brief may cost an agent
 max_decisions = 12
 
 [freshness]
-threshold_commits = 20   # flag a decision after this many commits on its paths
+threshold_commits = 20   # flag an entry after this many commits on its paths
 
 [hooks]
 validate = true          # malformed entries and secrets block the commit

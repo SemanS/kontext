@@ -8,11 +8,11 @@ Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom.
 a voliteľné `dir`. Vracia `structuredContent` a `outputSchema` aj úplnú textovú JSON kópiu.
 Existujúce nástroje nižšie si zachovávajú textové výsledky.
 
-Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
+Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
 
 ### Iný repozitár: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_drift`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -92,6 +92,24 @@ Odpoveď uvedie súvisiace záznamy ako poznámky (`related, check: <názov> <kx
 
 Zaznamená, že záznam už neplatí, ako lokálneho kandidáta v inboxe druhu `challenge` (voči záznamu a commitu, v ktorom bol prečítaný). Kým neprejde review, nič sa nemení: brief označí záznam `challenged locally` a `ctx_prepare_commit` ponúkne jeho vyradenie alebo zaznamenanie náhrady, ktorá ho nahrádza.
 
+### `ctx_confirm`
+
+| Parameter | Typ | Predvolene | |
+| --- | --- | --- | --- |
+| `id` | string | povinné | záznam: `kx:<id>`, id alebo jeho jednoznačná predpona |
+
+Zaznamená, že záznam stále platí aj po zmene kódu, ktorý riadi: nastaví jeho dátum [`checked`](../concepts/02-knowledge-store.md#checked) na dnešok (UTC), nič iné v súbore nezmení a súbor stagne, takže potvrdenie prejde review so zmenou. Aktuálnosť aj drift počítajú od neho. Agent potvrdí len to, čo overil voči kódu; záznam, ktorý už neplatí, napadne alebo nahradí.
+
+### `ctx_drift`
+
+| Parameter | Typ | Predvolene | |
+| --- | --- | --- | --- |
+| `base` | string | merge base `HEAD` s predvolenou vetvou remote, inak `HEAD` | začiatok rozsahu, git revízia |
+| `head` | string | pracovný strom | koniec rozsahu, git revízia; bez neho sa počítajú aj necommitnuté a nesledované zmeny |
+| `kinds` | string[] | decision, convention, learning, incident | druhy na kontrolu |
+
+Znalosti, ktoré zmena nechala za sebou: aktívne záznamy, ktorých `paths` pokrývajú súbory zmenené v rozsahu a ktorých vlastný súbor sa v ňom neupravil ani nepotvrdil, každý so zmenenými súbormi, commitmi a s tým, čo s ním robiť. Deterministické, bez modelu. Pozri [Drift](../concepts/03-capture-and-review.md#drift); `entries.drift` v `ctx_api` vráti to isté ako JSON.
+
 ### `ctx_threads`
 
 | Parameter | Typ | Predvolene | |
@@ -117,7 +135,7 @@ Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto po�
 | `drop` | string[] | ID z inboxu, ktoré sa zahodia |
 | `retire` | string[] | záznamy s námietkou z tohto worktree (alebo námietky): stav `deprecated`, námietka ako dôvod v poznámke `## Retired`, stagnuté |
 
-Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). Uvedie trailery commitu a či ich pridá hook prepare-commit-msg: v klone bez hookov kontextu (čerstvý klon, projekt v Superset) ich treba dopísať ručne, alebo spustiť `kontext hooks install`.
+Vráti report opísaný v [Zachytávanie a review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). Keď nie je nič stagnuté, prečíta zmeny pracovného stromu voči `HEAD` (ako pri jj) a povie to. Uvedie trailery commitu a či ich pridá hook prepare-commit-msg: v klone bez hookov kontextu (čerstvý klon, projekt v Superset) ich treba dopísať ručne, alebo spustiť `kontext hooks install`.
 
 ### `ctx_init`
 

@@ -27,6 +27,16 @@ Jednorazovo obídeš cez `KONTEXT_SKIP=1 git commit …` alebo `git commit --no-
 
 `kontext hooks status` ukáže, čo je nainštalované; `kontext hooks uninstall` bloky odstráni a obnoví zreťazené originály.
 
+## jj (Jujutsu) {#jj}
+
+Kolokovaný repozitár [jj](https://jj-vcs.github.io/jj/) je pre kontext git repozitár, s dvoma rozdielmi: jj nikdy nespúšťa git hooky a nikdy nestaguje. Commit za teba nikto neskontroluje, takže kontroly spusti ručne pred `jj commit` / `jj describe` alebo `jj git push`:
+
+- `kontext prepare-commit` (alebo `ctx_prepare_commit`): keď nie je nič stagnuté, prečíta zmeny pracovného stromu voči `HEAD`, teda pracovnú kópiu jj, a vypíše znalosti, ktoré ich pokrývajú;
+- `kontext drift`: znalosti, ktoré tvoja zmena, commitnutá či nie, nechala za sebou od predvolenej vetvy;
+- `kontext check`: validáciu a sken tajných údajov, ktoré by spustil pre-commit hook.
+
+`kontext confirm` aj povýšenia stagujú súbory v indexe gitu; jj berie súbory z pracovnej kópie a index ignoruje, takže to neškodí. Trailery sa nepridajú samy: napíš ich do popisu (`prepare-commit` ich vypíše).
+
 ## Trailery
 
 Pre každý súbor znalostí stagnutý v commite pridá `prepare-commit-msg` trailer (`git interpret-trailers --if-exists addIfDifferent`):

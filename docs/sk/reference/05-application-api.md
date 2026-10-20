@@ -46,11 +46,13 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `entries.governing` | `paths`, `exclude_ids?`, `limit?`, `min_specificity?` | záznamy s pravidlom, cestou a špecifickosťou; snapshot |
 | `entries.export` | `revision`, `review_ref`, `paths?` | commitnuté záznamy s presným Markdownom a hashmi blobov |
 | `entries.related` | `text`, `paths?`, `exclude_ids?`, `llm?` | najviac päť súvisiacich záznamov s dôvodom; s `llm` aj vzťahy podľa modelu ([podrobnosti](#related)) |
+| `entries.drift` | `base?`, `head?`, `kinds?` | záznamy, ktorých riadené súbory sa v rozsahu zmenili bez pohľadu na záznam ([podrobnosti](#drift)) |
 | `inbox.list` | `state?`: `pending` (predvolene), `dismissed`, `promoted`, `all` | kandidáti a zachovaná lokálna história |
 | `inbox.drop` | `id`, `reason?` | zamietnutie lokálneho kandidáta |
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | kandidát v inboxe, poznámky, počet redakcií, `evidence` a `related_entries` |
 | `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?` | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | záznam stagnutý so stavom `deprecated` a poznámkou `## Retired` ([podrobnosti](#retire)) |
+| `drafts.confirm` | `id` | `id`, `path` a `checked`: záznam potvrdený dnes a stagnutý ([podrobnosti](#confirm)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | návrh, ktorý záznam nahrádza; nič nezapisuje ([podrobnosti](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extrahovaní kandidáti bez zápisu |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulovaný záznam, poznámky a `related_entries` bez zápisu |
@@ -63,7 +65,7 @@ poznatku je oddelené od hľadania nových poznatkov, aby deduplikácia neodstr�
 výslovne vybral. Extrakcia a návrh konvencie vyžadujú použiteľný LLM; formulovanie bez vybraného
 modelu môže zachovať dodaný poznatok.
 
-Načítaný záznam má `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `paths`, `tags`, `file`,
+Načítaný záznam má `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `checked`, `paths`, `tags`, `file`,
 `markdown`, `style`, polia nahradenia a dodatočné metadáta (zdroje sú v `extra.external_refs`). Parser a párovanie vlastní engine;
 klienti nemajú vytvárať druhý parser alebo matcher. `active_only` vynechá nahradené, zastarané a
 zamietnuté záznamy. Neznamená, že návrh z pracovného stromu prešiel review.
@@ -129,6 +131,45 @@ Námietka je spôsob, ako agent povie, že záznam už neplatí, bez toho, aby h
 záznamu), `extra.against_revision` (commit) a `extra.against_blob`. `inbox.list` ho vráti; ako záznam
 sa stagnúť nedá. Vybaví ho vyradenie alebo stagnutá náhrada, ktorá záznam nahrádza (`supersedes`).
 
+### Drift {#drift}
+
+Pribudol v 0.4.0 (`status.capabilities` uvádza `entries.drift`).
+
+```json
+{"base": "origin/main", "head": "HEAD", "kinds": ["decision", "convention"]}
+```
+
+Všetky polia sú voliteľné. `base` je git revízia; bez nej merge base `HEAD` s `origin/HEAD` (inak
+`origin/main`, inak `origin/master`), a ak nie je, `HEAD`. `head` je git revízia; bez nej sa počíta
+aj pracovný strom: commity `base..HEAD` plus necommitnuté a nesledované zmeny (pracovná kópia jj je
+z pohľadu gitu necommitnutá). `kinds` je predvolene `["decision","convention","learning","incident"]`;
+architektúra sa kontroluje, len keď ju pomenuješ. Neznáma revízia alebo revízia začínajúca `-` je
+`invalid_input`; repozitár bez commitov je `no_commits`.
+
+```json
+{"base": "<full sha>", "head": "<full sha>" | "working", "entries": [
+  {"id": "…", "kind": "convention", "title": "…", "path": ".ai/conventions/….md", "date": "2026-01-10", "checked": "2026-03-01",
+   "changed": ["src/billing/invoice.rs"], "commits": [{"sha": "<full sha>", "subject": "feat(billing): …"}]}
+]}
+```
+
+Záznam je vo výsledku, keď je aktívny, má `paths`, aspoň jeden súbor zmenený v rozsahu (okrem
+súborov znalostí) im zodpovedá — rovnakým porovnaním ako v `entries.governing` — a vlastný súbor
+záznamu sa v tom istom rozsahu **nezmenil**: úprava, vyradenie aj potvrdenie sa rátajú ako pohľad naň.
+`date` a `checked` sú tam, keď ich záznam má. `commits` sú ne-merge commity z `base..head`, ktoré
+sa dotkli zodpovedajúcich súborov, najnovšie prvé; keď je zmena len necommitnutá, je prázdne. S
+explicitným `head` sa záznamy čítajú tak, ako sú commitnuté v `head`. Záznamy sú zoradené podľa ID.
+Na odpovedi sa nezúčastňuje žiadny model.
+
+### Potvrdenie záznamu {#confirm}
+
+`drafts.confirm {id}` zaznamená, že záznam stále platí: nastaví `checked` na dnešok (UTC) v súbore
+záznamu, nič iné nezmení ani o bajt, a súbor stagne ako `drafts.retire`. Výsledok je
+`{id, path, checked}`. Druhé potvrdenie v ten istý deň nič nezmení. Neznámy záznam je `not_found`;
+neaktívny, ešte necommitnutý alebo súbor s nestagnutými úpravami je `operation_conflict`. `checked`
+majú načítané záznamy aj [`CommittedEntry`](#rust-embedding) vo vkladacej fasáde, takže aplikácia
+spozná potvrdenie v posúdenej revízii.
+
 ### Návrh náhrady {#revise}
 
 `drafts.revise {entry_id, entry_revision, objections, llm?}` požiada model o náhradu, ktorá odpovedá
@@ -138,7 +179,7 @@ ukáže človeku a stagne cez `drafts.stage`. Zastaraná `entry_revision` alebo 
 `operation_conflict`, chýbajúci model `model_unavailable` a model, ktorý vráti staré telo nezmenené,
 `invalid_model_output`.
 
-## Vloženie do Rust aplikácie
+## Vloženie do Rust aplikácie {#rust-embedding}
 
 Crate `kontext` sprístupňuje `application::request(&Path, operation, &input)` s rovnakou JSON
 odpoveďou. Interné moduly enginu zostávajú súkromné. Služba overujúca vlastný Git mirror môže použiť
@@ -151,6 +192,8 @@ let policy = KnowledgePolicy::from_config(".ai", Some(reviewed_config_text))?;
 let entry = policy.inspect("docs/adr/0001-storage.md", verified_blob_text)?;
 ```
 
+`inspect` vráti `CommittedEntry` s `id`, `kind`, `title`, `body`, `summary`, `status`, `checked`,
+`paths`, `tags`, `file` a ostatnými metadátami v `extra`.
 `config_candidates` určuje poradie hľadania konfigurácie v commite. Volajúci načíta jej obsah z
 overenej revízie a cez `inspect` vyhodnotí nakonfigurované druhy/cesty, frontmatter či ADR štýl a
 platnosť tímového poznatku. Rozhodnutie musí byť výslovne prijaté; súkromný, navrhovaný, zamietnutý

@@ -82,7 +82,7 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 
 | Kľúč | Predvolene | |
 | --- | --- | --- |
-| `threshold_commits` | `20` | označí aktívne rozhodnutie, keď sa od jeho dátumu jeho `paths` dotklo aspoň toľkoto commitov; `0` to vypne (pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness)) |
+| `threshold_commits` | `20` | označí aktívne rozhodnutie, konvenciu či poučenie, keď sa jeho `paths` dotklo aspoň toľkoto commitov od najneskoršieho z: jeho dátumu, potvrdenia `checked` a posledného commitu, ktorý ho zmenil; `0` to vypne (pozri [Aktuálnosť](../concepts/04-context-layers.md#freshness)) |
 
 ## `[search]` {#search}
 

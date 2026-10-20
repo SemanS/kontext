@@ -91,6 +91,22 @@ Runs scan → history → render → wire → deepen. Safe to re-run.
 
 Say that an entry no longer holds, and why. The challenge waits in the local inbox; `prepare-commit` offers to retire the entry or to record a replacement that supersedes it.
 
+### `kontext confirm <id…>`
+
+Confirm that entries still hold: sets [`checked`](../concepts/02-knowledge-store.md#checked) to today (UTC) in each entry's own file, changes nothing else, and stages the file. Refuses an unknown or inactive entry, an entry that is not committed yet and a file with unstaged edits. Exit status 1 when any id fails.
+
+### `kontext drift`
+
+The entries a range of commits left behind: active entries whose `paths` cover changed files while their own file was not edited or confirmed in the range. See [Drift](../concepts/03-capture-and-review.md#drift).
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--base <rev>` | merge base of `HEAD` with `origin/HEAD` (`origin/main`, `origin/master`), else `HEAD` | start of the range |
+| `--head <rev>` | the working tree | end of the range; without it uncommitted and untracked changes count too |
+| `-k, --kind <kind>` | decision, convention, learning, incident | kinds to check (repeatable) |
+| `--json` | | the `entries.drift` result as JSON |
+| `--fail` | | exit with status 2 when an entry is listed |
+
 ### `kontext inbox [list | show <id> | drop <id…>]`
 
 Local candidates. `list` is the default.
@@ -101,7 +117,7 @@ Write candidates into the store and `git add` them.
 
 ### `kontext prepare-commit [--promote <id>]… [--drop <id>]… [--retire <id>]…`
 
-The report agents get from `ctx_prepare_commit`. `--retire` retires an entry challenged in this worktree: status `deprecated`, the challenge as the reason in a `## Retired` note, staged.
+The report agents get from `ctx_prepare_commit`. With nothing staged it reads the working tree's changes against `HEAD` (untracked files included) and says so, which is what to run before `jj commit`. `--retire` retires an entry challenged in this worktree: status `deprecated`, the challenge as the reason in a `## Retired` note, staged.
 
 ### `kontext distill [<file>…] [--claude <id|last>]… [--codex <id|last>]… [--superset [<workspace>]]`
 
@@ -119,6 +135,10 @@ Distill knowledge from agent threads into the inbox; without a thread it lists t
 ### `kontext check [--staged]`
 
 Validate all entries (or exactly what is staged) and scan them for secrets. Exit status 1 on errors.
+
+### `kontext ci [--base <rev>] [--format text|markdown] [--strict]`
+
+For a CI job: `kontext check` over every entry plus `kontext drift` over the committed range `base..HEAD` (`--base` defaults as for `drift`). `--format markdown` suits a GitHub job summary or a pull request comment. Exit status 1 on check errors; with `--strict` also 2 when drift lists an entry, otherwise drift is a warning (status 0). See [Validate knowledge in CI](../guides/07-ci.md).
 
 ## Git hooks
 
@@ -154,7 +174,7 @@ Validate all entries (or exactly what is staged) and scan them for secrets. Exit
 
 | Command | Meaning |
 | --- | --- |
-| `kontext status` | identity, config layers, store, index, decisions that may need a refresh, entries past their `review_by` date, inbox, init progress, adapters, hooks, outbox |
+| `kontext status` | identity, config layers, store, index, entries that may need a refresh, entries past their `review_by` date, inbox, init progress, adapters, hooks, outbox |
 | `kontext reindex` | rebuild the local search index |
 
 ## Environment variables

@@ -57,8 +57,8 @@ Povýšenie zapíše kandidáta do úložiska (so správnym ID, adresárom, št�
 
 Report vypíše:
 
-1. stagnutú zmenu (alebo pracovný strom, keď nie je nič stagnuté),
-2. zapísané znalosti, ktorých `paths` pokrývajú zmenené súbory (*over, že stále platia*),
+1. stagnutú zmenu, alebo, keď nie je nič stagnuté, zmeny pracovného stromu voči `HEAD` (vrátane nesledovaných súborov) — správa povie, čo čítala,
+2. zapísané znalosti, ktorých `paths` pokrývajú zmenené súbory (*over, že stále platia*: `ctx_confirm` / `kontext confirm <id>`),
 3. námietky z tohto worktree a dva spôsoby, ako ich vybaviť ([nižšie](#challenges)),
 4. kandidátov z inboxu, najprv tých, ktorí sa týkajú zmenených súborov,
 5. výsledky validácie a skenovania tajných údajov pre stagnuté znalosti (chyby commit zablokujú),
@@ -67,6 +67,26 @@ Report vypíše:
 8. pripomienku, keď veľká zmena nenesie vôbec žiadne znalosti.
 
 Zachytenie tiež pomenuje zaznamenané záznamy, ktoré môže duplikovať, rozširovať alebo im protirečiť (`related, check: … <kx:id> — governs the same paths (src/pricing/**)`). Je to výzva pozrieť sa, nikdy pokyn nahradiť: či nový záznam niečo nahrádza, rozhoduje autor a reviewer.
+
+## Drift: znalosti, ktoré zmena nechala za sebou {#drift}
+
+`ctx_prepare_commit` sa pozerá na jednu zmenu. `kontext drift` (`ctx_drift`, `entries.drift`) sa pozerá na rozsah: vypíše aktívne záznamy, ktorých `paths` pokrývajú súbory zmenené v `base..head` a ktorých vlastný súbor sa v tom istom rozsahu **nezmenil**. Úprava záznamu, jeho vyradenie aj [potvrdenie](./02-knowledge-store.md#checked) sa rátajú ako pohľad naň.
+
+```text
+$ kontext drift
+Knowledge drift in 3f2a91c4..working tree: 1 entry governs changed files but was not edited or confirmed in the range.
+
+- [convention] Prices are integer cents <kx:prices-are-integer-cents> — .ai/conventions/prices-are-integer-cents.md
+  changed: src/billing/invoice.rs, src/billing/tax.rs
+  commits: 9c1d2e3f feat(billing): VAT per line
+
+For each, read it against the change: if it still holds, confirm it (`kontext confirm <id>`); if it needs a correction, edit it; if it no longer holds, supersede it (`kontext capture --supersedes <id> …`) or retire it (`kontext challenge <id> "why"`, then `kontext prepare-commit --retire <id>`).
+```
+
+- `--base` je predvolene miesto, kde `HEAD` opustil predvolenú vetvu remote (merge base s `origin/HEAD`, inak `origin/main`, inak `origin/master`), a bez remote `HEAD`.
+- Bez `--head` sa počíta aj pracovný strom: commity `base..HEAD` plus necommitnuté a nesledované zmeny. Presne tak vidí git pracovnú kópiu [jj](./07-git-integration.md#jj), takže drift funguje bez commitov aj bez hookov. S `--head` sa počítajú len commitnuté zmeny a záznamy sa čítajú tak, ako sú commitnuté tam.
+- Kontrolujú sa rozhodnutia, konvencie, poučenia a incidenty (výber cez `--kind`); dokumenty modulov obnovuje `kontext init`, nepotvrdzujú sa.
+- Nezúčastňuje sa žiadny model: odpoveď je deterministická funkcia repozitára. `--json` vypíše výsledok `entries.drift`; `--fail` skončí so stavom 2, keď je vypísaný nejaký záznam. V CI ho spúšťa [`kontext ci`](../guides/07-ci.md).
 
 ## Námietky {#challenges}
 

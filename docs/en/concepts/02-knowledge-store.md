@@ -44,6 +44,7 @@ title: Prices are integer cents
 status: accepted            # proposed | accepted | superseded | deprecated | rejected
 date: 2026-09-28
 review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
+checked: 2026-10-20          # optional: the last day someone confirmed it still holds
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -78,7 +79,7 @@ Repositories that already keep ADRs usually write them like this, and kontext re
 …
 ```
 
-Recognized fields: Status, Date, Tags, Paths, Supersedes, Superseded by, Summary, Commits, Author/Authors/Deciders/Owner. `Status: Superseded by 0009` sets both the status and the link.
+Recognized fields: Status, Date, Review by, Checked, Tags, Paths, Supersedes, Superseded by, Summary, Commits, Author/Authors/Deciders/Owner. `Status: Superseded by 0009` sets both the status and the link.
 
 ## Ids and file names
 
@@ -108,6 +109,12 @@ review_after = "90d"
 ```
 
 It is off unless set.
+
+## Confirmations {#checked}
+
+`checked: YYYY-MM-DD` is the last day someone confirmed that the entry still holds. Code moves on while an entry stays as it was written; when someone looks at the entry against the change and finds it still true, `kontext confirm <id>` (or `ctx_confirm`, or `drafts.confirm` in the [application API](../reference/05-application-api.md#confirm)) sets `checked` to today (UTC) in the entry's own file and stages it, so the confirmation is reviewed with the change that prompted it. Nothing else in the file changes, byte for byte: the diff is one line (`**Checked:** …` in a fields-style ADR).
+
+[Freshness](./04-context-layers.md#freshness) and [drift](./03-capture-and-review.md#drift) count from it, as they do from an edit of the entry. `kontext check` refuses a `checked` that is not a date or lies in the future. Retiring or superseding an entry keeps the field.
 
 ## Evidence {#evidence}
 
@@ -144,5 +151,5 @@ Entries are meant to be read by agents inside a token budget. `kontext check` wa
 
 | Level | Check |
 | --- | --- |
-| error | missing title, unknown kind, duplicate id, high-confidence secret |
+| error | missing title, unknown kind, duplicate id, a malformed `review_by` or one before the entry's date, a `checked` that is not a date or lies in the future, high-confidence secret |
 | warning | decision without status or date, unusual status, malformed date, long entry, `supersedes` pointing nowhere, a `paths` pattern matching no tracked file, medium-confidence secret |

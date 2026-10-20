@@ -47,11 +47,13 @@ explicit stale state when it cannot be refreshed.
 | `entries.governing` | `paths`, `exclude_ids?`, `limit?`, `min_specificity?` | matching entries with pattern, path and specificity, plus snapshot |
 | `entries.export` | `revision`, `review_ref`, `paths?` | committed entries with exact Markdown, revision and Git blob hashes |
 | `entries.related` | `text`, `paths?`, `exclude_ids?`, `llm?` | up to five related entries with reasons; with `llm`, the model's relations ([details](#related)) |
+| `entries.drift` | `base?`, `head?`, `kinds?` | entries whose governed files changed in the range without a look at the entry ([details](#drift)) |
 | `inbox.list` | `state?`: `pending` (default), `dismissed`, `promoted`, `all` | local candidates and retained workflow history |
 | `inbox.drop` | `id`, `reason?` | dismiss a local candidate |
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
 | `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
+| `drafts.confirm` | `id` | `id`, `path` and `checked`: the entry confirmed today and staged ([details](#confirm)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | a draft that supersedes the entry; no writes ([details](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extracted candidates and notes; no capture or staging |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulated entry, notes and `related_entries`; no capture or staging |
@@ -64,7 +66,7 @@ finding can be formalized separately from extracting new findings, so deduplicat
 something the user explicitly chose to keep. Extraction and guidance generation require a usable LLM;
 formalization can preserve the supplied finding when no model is selected.
 
-Read entries include `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `paths`, `tags`, `file`,
+Read entries include `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `checked`, `paths`, `tags`, `file`,
 `markdown`, `style`, supersession fields and extra metadata (`extra.external_refs` holds the sources). The engine owns parsing and matching;
 clients must not parse Markdown or implement a second matcher. `active_only` excludes superseded,
 deprecated and rejected entries. It does not imply that a working-tree proposal passed review.
@@ -131,6 +133,47 @@ A challenge is how an agent says an entry no longer holds without changing it: `
 id), `extra.against_revision` (the commit) and `extra.against_blob`. `inbox.list` returns it; it cannot
 be staged as an entry. A retirement or a staged replacement that supersedes the entry resolves it.
 
+### Drift {#drift}
+
+Added in 0.4.0 (`status.capabilities` lists `entries.drift`).
+
+```json
+{"base": "origin/main", "head": "HEAD", "kinds": ["decision", "convention"]}
+```
+
+All fields are optional. `base` is a git revision; without it, the merge base of `HEAD` with
+`origin/HEAD` (else `origin/main`, else `origin/master`), falling back to `HEAD`. `head` is a git
+revision; without it the working tree counts: the commits `base..HEAD` plus uncommitted and untracked
+changes (a jj working copy is uncommitted in git's terms). `kinds` defaults to
+`["decision","convention","learning","incident"]`; architecture is checked only when named. An
+unknown revision or one that starts with `-` is `invalid_input`; a repository without commits is
+`no_commits`.
+
+```json
+{"base": "<full sha>", "head": "<full sha>" | "working", "entries": [
+  {"id": "…", "kind": "convention", "title": "…", "path": ".ai/conventions/….md", "date": "2026-01-10", "checked": "2026-03-01",
+   "changed": ["src/billing/invoice.rs"], "commits": [{"sha": "<full sha>", "subject": "feat(billing): …"}]}
+]}
+```
+
+An entry is listed when it is active, has `paths`, at least one file changed in the range (other than
+knowledge files) matches them — with the same matcher as `entries.governing` — and the entry's own
+file did **not** change in the same range: an edit, a retirement or a confirmation counts as having
+looked. `date` and `checked` appear when the entry has them. `commits` are the non-merge commits of
+`base..head` that touched the matched files, newest first; it is empty when the change is only
+uncommitted. With an explicit `head` the entries are read as committed at `head`. Entries are ordered
+by id. The answer involves no model.
+
+### Confirming an entry {#confirm}
+
+`drafts.confirm {id}` records that an entry still holds: it sets `checked` to today (UTC) in the
+entry's own file, changing nothing else byte for byte, and stages the file like `drafts.retire`. The
+result is `{id, path, checked}`. Confirming twice on one day changes nothing the second time. An
+unknown entry is `not_found`; an inactive one, one that is not committed yet, or a file with unstaged
+edits is `operation_conflict`. `checked` appears on read entries and on
+[`CommittedEntry`](#rust-embedding) in the embedding facade, so an application can recognise a
+confirmation in a reviewed revision.
+
 ### Drafting a replacement {#revise}
 
 `drafts.revise {entry_id, entry_revision, objections, llm?}` asks the model for a replacement that
@@ -153,6 +196,8 @@ let policy = KnowledgePolicy::from_config(".ai", Some(reviewed_config_text))?;
 let entry = policy.inspect("docs/adr/0001-storage.md", verified_blob_text)?;
 ```
 
+`inspect` returns a `CommittedEntry` with `id`, `kind`, `title`, `body`, `summary`, `status`,
+`checked`, `paths`, `tags`, `file` and the remaining metadata in `extra`.
 `config_candidates` gives the committed configuration search order. The caller reads those bytes
 from the proven revision, then uses `inspect` to resolve configured kinds/paths, parse frontmatter
 or fields-style ADRs, and enforce active team knowledge. Decisions must explicitly be accepted;
