@@ -93,7 +93,7 @@ Say that an entry no longer holds, and why. The challenge waits in the local inb
 
 ### `kontext confirm <id…>`
 
-Confirm that entries still hold: sets [`checked`](../concepts/02-knowledge-store.md#checked) to today (UTC) in each entry's own file, changes nothing else, and stages the file. Refuses an unknown or inactive entry, an entry that is not committed yet and a file with unstaged edits. Exit status 1 when any id fails.
+Confirm that entries still hold: sets [`checked`](../concepts/02-knowledge-store.md#checked) to the current UTC time (`YYYY-MM-DDTHH:MM:SSZ`) in each entry's own file, changes nothing else, and stages the file. Refuses an unknown or inactive entry, an entry that is not committed yet and a file with unstaged edits. Exit status 1 when any id fails.
 
 ### `kontext drift`
 

@@ -2,6 +2,10 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.4.1 (2026-10-20)
+
+**Oprava: opätovné potvrdenie záznamu v ten istý deň nič nevyčistilo.** `kontext confirm` zapisoval len dátum, takže druhé potvrdenie v ten istý deň nechalo súbor bajt po bajte rovnaký a drift, ktorý záznam považuje za pozretý, len keď sa jeho súbor v rozsahu zmení, ho po ďalších commitoch vypisoval ďalej. Potvrdenie (`kontext confirm`, `ctx_confirm`, `drafts.confirm`) teraz zapíše čas v UTC na sekundu, `checked: 2026-10-20T14:05:09Z`, a vráti ten istý reťazec. `checked` prijme tento tvar alebo samotný `YYYY-MM-DD` (oba sa validujú, ani jeden nesmie byť v budúcnosti); aktuálnosť počíta po sekunde času a od nasledujúceho dňa v UTC po dátume. Netreba nič meniť: už zapísané dátumy ostávajú platné. Pozri [Potvrdenia](../concepts/02-knowledge-store.md#checked).
+
 ## 0.4.0 (2026-10-20)
 
 **Znalosti, ktoré idú za kódom, ktorý riadia.** Review jedného repozitára našlo asi desať záznamov, ktoré už nezodpovedali kódu. kontext už vypisoval záznamy pokrývajúce stagnutú zmenu, ale len z git hookov, ktoré tím commitujúci cez jj nikdy nespustí; aktuálnosť sa nevynulovala, ani keď niekto záznam overil, a sledovala len rozhodnutia; a nič neodpovedalo, ktoré záznamy rozsah commitov nechal za sebou. Teraz, bez modelu a rovnako pod gitom aj jj:

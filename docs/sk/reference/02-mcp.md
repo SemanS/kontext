@@ -98,7 +98,7 @@ Zaznamená, že záznam už neplatí, ako lokálneho kandidáta v inboxe druhu `
 | --- | --- | --- | --- |
 | `id` | string | povinné | záznam: `kx:<id>`, id alebo jeho jednoznačná predpona |
 
-Zaznamená, že záznam stále platí aj po zmene kódu, ktorý riadi: nastaví jeho dátum [`checked`](../concepts/02-knowledge-store.md#checked) na dnešok (UTC), nič iné v súbore nezmení a súbor stagne, takže potvrdenie prejde review so zmenou. Aktuálnosť aj drift počítajú od neho. Agent potvrdí len to, čo overil voči kódu; záznam, ktorý už neplatí, napadne alebo nahradí.
+Zaznamená, že záznam stále platí aj po zmene kódu, ktorý riadi: nastaví jeho čas [`checked`](../concepts/02-knowledge-store.md#checked) na teraz (UTC, na sekundu), nič iné v súbore nezmení a súbor stagne, takže potvrdenie prejde review so zmenou. Aktuálnosť aj drift počítajú od neho. Agent potvrdí len to, čo overil voči kódu; záznam, ktorý už neplatí, napadne alebo nahradí.
 
 ### `ctx_drift`
 

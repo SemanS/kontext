@@ -93,7 +93,7 @@ Povie, že záznam už neplatí, a prečo. Námietka čaká v lokálnom inboxe; 
 
 ### `kontext confirm <id…>`
 
-Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na dnešok (UTC) v súbore každého záznamu, nič iné nezmení a súbor stagne. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
+Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na aktuálny čas v UTC (`YYYY-MM-DDTHH:MM:SSZ`) v súbore každého záznamu, nič iné nezmení a súbor stagne. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
 
 ### `kontext drift`
 

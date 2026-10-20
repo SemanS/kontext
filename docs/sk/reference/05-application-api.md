@@ -52,7 +52,7 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | kandidát v inboxe, poznámky, počet redakcií, `evidence` a `related_entries` |
 | `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?` | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | záznam stagnutý so stavom `deprecated` a poznámkou `## Retired` ([podrobnosti](#retire)) |
-| `drafts.confirm` | `id` | `id`, `path` a `checked`: záznam potvrdený dnes a stagnutý ([podrobnosti](#confirm)) |
+| `drafts.confirm` | `id` | `id`, `path` a `checked`: záznam potvrdený teraz a stagnutý ([podrobnosti](#confirm)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | návrh, ktorý záznam nahrádza; nič nezapisuje ([podrobnosti](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extrahovaní kandidáti bez zápisu |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulovaný záznam, poznámky a `related_entries` bez zápisu |
@@ -163,9 +163,12 @@ Na odpovedi sa nezúčastňuje žiadny model.
 
 ### Potvrdenie záznamu {#confirm}
 
-`drafts.confirm {id}` zaznamená, že záznam stále platí: nastaví `checked` na dnešok (UTC) v súbore
-záznamu, nič iné nezmení ani o bajt, a súbor stagne ako `drafts.retire`. Výsledok je
-`{id, path, checked}`. Druhé potvrdenie v ten istý deň nič nezmení. Neznámy záznam je `not_found`;
+`drafts.confirm {id}` zaznamená, že záznam stále platí: nastaví `checked` na aktuálny čas v UTC
+na sekundu (`YYYY-MM-DDTHH:MM:SSZ`) v súbore záznamu, nič iné nezmení ani o bajt, a súbor stagne ako
+`drafts.retire`. Výsledok je `{id, path, checked}` s tým istým reťazcom; jeho prvých desať znakov je
+deň, takže porovnanie s `YYYY-MM-DD` ako reťazcom ostáva správne. Ďalšie potvrdenie neskôr v ten istý
+deň súbor zmení, takže drift nový pohľad uvidí. Ručne zapísaný `checked` môže byť aj samotný
+`YYYY-MM-DD`; načítané záznamy ho vrátia tak, ako je zapísaný. Neznámy záznam je `not_found`;
 neaktívny, ešte necommitnutý alebo súbor s nestagnutými úpravami je `operation_conflict`. `checked`
 majú načítané záznamy aj [`CommittedEntry`](#rust-embedding) vo vkladacej fasáde, takže aplikácia
 spozná potvrdenie v posúdenej revízii.

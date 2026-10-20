@@ -53,7 +53,7 @@ explicit stale state when it cannot be refreshed.
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
 | `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
-| `drafts.confirm` | `id` | `id`, `path` and `checked`: the entry confirmed today and staged ([details](#confirm)) |
+| `drafts.confirm` | `id` | `id`, `path` and `checked`: the entry confirmed now and staged ([details](#confirm)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | a draft that supersedes the entry; no writes ([details](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extracted candidates and notes; no capture or staging |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulated entry, notes and `related_entries`; no capture or staging |
@@ -166,9 +166,12 @@ by id. The answer involves no model.
 
 ### Confirming an entry {#confirm}
 
-`drafts.confirm {id}` records that an entry still holds: it sets `checked` to today (UTC) in the
-entry's own file, changing nothing else byte for byte, and stages the file like `drafts.retire`. The
-result is `{id, path, checked}`. Confirming twice on one day changes nothing the second time. An
+`drafts.confirm {id}` records that an entry still holds: it sets `checked` to the current UTC
+time to the second (`YYYY-MM-DDTHH:MM:SSZ`) in the entry's own file, changing nothing else byte for
+byte, and stages the file like `drafts.retire`. The result is `{id, path, checked}` with the same
+string; its first ten characters are the day, so comparing it with a `YYYY-MM-DD` as a string stays
+correct. Confirming again later the same day changes the file, so drift sees the new look. A
+`checked` written by hand may also be a bare `YYYY-MM-DD`; read entries return it as written. An
 unknown entry is `not_found`; an inactive one, one that is not committed yet, or a file with unstaged
 edits is `operation_conflict`. `checked` appears on read entries and on
 [`CommittedEntry`](#rust-embedding) in the embedding facade, so an application can recognise a

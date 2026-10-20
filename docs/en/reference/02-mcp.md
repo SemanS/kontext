@@ -98,7 +98,7 @@ Records that an entry no longer holds, as a local inbox candidate of kind `chall
 | --- | --- | --- | --- |
 | `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
 
-Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) date to today (UTC), changes nothing else in the file, and stages it, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead.
+Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) time to now (UTC, to the second), changes nothing else in the file, and stages it, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead.
 
 ### `ctx_drift`
 

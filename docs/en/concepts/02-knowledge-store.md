@@ -44,7 +44,7 @@ title: Prices are integer cents
 status: accepted            # proposed | accepted | superseded | deprecated | rejected
 date: 2026-09-28
 review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
-checked: 2026-10-20          # optional: the last day someone confirmed it still holds
+checked: 2026-10-20T14:05:09Z  # optional: when someone last confirmed it still holds (or a date)
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -112,9 +112,9 @@ It is off unless set.
 
 ## Confirmations {#checked}
 
-`checked: YYYY-MM-DD` is the last day someone confirmed that the entry still holds. Code moves on while an entry stays as it was written; when someone looks at the entry against the change and finds it still true, `kontext confirm <id>` (or `ctx_confirm`, or `drafts.confirm` in the [application API](../reference/05-application-api.md#confirm)) sets `checked` to today (UTC) in the entry's own file and stages it, so the confirmation is reviewed with the change that prompted it. Nothing else in the file changes, byte for byte: the diff is one line (`**Checked:** …` in a fields-style ADR).
+`checked` is when someone last confirmed that the entry still holds: a UTC time to the second (`YYYY-MM-DDTHH:MM:SSZ`, what `kontext confirm` writes) or a day (`YYYY-MM-DD`, fine by hand). Code moves on while an entry stays as it was written; when someone looks at the entry against the change and finds it still true, `kontext confirm <id>` (or `ctx_confirm`, or `drafts.confirm` in the [application API](../reference/05-application-api.md#confirm)) sets `checked` to the current UTC time in the entry's own file and stages it, so the confirmation is reviewed with the change that prompted it. The time makes a second confirmation later the same day a change of the file too, which is what drift needs to see. Nothing else in the file changes, byte for byte: the diff is one line (`**Checked:** …` in a fields-style ADR).
 
-[Freshness](./04-context-layers.md#freshness) and [drift](./03-capture-and-review.md#drift) count from it, as they do from an edit of the entry. `kontext check` refuses a `checked` that is not a date or lies in the future. Retiring or superseding an entry keeps the field.
+[Freshness](./04-context-layers.md#freshness) and [drift](./03-capture-and-review.md#drift) count from it, as they do from an edit of the entry. A time counts after its second, a day from the start of the next UTC day. `kontext check` refuses a `checked` in neither form or in the future. Retiring or superseding an entry keeps the field.
 
 ## Evidence {#evidence}
 

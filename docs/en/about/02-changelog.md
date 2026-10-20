@@ -2,6 +2,10 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.4.1 (2026-10-20)
+
+**Fix: confirming an entry again the same day cleared nothing.** `kontext confirm` wrote only a date, so a second confirmation on the same day left the file byte-identical, and drift, which counts an entry as looked at only when its file changes in the range, kept listing it after later commits. Confirm (`kontext confirm`, `ctx_confirm`, `drafts.confirm`) now writes the UTC time to the second, `checked: 2026-10-20T14:05:09Z`, and returns the same string. `checked` accepts that form or a bare `YYYY-MM-DD` (both validated, neither in the future); freshness counts after a time's second and from the next UTC day after a date. Nothing needs to change: dates already written stay valid. See [Confirmations](../concepts/02-knowledge-store.md#checked).
+
 ## 0.4.0 (2026-10-20)
 
 **Knowledge that follows the code it governs.** A review of one repository found about ten entries that no longer matched the code. kontext already listed the entries covering a staged change, but only from git hooks, which a team committing with jj never runs; freshness never reset once someone checked an entry, and watched decisions only; and nothing answered which entries a range of commits left behind. Now, without a model and the same under git and jj:
