@@ -30,7 +30,7 @@ Treat entries like code:
 
 - **Is it true and still intended?** An agent may have over-generalized from one commit.
 - **Is it scoped?** `paths` should cover what the decision governs, not the whole repository.
-- **Is it brief?** Context, decision, consequences: a few lines each.
+- **Is it brief?** Context, decision, consequences: a few lines each. Rejected alternatives, when there were any, go in `## Alternatives`.
 - **Does it replace something?** Then it should `supersede` the old entry rather than contradict it silently.
 
 Make the approvers explicit. With a CODEOWNERS line such as

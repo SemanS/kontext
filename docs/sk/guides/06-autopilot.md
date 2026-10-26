@@ -36,7 +36,7 @@ Každú úlohu tak, ako by ju videl agent, plus **priložené zdroje** (najviac 
 {
   "summary": "One line: what the module is for",
   "overview": "5–15 lines of Markdown",
-  "decisions": [{ "title": "…", "decision": "…", "context": "…", "consequences": "…", "paths": ["…"], "commits": ["abc1234"] }],
+  "decisions": [{ "title": "…", "decision": "…", "context": "…", "alternatives": "…", "consequences": "…", "paths": ["…"], "commits": ["abc1234"] }],
   "learnings": [{ "title": "…", "body": "…", "paths": ["…"] }]
 }
 ```

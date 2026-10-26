@@ -36,7 +36,7 @@ Each task as an agent would see it, plus **inlined sources** (up to `init.task_i
 {
   "summary": "One line: what the module is for",
   "overview": "5–15 lines of Markdown",
-  "decisions": [{ "title": "…", "decision": "…", "context": "…", "consequences": "…", "paths": ["…"], "commits": ["abc1234"] }],
+  "decisions": [{ "title": "…", "decision": "…", "context": "…", "alternatives": "…", "consequences": "…", "paths": ["…"], "commits": ["abc1234"] }],
   "learnings": [{ "title": "…", "body": "…", "paths": ["…"] }]
 }
 ```

@@ -30,7 +30,7 @@ K záznamom pristupuj ako ku kódu:
 
 - **Je to pravda a stále to tak chceme?** Agent mohol z jedného commitu príliš zovšeobecniť.
 - **Má správny rozsah?** `paths` by mali pokrývať to, na čo sa rozhodnutie vzťahuje, nie celý repozitár.
-- **Je stručný?** Kontext, rozhodnutie, dôsledky (každé na pár riadkov).
+- **Je stručný?** Kontext, rozhodnutie, dôsledky (každé na pár riadkov). Zamietnuté alternatívy, ak nejaké boli, patria do `## Alternatives`.
 - **Nahrádza niečo?** Potom by mal starý záznam nahradiť cez `supersede`, a nie mu potichu odporovať.
 
 Urči, kto schvaľuje. S riadkom v CODEOWNERS, napríklad

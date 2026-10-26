@@ -65,7 +65,7 @@ Already recorded:\n{known}\n\n\
 {thread}\n<<<\n{text}\n>>>\n\n\
 Answer with ONLY one JSON object, no prose and no code fence, and do not call any tools:\n\
 {\"entries\": [{\"kind\": \"decision|convention|learning|incident\", \"title\": \"a short statement\", \
-\"body\": \"Markdown, a few lines: what, why, consequences\", \"paths\": [\"repository-relative paths or globs it governs\"], \
+\"body\": \"Markdown, a few lines: what, why, consequences; for a decision with rejected options, a ## Alternatives section saying why each was rejected\", \"paths\": [\"repository-relative paths or globs it governs\"], \
 \"commits\": [\"short shas the thread committed it in, if any\"]}]}";
 
 fn pick_llm(app: &App, explicit: Option<&str>) -> Result<String> {

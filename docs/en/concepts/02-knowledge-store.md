@@ -59,9 +59,14 @@ Floats broke VAT rounding on invoices with many lines.
 ## Decision
 Every amount is stored and computed as an integer number of cents.
 
+## Alternatives
+Decimal columns: exact, but every language on the path needs a decimal type.
+
 ## Consequences
 Conversions happen at the edges (API, UI). Existing float columns are migrated.
 ```
+
+`## Alternatives` is optional: the options considered and why each was rejected, so a later challenge does not reopen one that already failed.
 
 Unknown front-matter keys are preserved when kontext rewrites a file.
 
