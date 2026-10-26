@@ -2,6 +2,16 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.5.0 (2026-10-26)
+
+**Decisions can say what was rejected.** A decision entry may carry an optional `## Alternatives` section between `## Decision` and `## Consequences`: the options considered and why each was rejected, so a later challenge or drift does not reopen one that already failed. It is free Markdown, not front matter, and nothing requires it. See [the entry format](../concepts/02-knowledge-store.md).
+
+- `ctx_init_submit` takes an optional `alternatives` string for `dec:` tasks and writes the section; an empty value writes nothing.
+- The `ctx_capture` body hint and the distill prompt mention the section, so agents fill it when there were real alternatives.
+- The one-line summary and the action line still come from `## Decision`, so the brief and search read entries as before.
+
+**Migration.** None: entries without the section stay valid, and older kontext versions read the section as ordinary body text.
+
 ## 0.4.1 (2026-10-20)
 
 **Fix: confirming an entry again the same day cleared nothing.** `kontext confirm` wrote only a date, so a second confirmation on the same day left the file byte-identical, and drift, which counts an entry as looked at only when its file changes in the range, kept listing it after later commits. Confirm (`kontext confirm`, `ctx_confirm`, `drafts.confirm`) now writes the UTC time to the second, `checked: 2026-10-20T14:05:09Z`, and returns the same string. `checked` accepts that form or a bare `YYYY-MM-DD` (both validated, neither in the future); freshness counts after a time's second and from the next UTC day after a date. Nothing needs to change: dates already written stay valid. See [Confirmations](../concepts/02-knowledge-store.md#checked).

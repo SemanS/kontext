@@ -2,6 +2,16 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.5.0 (2026-10-26)
+
+**Rozhodnutia môžu povedať, čo zamietli.** Záznam rozhodnutia môže mať nepovinnú sekciu `## Alternatives` medzi `## Decision` a `## Consequences`: zvážené možnosti a prečo každú zamietli, aby neskoršia námietka ani drift znova neotvárali tú, ktorá už neprešla. Je to voľný Markdown, nie front matter, a nič ju nevyžaduje. Pozri [formát záznamu](../concepts/02-knowledge-store.md).
+
+- `ctx_init_submit` pri úlohách `dec:` prijíma nepovinný reťazec `alternatives` a zapíše z neho sekciu; prázdna hodnota nezapíše nič.
+- Nápoveda k telu v `ctx_capture` a prompt pre distill sekciu spomínajú, takže ju agenti vyplnia, keď nejaké alternatívy naozaj boli.
+- Jednoriadkové zhrnutie a to, čo záznam káže, sa stále berú z `## Decision`, takže brief aj vyhľadávanie čítajú záznamy ako doteraz.
+
+**Migrácia.** Žiadna: záznamy bez sekcie ostávajú platné a staršie verzie kontextu čítajú sekciu ako bežný text tela.
+
 ## 0.4.1 (2026-10-20)
 
 **Oprava: opätovné potvrdenie záznamu v ten istý deň nič nevyčistilo.** `kontext confirm` zapisoval len dátum, takže druhé potvrdenie v ten istý deň nechalo súbor bajt po bajte rovnaký a drift, ktorý záznam považuje za pozretý, len keď sa jeho súbor v rozsahu zmení, ho po ďalších commitoch vypisoval ďalej. Potvrdenie (`kontext confirm`, `ctx_confirm`, `drafts.confirm`) teraz zapíše čas v UTC na sekundu, `checked: 2026-10-20T14:05:09Z`, a vráti ten istý reťazec. `checked` prijme tento tvar alebo samotný `YYYY-MM-DD` (oba sa validujú, ani jeden nesmie byť v budúcnosti); aktuálnosť počíta po sekunde času a od nasledujúceho dňa v UTC po dátume. Netreba nič meniť: už zapísané dátumy ostávajú platné. Pozri [Potvrdenia](../concepts/02-knowledge-store.md#checked).
