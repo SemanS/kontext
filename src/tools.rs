@@ -144,7 +144,7 @@ fn tool_list() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["decision", "convention", "learning", "incident"], "description": "What it is (pitfalls are learnings)"},
                 "title": s("Short statement, e.g. 'Use Tantivy for local recall'"),
-                "body": s("Markdown: context, the decision/lesson, consequences. A few lines."),
+                "body": s("Markdown: context, the decision/lesson, consequences. A few lines. For a decision, an optional `## Alternatives` section names the options considered and why each was rejected."),
                 "summary": s("One line (optional; derived from the body otherwise)"),
                 "paths": arr("Repo paths or globs this governs, e.g. apps/api/src/billing/**"),
                 "tags": arr("Optional tags"),
@@ -227,7 +227,7 @@ fn tool_list() -> Vec<Value> {
                 "overview": s("Markdown, 5-15 lines"),
                 "decisions": {"type": "array", "description": "For dec:* tasks (at most 3)", "items": {"type": "object", "properties": {
                     "title": {"type": "string"}, "summary": {"type": "string"}, "context": {"type": "string"}, "decision": {"type": "string"},
-                    "consequences": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}},
+                    "alternatives": {"type": "string"}, "consequences": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}},
                     "commits": {"type": "array", "items": {"type": "string"}}, "date": {"type": "string"}
                 }, "required": ["title", "decision"]}},
                 "learnings": {"type": "array", "description": "Optional non-obvious gotchas", "items": {"type": "object", "properties": {

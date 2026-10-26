@@ -67,7 +67,7 @@ The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *
 | --- | --- | --- | --- |
 | `kind` | string | required | `decision`, `convention`, `learning`, `incident` (aliases accepted) |
 | `title` | string | required | short statement |
-| `body` | string | required | Markdown: context, decision or lesson, consequences |
+| `body` | string | required | Markdown: context, decision or lesson, consequences; optionally `## Alternatives` for a decision |
 | `summary` | string | | one line |
 | `paths` | string[] | | paths or globs it governs |
 | `tags` | string[] | | |
@@ -139,7 +139,7 @@ A capture whose paths all belong to another repository with team knowledge goes 
 | `task_id` | string (required) | `purpose`, `mod:<module>`, `dec:<area>`, `refresh:<module>` |
 | `summary` | string | one line, at most ~200 characters |
 | `overview` | string | Markdown, 5–15 lines |
-| `decisions` | object[] | `{title, decision, summary?, context?, consequences?, paths?, commits?, date?, status?, tags?}` (for `dec:` tasks) |
+| `decisions` | object[] | `{title, decision, summary?, context?, alternatives?, consequences?, paths?, commits?, date?, status?, tags?}` (for `dec:` tasks) |
 | `learnings` | object[] | `{title, body, paths?, tags?}` |
 | `skip` | boolean | skip the task |
 | `reason` | string | why it is skipped |

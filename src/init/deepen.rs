@@ -51,6 +51,7 @@ pub struct DecisionSub {
     pub summary: Option<String>,
     pub context: Option<String>,
     pub decision: String,
+    pub alternatives: Option<String>,
     pub consequences: Option<String>,
     #[serde(deserialize_with = "string_or_vec")]
     pub paths: Vec<String>,
@@ -244,7 +245,7 @@ pub fn render_task(app: &App, t: &Task, inline: bool, budget_chars: usize) -> St
             }
             let _ = writeln!(
                 s,
-                "\nInspect with `git show <sha>` where the message is not enough. Record only durable choices — a direction taken, an alternative rejected, a rule introduced — and skip routine fixes.\n\nSubmit with `ctx_init_submit`:\n- task_id: \"{}\"\n- decisions: at most 3, each {{title, summary, context, decision, consequences, paths, commits, date}} — `decision` states the choice in one or two sentences, `context` why it was needed, `consequences` what it costs or implies; `commits` lists the short shas it came from. An empty list is a valid answer.",
+                "\nInspect with `git show <sha>` where the message is not enough. Record only durable choices — a direction taken, an alternative rejected, a rule introduced — and skip routine fixes.\n\nSubmit with `ctx_init_submit`:\n- task_id: \"{}\"\n- decisions: at most 3, each {{title, summary, context, decision, alternatives, consequences, paths, commits, date}} — `decision` states the choice in one or two sentences, `context` why it was needed, `alternatives` (optional) the options considered and why each was rejected, `consequences` what it costs or implies; `commits` lists the short shas it came from. An empty list is a valid answer.",
                 t.id
             );
         }
@@ -377,14 +378,7 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
             if d.title.trim().is_empty() || d.decision.trim().is_empty() {
                 continue;
             }
-            let mut body = String::new();
-            if let Some(c) = d.context.as_deref().filter(|c| !c.trim().is_empty()) {
-                let _ = writeln!(body, "## Context\n\n{}\n", clean(c));
-            }
-            let _ = writeln!(body, "## Decision\n\n{}\n", clean(&d.decision));
-            if let Some(c) = d.consequences.as_deref().filter(|c| !c.trim().is_empty()) {
-                let _ = writeln!(body, "## Consequences\n\n{}\n", clean(c));
-            }
+            let body = decision_body(d);
             let commits: Vec<String> =
                 d.commits.iter().map(|c| c.trim().chars().take(12).collect()).filter(|c: &String| !c.is_empty()).collect();
             let date = d.date.clone().filter(|x| x.len() >= 10).or_else(|| first_commit_date(app, &commits)).unwrap_or_else(util::today);
@@ -634,6 +628,22 @@ pub fn autopilot(app: &App, llm: &str, jobs: usize, max: usize, report: &dyn Fn(
     Ok((ok, failed))
 }
 
+/// The body of a submitted decision: Context, Decision, then the optional Alternatives and Consequences.
+fn decision_body(d: &DecisionSub) -> String {
+    let mut body = String::new();
+    if let Some(c) = d.context.as_deref().filter(|c| !c.trim().is_empty()) {
+        let _ = writeln!(body, "## Context\n\n{}\n", clean(c));
+    }
+    let _ = writeln!(body, "## Decision\n\n{}\n", clean(&d.decision));
+    if let Some(a) = d.alternatives.as_deref().filter(|a| !a.trim().is_empty()) {
+        let _ = writeln!(body, "## Alternatives\n\n{}\n", clean(a));
+    }
+    if let Some(c) = d.consequences.as_deref().filter(|c| !c.trim().is_empty()) {
+        let _ = writeln!(body, "## Consequences\n\n{}\n", clean(c));
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -650,5 +660,23 @@ mod tests {
         let v = serde_json::json!({"task_id": "dec:x", "decisions": [{"title": "T", "decision": "D", "paths": "a/b, c", "commits": ["abc1234"]}]});
         let s: Submission = serde_json::from_value(v).unwrap();
         assert_eq!(s.decisions[0].paths, vec!["a/b", "c"]);
+    }
+
+    #[test]
+    fn decision_body_places_alternatives_after_the_decision() {
+        let d = DecisionSub {
+            decision: "Use Tantivy.".into(),
+            alternatives: Some("SQLite FTS5: no BM25 tuning.".into()),
+            consequences: Some("One more dependency.".into()),
+            ..Default::default()
+        };
+        let body = decision_body(&d);
+        let (dec, alt, cons) =
+            (body.find("## Decision").unwrap(), body.find("## Alternatives").unwrap(), body.find("## Consequences").unwrap());
+        assert!(dec < alt && alt < cons, "{body}");
+        assert!(
+            !decision_body(&DecisionSub { decision: "D".into(), alternatives: Some(" ".into()), ..Default::default() })
+                .contains("## Alternatives")
+        );
     }
 }

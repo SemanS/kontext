@@ -67,7 +67,7 @@ Lokálny zdroj zahŕňa aj poznámky v inboxe tohto klonu (`inbox:<id>`, označe
 | --- | --- | --- | --- |
 | `kind` | string | povinné | `decision`, `convention`, `learning`, `incident` (akceptujú sa aliasy) |
 | `title` | string | povinné | krátke tvrdenie |
-| `body` | string | povinné | Markdown: kontext, rozhodnutie alebo poznatok, dôsledky |
+| `body` | string | povinné | Markdown: kontext, rozhodnutie alebo poznatok, dôsledky; pri rozhodnutí voliteľne `## Alternatives` |
 | `summary` | string | | jeden riadok |
 | `paths` | string[] | | cesty alebo globy, ktorých sa týka |
 | `tags` | string[] | | |
@@ -139,7 +139,7 @@ Zachytenie, ktorého cesty všetky patria inému repozitáru s tímovými znalos
 | `task_id` | string (povinné) | `purpose`, `mod:<module>`, `dec:<area>`, `refresh:<module>` |
 | `summary` | string | jeden riadok, najviac ~200 znakov |
 | `overview` | string | Markdown, 5–15 riadkov |
-| `decisions` | object[] | `{title, decision, summary?, context?, consequences?, paths?, commits?, date?, status?, tags?}` (pre úlohy `dec:`) |
+| `decisions` | object[] | `{title, decision, summary?, context?, alternatives?, consequences?, paths?, commits?, date?, status?, tags?}` (pre úlohy `dec:`) |
 | `learnings` | object[] | `{title, body, paths?, tags?}` |
 | `skip` | boolean | preskočí úlohu |
 | `reason` | string | prečo sa preskakuje |
