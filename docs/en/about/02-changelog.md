@@ -2,7 +2,7 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
-## Unreleased
+## 0.6.0 (2026-10-27)
 
 **A verification is a commit in a ledger, and the brief says what changed since.** A `checked:` date was a stamp anyone could set, often in bulk, and a merge could silently replace it with an older one. Now:
 

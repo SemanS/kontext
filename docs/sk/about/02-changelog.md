@@ -2,7 +2,7 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## Nevydané
+## 0.6.0 (2026-10-27)
 
 **Overenie je commit v denníku a brief hovorí, čo sa odvtedy zmenilo.** Dátum `checked:` bola pečiatka, ktorú mohol nastaviť ktokoľvek, často hromadne, a merge ju mohol potichu nahradiť staršou. Teraz:
 
