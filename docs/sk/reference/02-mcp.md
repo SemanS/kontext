@@ -8,11 +8,11 @@ Server: `kontext mcp`, JSON-RPC 2.0 cez stdio, správy oddelené novým riadkom.
 a voliteľné `dir`. Vracia `structuredContent` a `outputSchema` aj úplnú textovú JSON kópiu.
 Existujúce nástroje nižšie si zachovávajú textové výsledky.
 
-Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
+Každý nástroj nesie MCP anotácie, podľa ktorých klienti rozhodujú, čo treba schváliť: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` a `ctx_threads` majú `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` a `ctx_init_submit` zapisujú len do lokálneho inboxu, pracovného stromu a git indexu a majú `destructiveHint: false`. Tieto nástroje si zachovávajú `openWorldHint: false`. Zmiešané `ctx_api` má konzervatívne `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: nakonfigurované LLM a event adaptéry môžu pristupovať k externým službám.
 
 ### Iný repozitár: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_drift`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_drift`, `ctx_inbox` a `ctx_prepare_commit` prijímajú `dir`: cestu vnútri iného worktree, submodulu alebo repozitára, absolútnu alebo relatívnu k tomuto koreňu. Bez neho rozhodujú cesty, ktoré nástroj dostane, ktorý repozitár odpovie. Pozri [Viac repozitárov](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -96,9 +96,20 @@ Zaznamená, že záznam už neplatí, ako lokálneho kandidáta v inboxe druhu `
 
 | Parameter | Typ | Predvolene | |
 | --- | --- | --- | --- |
-| `id` | string | povinné | záznam: `kx:<id>`, id alebo jeho jednoznačná predpona |
+| `id` | string | | záznam: `kx:<id>`, id alebo jeho jednoznačná predpona |
+| `ids` | string[] | | viac záznamov naraz; viac ako päť sa zapíše ako `bulk` |
+| `because` | string | | jeden riadok: voči čomu bol záznam overený |
 
-Zaznamená, že záznam stále platí aj po zmene kódu, ktorý riadi: nastaví jeho čas [`checked`](../concepts/02-knowledge-store.md#checked) na teraz (UTC, na sekundu), nič iné v súbore nezmení a súbor stagne, takže potvrdenie prejde review so zmenou. Aktuálnosť aj drift počítajú od neho. Agent potvrdí len to, čo overil voči kódu; záznam, ktorý už neplatí, napadne alebo nahradí.
+Zaznamená, že záznam stále platí aj po zmene kódu, ktorý riadi: nastaví jeho čas [`checked`](../concepts/02-knowledge-store.md#checked) na teraz (UTC, na sekundu), nič iné v súbore nezmení, pridá do [denníka overení](../concepts/03-capture-and-review.md#verifications) riadok `agent` s `HEAD` a dôvodom a oboje stagne, takže potvrdenie prejde review so zmenou. Aktuálnosť aj drift počítajú od neho. Agent potvrdí len to, čo overil voči kódu; záznam, ktorý už neplatí, napadne alebo nahradí. Potvrdenie agentom sa zobrazuje ako pečiatka, nie ako overenie; kde záznam uvádza príkaz, `ctx_verify` dokáže viac.
+
+### `ctx_verify`
+
+| Parameter | Typ | Predvolene | |
+| --- | --- | --- | --- |
+| `id` | string | povinné | záznam: `kx:<id>`, id alebo jeho jednoznačná predpona |
+| `because` | string | | jeden riadok: prečo bol spustený |
+
+Spustí príkaz [`verify`](../concepts/03-capture-and-review.md#verify) záznamu z koreňa repozitára (s časovým limitom), pridá do denníka riadok `verify` s výsledkom a `HEAD`, stagne ho a odpovie výsledkom a koncom výstupu. Záznam bez príkazu alebo neaktívny záznam odmietne. Nie je len na čítanie: spúšťa príkaz, ktorý uvádza repozitár.
 
 ### `ctx_drift`
 

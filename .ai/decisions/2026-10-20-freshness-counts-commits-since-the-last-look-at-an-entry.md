@@ -4,6 +4,7 @@ kind: decision
 title: Freshness counts commits since the last look at an entry
 status: accepted
 date: 2026-10-20
+checked: 2026-10-27T20:20:09Z
 summary: Active decisions, conventions and learnings with paths are flagged after freshness.threshold_commits commits on their paths since the latest of their date, their checked confirmation and the last commit that changed their own file.
 paths: [src/freshness.rs, src/store.rs, src/ops.rs, src/cli.rs]
 supersedes: [2026-10-03-decision-freshness-counts-later-commits-on-its-paths-from]

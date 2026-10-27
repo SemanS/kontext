@@ -2,6 +2,20 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané
+
+**Overenie je commit v denníku a brief hovorí, čo sa odvtedy zmenilo.** Dátum `checked:` bola pečiatka, ktorú mohol nastaviť ktokoľvek, často hromadne, a merge ju mohol potichu nahradiť staršou. Teraz:
+
+- **Denník.** `kontext confirm`, `ctx_confirm` a `drafts.confirm` pridajú aj riadok do `.ai/confirmations.log`: čas v UTC, záznam, spôsob pohľadu (`read` z CLI, `agent` z MCP nástroja, `bulk` pri viac ako piatich záznamoch jedným volaním), commit, na ktorý ukazoval `HEAD`, kto a voliteľný dôvod (`--because`). `kontext init` aj prvý zápis pridajú do `.ai/.gitattributes` riadok `confirmations.log merge=union`, takže vetvy sa zlúčia bez konfliktu. `checked:` sa zapisuje ďalej ako vyrovnávacia kópia. Pozri [Overenia](../concepts/03-capture-and-review.md#verifications).
+- **Oprava.** `kontext check` varuje, keď `checked` záznamu zaostáva za denníkom; `kontext confirm --repair` (`drafts.confirm` s `repair: true`) ho podľa denníka prepíše.
+- **Spustiteľné kontroly.** Záznam môže mať `verify:`, jeden shellový príkaz. `kontext verify <id>`, `ctx_verify` a nové `drafts.verify` ho spustia z koreňa repozitára s časovým limitom (`KONTEXT_VERIFY_TIMEOUT_SECS`, predvolene 120) a zapíšu do denníka, či prešiel.
+- **Čo sa odvtedy zmenilo.** Pri každom zázname, ktorý riadi cesty z `focus`, `ctx_brief` povie, ako bol naposledy overený (druh, krátky commit, deň) a koľko commitov sa odvtedy dotklo jeho ciest, s ich prvými predmetmi; raz za brief vyzve tieto záznamy prečítať pred zmenou ich ciest.
+- **API.** Záznamy z `entries.list`, `entries.get`, `entries.search`, `entries.governing` a `entries.drift` nesú `verification`, `since`, `verify` a `premises`; `checked` je novší z hodnoty v súbore a v denníku. `drafts.confirm` prijíma `because`, `kind`, `ids` a `repair`. Verzia API ostáva 1. Pozri [aplikačné API](../reference/05-application-api.md#verification).
+- **Zmenené predpoklady.** Aktívny záznam, ktorý odkazuje na nahradený, vyradený alebo zastaraný záznam (`[[id]]`, `supersedes`, `extends`), je označený v briefe, v API a informačným riadkom v `kontext check`; nič sa neprepíše.
+- **Brána.** `kontext hooks status` a dokumentácia odporúčajú tímom `kontext drift --fail` v kontrolnom skripte alebo v CI, čo pokryje aj commity z jj; žiaden hook commit pre drift neblokuje.
+
+**Migrácia.** Netreba. Prvé potvrdenie vytvorí `.ai/confirmations.log` a pridá riadok do `.ai/.gitattributes`; commitnite oboje. `kontext check` nepočíta informačné riadky ani medzi chyby, ani medzi varovania.
+
 ## 0.5.0 (2026-10-26)
 
 **Rozhodnutia môžu povedať, čo zamietli.** Záznam rozhodnutia môže mať nepovinnú sekciu `## Alternatives` medzi `## Decision` a `## Consequences`: zvážené možnosti a prečo každú zamietli, aby neskoršia námietka ani drift znova neotvárali tú, ktorá už neprešla. Je to voľný Markdown, nie front matter, a nič ju nevyžaduje. Pozri [formát záznamu](../concepts/02-knowledge-store.md).

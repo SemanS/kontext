@@ -87,6 +87,56 @@ For each, read it against the change: if it still holds, confirm it (`kontext co
 - Bez `--head` sa počíta aj pracovný strom: commity `base..HEAD` plus necommitnuté a nesledované zmeny. Presne tak vidí git pracovnú kópiu [jj](./07-git-integration.md#jj), takže drift funguje bez commitov aj bez hookov. S `--head` sa počítajú len commitnuté zmeny a záznamy sa čítajú tak, ako sú commitnuté tam.
 - Kontrolujú sa rozhodnutia, konvencie, poučenia a incidenty (výber cez `--kind`); dokumenty modulov obnovuje `kontext init`, nepotvrdzujú sa.
 - Nezúčastňuje sa žiadny model: odpoveď je deterministická funkcia repozitára. `--json` vypíše výsledok `entries.drift`; `--fail` skončí so stavom 2, keď je vypísaný nejaký záznam. V CI ho spúšťa [`kontext ci`](../guides/07-ci.md).
+- **Bránou je skript alebo CI, nie hook.** Tím, ktorý commituje cez jj alebo cez klientov, čo git hooky obchádzajú, nemá pri commite žiadnu kontrolu, preto brána patrí do tímového kontrolného skriptu (`bun run check`, `make check`) alebo do CI: `kontext drift --fail` (alebo `kontext ci --strict`). kontext nepridáva hook, ktorý by commit pre drift zablokoval.
+
+## Overenia: denník {#verifications}
+
+Dátum `checked:` v súbore záznamu hovorí, že ho niekto potvrdil, nie však, na čo sa pozeral a ako; a merge, ktorý v ňom vyrieši konflikt staršou stranou, novší pohľad stratí. Preto sa každé potvrdenie aj každá spustiteľná kontrola pridá aj do **`.ai/confirmations.log`**, po jednom riadku oddelenom tabulátormi:
+
+```text
+2026-10-27T09:12:44Z	prices-are-integer-cents	read	a7450a5c…	Jana Nová	-	overené voči zmene DPH
+2026-10-27T09:40:02Z	invoice-totals-tested	verify	a7450a5c…	Jana Nová	1	
+```
+
+Polia sú čas (UTC, na sekundu), ID záznamu, spôsob pohľadu, celý commit, na ktorý v tej chvíli ukazoval `HEAD` (`-` pred prvým commitom), kto (`git config user.name`), či príkaz `verify` prešiel (`1`/`0`, inak `-`) a voliteľný jednoriadkový dôvod. Denník sa len dopĺňa: žiaden riadok sa neprepisuje. `kontext init` zapíše do `.ai/.gitattributes` riadok `confirmations.log merge=union` (riadky, ktoré tam už sú, zostanú) a prvý zápis overí, že tam je, takže dve vetvy, ktoré potvrdzujú záznamy, sa zlúčia bez konfliktu a zachovajú oba riadky. Denník patrí do úložiska: drift ani aktuálnosť ho nepočítajú ako kód a `kontext check` ho nečíta ako záznam.
+
+Spôsob pohľadu:
+
+| Druh | Zapisuje | Platí ako overenie |
+| --- | --- | --- |
+| `read` | `kontext confirm` (človek v termináli) | áno |
+| `agent` | `ctx_confirm` a `drafts.confirm`, ak neuvedie `kind: read` | nie: pečiatka, uchovaná a zobrazená ako taká |
+| `bulk` | každé potvrdenie viac ako piatich záznamov jedným volaním | nie: pečiatka |
+| `verify` | `kontext verify`, `ctx_verify`, `drafts.verify` | keď príkaz prešiel |
+
+`kontext confirm <id…> --because "…"` (`because` v nástroji aj v API) uloží dôvod. `checked:` v zázname sa zapisuje a stagne ako doteraz, aby staršie čítačky fungovali ďalej; je to vyrovnávacia kópia denníka, nikdy nie dôkaz. Keď kópia zaostáva za denníkom (merge vzal staršiu stranu alebo riadok prišiel z inej vetvy), `kontext check` varuje (`checked date … behind its ledger; run kontext confirm --repair`) a **`kontext confirm --repair`** prepíše `checked:` každého takého aktívneho záznamu podľa denníka a súbory stagne. Riadok `verify` nie je potvrdenie a kópiu nemení.
+
+### Záznam, ktorý sa overí sám {#verify}
+
+Záznam môže uviesť jeden shellový príkaz, ktorý ukáže, že stále platí:
+
+```yaml
+verify: cargo test -p billing totals_are_integer_cents
+```
+
+Jeden riadok, najviac 500 znakov (dlhšia kontrola patrí do skriptu, ktorý príkaz zavolá); iné `kontext check` odmietne. `kontext verify <id…>` (`ctx_verify`, `drafts.verify`) ho spustí cez `sh -c` z koreňa repozitára so zatvoreným vstupom, zastaví ho po 120 sekundách (mení to `KONTEXT_VERIFY_TIMEOUT_SECS`) a pridá riadok `verify` s výsledkom a commitom, voči ktorému bežal. Vráti, či prešiel, návratový kód a posledné 2 KB výstupu. Príkaz nahradeného alebo vyradeného záznamu sa nikdy nespustí a záznam bez `verify:` je odmietnutý: prečítajte ho a potvrďte. Takto sa najlepšie overujú fakty, ktoré stroj vie zistiť; čo niekto zamýšľal, potvrdí človek.
+
+### Čo sa odvtedy zmenilo {#since}
+
+Pre každý záznam, ktorý riadi cesty z `focus`, pridá [`ctx_brief`](./04-context-layers.md), ako bol naposledy overený a čo sa odvtedy stalo s jeho cestami:
+
+```text
+- [prices-are-integer-cents] Prices are integer cents — Every amount is an integer number of cents.
+  verified read at a7450a5 (2026-10-27); 3 commits on its paths since: feat(billing): VAT per line; fix(billing): round totals; …
+```
+
+Počíta sa od commitu, ktorý overenie uviedlo, alebo od commitu, ktorý jeho riadok denníka priniesol, ak je novší (zmena, s ktorou prešlo review), a to ne-merge commity na riadených súboroch záznamu bez súborov znalostí. Overenie známe len z dátumu `checked:` sa počíta ako pri aktuálnosti. Záznam, ktorý nikto neoveril, hovorí `never verified`. Keď má niektorý vypísaný záznam commity odvtedy, brief raz pridá: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Na rozdiel od aktuálnosti tu nie je prah: už jeden commit na riadenej ceste je dôvod čítať.
+
+Strojové API vracia to isté pri každom zázname (`entries.list`, `entries.get`, `entries.governing`, `entries.drift`): `verification`, `since`, `verify` a `premises`. Pozri [aplikačné API](../reference/05-application-api.md#verification).
+
+### Zmenené predpoklady {#premises}
+
+Nahradenie alebo vyradenie záznamu nič nezmení v záznamoch, ktoré na ňom stavajú. Aktívny záznam, ktorý odkazuje na záznam teraz nahradený, vyradený alebo zastaraný — cez `[[id]]` v tele, cez `supersedes` alebo cez pole `extends` — má zmenený predpoklad: brief povie `premise changed: <id> is superseded`, `kontext check` vypíše informačný riadok (`<id> links to <old>, which is superseded by <new>: does it still hold?`) a API ho uvedie v `premises`. Záznam, ktorý nahrádzal, sa za to neoznačí. Je to otázka pre toho, kto záznam číta ďalší, nikdy nie automatická úprava: agenti k záznamu pridávajú alebo ho nahrádzajú, neprepisujú ho.
 
 ## Námietky {#challenges}
 

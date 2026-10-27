@@ -52,7 +52,8 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | kandidát v inboxe, poznámky, počet redakcií, `evidence` a `related_entries` |
 | `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?` | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | záznam stagnutý so stavom `deprecated` a poznámkou `## Retired` ([podrobnosti](#retire)) |
-| `drafts.confirm` | `id` | `id`, `path` a `checked`: záznam potvrdený teraz a stagnutý ([podrobnosti](#confirm)) |
+| `drafts.confirm` | `id` alebo `ids`, `because?`, `kind?`; alebo `repair: true` | `id`, `path`, `checked` a `ledger`: záznam potvrdený teraz, jeho riadok v denníku, oboje stagnuté ([podrobnosti](#confirm)) |
+| `drafts.verify` | `id`, `because?` | výsledok príkazu `verify` záznamu, zapísaný do denníka a stagnutý ([podrobnosti](#verify)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | návrh, ktorý záznam nahrádza; nič nezapisuje ([podrobnosti](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extrahovaní kandidáti bez zápisu |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulovaný záznam, poznámky a `related_entries` bez zápisu |
@@ -60,13 +61,14 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `operations.get` | `operation_id`, `fingerprint?` | pôvodný výsledok dokončeného zápisu alebo chyba nedokončenej/konfliktnej operácie |
 
 Objekt `entry` obsahuje `kind`, `title`, `body` a voliteľné `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, `commits`, `review_by` a `evidence` ([nižšie](#maintenance)). Cesty zostávajú po celý čas poľom. Formulovanie vybraného
+`supersedes`, `visibility`, `commits`, `review_by`, `verify` a `evidence` ([nižšie](#maintenance)). Cesty zostávajú po celý čas poľom. Formulovanie vybraného
 poznatku je oddelené od hľadania nových poznatkov, aby deduplikácia neodstránila to, čo človek
 výslovne vybral. Extrakcia a návrh konvencie vyžadujú použiteľný LLM; formulovanie bez vybraného
 modelu môže zachovať dodaný poznatok.
 
-Načítaný záznam má `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `checked`, `paths`, `tags`, `file`,
-`markdown`, `style`, polia nahradenia a dodatočné metadáta (zdroje sú v `extra.external_refs`). Parser a párovanie vlastní engine;
+Načítaný záznam má `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `checked`, `verify`, `paths`, `tags`, `file`,
+`markdown`, `style`, polia nahradenia a dodatočné metadáta (zdroje sú v `extra.external_refs`). `entries.list`, `entries.get`,
+`entries.search`, `entries.governing` a `entries.drift` pridávajú `verification`, `since` a `premises` ([nižšie](#verification)). Parser a párovanie vlastní engine;
 klienti nemajú vytvárať druhý parser alebo matcher. `active_only` vynechá nahradené, zastarané a
 zamietnuté záznamy. Neznamená, že návrh z pracovného stromu prešiel review.
 Zoznam vracia predvolene 100 záznamov (najviac 500); pokračujte cez `next_offset`, kým nie je null.
@@ -156,7 +158,8 @@ architektúra sa kontroluje, len keď ju pomenuješ. Neznáma revízia alebo rev
 Záznam je vo výsledku, keď je aktívny, má `paths`, aspoň jeden súbor zmenený v rozsahu (okrem
 súborov znalostí) im zodpovedá — rovnakým porovnaním ako v `entries.governing` — a vlastný súbor
 záznamu sa v tom istom rozsahu **nezmenil**: úprava, vyradenie aj potvrdenie sa rátajú ako pohľad naň.
-`date` a `checked` sú tam, keď ich záznam má. `commits` sú ne-merge commity z `base..head`, ktoré
+`date` a `checked` sú tam, keď ich záznam má; `verification`, `since`, `verify` a `premises` sa pridajú ako pri
+ostatných čítaniach ([nižšie](#verification)). `commits` sú ne-merge commity z `base..head`, ktoré
 sa dotkli zodpovedajúcich súborov, najnovšie prvé; keď je zmena len necommitnutá, je prázdne. S
 explicitným `head` sa záznamy čítajú tak, ako sú commitnuté v `head`. Záznamy sú zoradené podľa ID.
 Na odpovedi sa nezúčastňuje žiadny model.
@@ -164,14 +167,80 @@ Na odpovedi sa nezúčastňuje žiadny model.
 ### Potvrdenie záznamu {#confirm}
 
 `drafts.confirm {id}` zaznamená, že záznam stále platí: nastaví `checked` na aktuálny čas v UTC
-na sekundu (`YYYY-MM-DDTHH:MM:SSZ`) v súbore záznamu, nič iné nezmení ani o bajt, a súbor stagne ako
-`drafts.retire`. Výsledok je `{id, path, checked}` s tým istým reťazcom; jeho prvých desať znakov je
+na sekundu (`YYYY-MM-DDTHH:MM:SSZ`) v súbore záznamu, nič iné nezmení ani o bajt, pridá riadok do
+[denníka overení](../concepts/03-capture-and-review.md#verifications) (`.ai/confirmations.log`) a oboje
+stagne ako `drafts.retire`. Výsledok je `{id, path, checked, ledger}` s tým istým reťazcom v `checked` aj `ledger.at`; jeho prvých desať znakov je
 deň, takže porovnanie s `YYYY-MM-DD` ako reťazcom ostáva správne. Ďalšie potvrdenie neskôr v ten istý
 deň súbor zmení, takže drift nový pohľad uvidí. Ručne zapísaný `checked` môže byť aj samotný
 `YYYY-MM-DD`; načítané záznamy ho vrátia tak, ako je zapísaný. Neznámy záznam je `not_found`;
 neaktívny, ešte necommitnutý alebo súbor s nestagnutými úpravami je `operation_conflict`. `checked`
 majú načítané záznamy aj [`CommittedEntry`](#rust-embedding) vo vkladacej fasáde, takže aplikácia
 spozná potvrdenie v posúdenej revízii.
+
+Pridané po 0.5.0, všetko nepovinné:
+
+- `because`: jeden riadok (najviac 500 znakov), ktorý ostane v denníku.
+- `kind`: `read`, keď záznam v klientovi potvrdil človek, `agent` (predvolene), keď agent. Viac ako
+  päť ID v jednom volaní sa zapíše ako `bulk` bez ohľadu na `kind`.
+- `ids`: viac záznamov jedným volaním. Výsledok je potom `{confirmed: [{id, path, checked, ledger}],
+  failed: [{id, code, message}]}`.
+- `repair: true` (samotné): prepíše `checked` každého aktívneho záznamu, ktorého súbor zaostáva za
+  najnovším potvrdením v denníku, a súbory stagne. Výsledok je `{repaired: [{id, path, from, to}],
+  skipped: [{id, path, reason}]}`.
+
+`ledger` je `{at, kind, commit, because, path}`: čas riadku, jeho druh, `HEAD` (pred prvým commitom null),
+dôvod (bez neho null) a cesta k denníku.
+
+### Spustenie kontroly záznamu {#verify}
+
+`drafts.verify {id, because?}` (pridané po 0.5.0) spustí príkaz `verify` záznamu cez `sh -c` z koreňa
+repozitára so zatvoreným vstupom, zastaví ho po `KONTEXT_VERIFY_TIMEOUT_SECS` (predvolene 120), potom
+pridá riadok `verify` s výsledkom a denník stagne:
+
+```json
+{"id": "…", "command": "cargo test -p billing cents", "passed": true, "exit_code": 0, "timed_out": false,
+ "output_tail": "…posledné 2 KB stdout a stderr…", "at": "2026-10-27T09:40:02Z", "commit": "<celý sha>",
+ "path": ".ai/confirmations.log"}
+```
+
+`exit_code` je null, keď bol príkaz zastavený. Záznam bez `verify` je `invalid_input`; neaktívny je
+`operation_conflict` a jeho príkaz sa nikdy nespustí; neznámy je `not_found`. Príkaz beží bez zámku
+zápisu, takže ostatné zápisy čakajú len na pridanie riadku.
+
+### Overenie, čo sa odvtedy zmenilo, predpoklady {#verification}
+
+Pridané po 0.5.0. Každý záznam, ktorý vrátia `entries.list`, `entries.get`, `entries.search`,
+`entries.governing` a `entries.drift`, nesie:
+
+```json
+{"checked": "2026-10-27T09:12:44Z",
+ "verify": "cargo test -p billing cents",
+ "verification": {"at": "2026-10-27T09:12:44Z", "kind": "read", "commit": "<celý sha>", "by": "Jana Nová",
+                  "because": "overené voči zmene DPH", "passed": null, "source": "ledger", "verified": true},
+ "since": {"commits": 3, "head": "<celý sha>", "paths": ["src/billing/invoice.rs"],
+           "recent": [{"sha": "<celý sha>", "subject": "feat(billing): VAT per line"}]},
+ "premises": [{"id": "2026-09-01-prices-are-floats", "status": "superseded", "superseded_by": ["2026-09-28-prices-are-integer-cents"]}]}
+```
+
+- `verification` je novší z najnovšieho riadku záznamu v denníku a jeho poľa `checked`; null, keď nemá
+  ani jedno. `kind` je `read`, `agent`, `bulk` alebo `verify`; `passed` je pri `verify` boolean, inak
+  null; `source` je `ledger`, alebo `frontmatter` pre `checked` bez novšieho riadku v denníku (vtedy je
+  `kind` `read` a `commit`, `by` a `because` sú null). `verified` je true pri `read` a pri prejdenom
+  `verify`: riadky `agent` a `bulk` sú pečiatky.
+- `checked` ostáva reťazcom: novší z poľa v súbore a najnovšieho potvrdenia záznamu v denníku (riadok
+  `verify` nie je potvrdenie).
+- `since` počíta ne-merge commity na riadených súboroch záznamu (bez súborov znalostí) po overení: po
+  commite, ktorý uviedlo, alebo po commite, ktorý priniesol jeho riadok denníka, ak je novší; podľa času,
+  keď ani jeden nie je v histórii `HEAD`; pri `checked` bez riadku v denníku tak, ako počíta aktuálnosť.
+  `paths` sú zmenené riadené súbory, zoradené, najviac 20; `recent` najnovšie z commitov, najviac päť;
+  `head` je `HEAD`. Null pri zázname, ktorý nikto neoveril, pri neaktívnom a pri zázname bez `paths`.
+- `verify` je príkaz záznamu alebo null.
+- `premises` uvádza záznamy, na ktoré tento aktívny záznam odkazuje (`[[id]]` v tele, `supersedes`,
+  pole `extends`) a ktoré sú nahradené, vyradené alebo zastarané, okrem toho, ktorý sám nahradil.
+  Prázdne, keď také nie sú. V žiadnom zázname sa nič neprepíše.
+
+Jeden `git log` a jeden `git log -p` denníka pokryjú všetky záznamy, uložené v cache podľa `HEAD`; zoznam
+stojí jeden `rev-parse`, kým sa nič necommitne. `snapshot` pracovného stromu sa zmení, keď sa zmení denník.
 
 ### Návrh náhrady {#revise}
 

@@ -35,6 +35,8 @@ Kolokovaný repozitár [jj](https://jj-vcs.github.io/jj/) je pre kontext git rep
 - `kontext drift`: znalosti, ktoré tvoja zmena, commitnutá či nie, nechala za sebou od predvolenej vetvy;
 - `kontext check`: validáciu a sken tajných údajov, ktoré by spustil pre-commit hook.
 
+Pre tím patrí brána tam, kadiaľ prejde každý commit, nech ho urobilo čokoľvek: kontrolný skript (`bun run check`, `make check`) alebo CI spúšťa `kontext drift --fail` (stav 2, keď zmena nechala zaznamenané znalosti za sebou) alebo `kontext ci --strict`. kontext nepridáva git hook, ktorý by commit pre drift blokoval, lebo commit z jj by naň nikdy nenarazil; to isté hovorí `kontext hooks status`.
+
 `kontext confirm` aj povýšenia stagujú súbory v indexe gitu; jj berie súbory z pracovnej kópie a index ignoruje, takže to neškodí. Trailery sa nepridajú samy: napíš ich do popisu (`prepare-commit` ich vypíše).
 
 ## Trailery

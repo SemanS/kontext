@@ -45,6 +45,7 @@ status: accepted            # proposed | accepted | superseded | deprecated | re
 date: 2026-09-28
 review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
 checked: 2026-10-20T14:05:09Z  # optional: when someone last confirmed it still holds (or a date)
+verify: cargo test -p billing cents   # optional: one command that shows it still holds
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -121,6 +122,8 @@ It is off unless set.
 
 [Freshness](./04-context-layers.md#freshness) and [drift](./03-capture-and-review.md#drift) count from it, as they do from an edit of the entry. A time counts after its second, a day from the start of the next UTC day. `kontext check` refuses a `checked` in neither form or in the future. Retiring or superseding an entry keeps the field.
 
+Each confirmation is also a line in the [verification ledger](./03-capture-and-review.md#verifications), `.ai/confirmations.log`, with the commit it looked at and how (`read`, `agent`, `bulk`); `checked` is a cache of it. When a merge leaves `checked` behind its ledger, `kontext check` warns and `kontext confirm --repair` rewrites it. An optional `verify:` field names one command that shows the entry holds; [`kontext verify`](./03-capture-and-review.md#verify) runs it.
+
 ## Evidence {#evidence}
 
 An entry can say where it comes from. Its sources are references in `external_refs` (kept in the front matter, or in the *Kontext metadata* line of a fields-style ADR):
@@ -156,5 +159,6 @@ Entries are meant to be read by agents inside a token budget. `kontext check` wa
 
 | Level | Check |
 | --- | --- |
-| error | missing title, unknown kind, duplicate id, a malformed `review_by` or one before the entry's date, a `checked` that is not a date or lies in the future, high-confidence secret |
-| warning | decision without status or date, unusual status, malformed date, long entry, `supersedes` pointing nowhere, a `paths` pattern matching no tracked file, medium-confidence secret |
+| error | missing title, unknown kind, duplicate id, a malformed `review_by` or one before the entry's date, a `checked` that is not a date or lies in the future, a `verify` that is not one line of at most 500 characters, high-confidence secret |
+| warning | decision without status or date, unusual status, malformed date, long entry, `supersedes` pointing nowhere, a `paths` pattern matching no tracked file, a `checked` behind its [ledger](./03-capture-and-review.md#verifications) (all entries only), medium-confidence secret |
+| info | an active entry links to one that is superseded, retired or deprecated (a [changed premise](./03-capture-and-review.md#premises); all entries only) |

@@ -22,6 +22,7 @@ pub const OPERATIONS: &[&str] = &[
     "drafts.formalize",
     "drafts.retire",
     "drafts.confirm",
+    "drafts.verify",
     "drafts.revise",
     "guidance.propose",
     "operations.get",

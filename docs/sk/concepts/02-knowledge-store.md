@@ -45,6 +45,7 @@ status: accepted            # proposed | accepted | superseded | deprecated | re
 date: 2026-09-28
 review_by: 2027-03-31        # optional: when to look at it again (not an expiry)
 checked: 2026-10-20T14:05:09Z  # optional: when someone last confirmed it still holds (or a date)
+verify: cargo test -p billing cents   # optional: one command that shows it still holds
 summary: Every amount is an integer number of cents.   # optional; derived from the body otherwise
 tags: [billing]
 paths: [src/billing/**]      # what this governs — used by ctx_brief, ctx_why, prepare-commit
@@ -121,6 +122,8 @@ Bez nastavenia je vypnutá.
 
 [Aktuálnosť](./04-context-layers.md#freshness) aj [drift](./03-capture-and-review.md#drift) počítajú od neho, rovnako ako od úpravy záznamu. Čas sa počíta po svojej sekunde, deň od začiatku nasledujúceho dňa v UTC. `kontext check` odmietne `checked` v inom tvare alebo v budúcnosti. Vyradenie aj nahradenie záznamu pole zachová.
 
+Každé potvrdenie je zároveň riadkom v [denníku overení](./03-capture-and-review.md#verifications), `.ai/confirmations.log`, s commitom, na ktorý sa pozeralo, a so spôsobom (`read`, `agent`, `bulk`); `checked` je jeho vyrovnávacia kópia. Keď merge nechá `checked` za denníkom, `kontext check` varuje a `kontext confirm --repair` ho prepíše. Voliteľné pole `verify:` uvádza jeden príkaz, ktorý ukáže, že záznam platí; spúšťa ho [`kontext verify`](./03-capture-and-review.md#verify).
+
 ## Evidencia {#evidence}
 
 Záznam môže povedať, odkiaľ pochádza. Jeho zdroje sú odkazy v `external_refs` (vo front matter, alebo v riadku *Kontext metadata* pri ADR v štýle polí):
@@ -156,5 +159,6 @@ Záznamy majú čítať agenti v rámci tokenového rozpočtu. `kontext check` u
 
 | Úroveň | Kontrola |
 | --- | --- |
-| chyba | chýbajúci titulok, neznámy druh, duplicitné ID, zlý `review_by` alebo `review_by` pred dátumom záznamu, `checked`, ktorý nie je dátum alebo leží v budúcnosti, tajný údaj s vysokou istotou |
-| varovanie | rozhodnutie bez stavu alebo dátumu, nezvyčajný stav, zlý formát dátumu, dlhý záznam, `supersedes` odkazujúce nikam, vzor v `paths`, ktorému nezodpovedá žiadny sledovaný súbor, tajný údaj so strednou istotou |
+| chyba | chýbajúci titulok, neznámy druh, duplicitné ID, zlý `review_by` alebo `review_by` pred dátumom záznamu, `checked`, ktorý nie je dátum alebo leží v budúcnosti, `verify`, ktorý nie je jeden riadok s najviac 500 znakmi, tajný údaj s vysokou istotou |
+| varovanie | rozhodnutie bez stavu alebo dátumu, nezvyčajný stav, zlý formát dátumu, dlhý záznam, `supersedes` odkazujúce nikam, vzor v `paths`, ktorému nezodpovedá žiadny sledovaný súbor, `checked` za svojím [denníkom](./03-capture-and-review.md#verifications) (len pri všetkých záznamoch), tajný údaj so strednou istotou |
+| info | aktívny záznam odkazuje na nahradený, vyradený alebo zastaraný záznam ([zmenený predpoklad](./03-capture-and-review.md#premises); len pri všetkých záznamoch) |

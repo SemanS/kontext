@@ -357,13 +357,8 @@ pub fn render_all(app: &App, inv: &Inventory, hist: &History) -> Result<RenderRe
     // index + merge strategy for it
     let (entries, _) = store.load_all();
     rep.index_changed = store.update_index_file(&entries)?;
-    let ga = app.repo.abs(&format!("{dir}/.gitattributes"));
-    if !ga.exists() {
-        util::write_atomic(
-            &ga,
-            "# the generated index is re-rendered on every commit; union-merge keeps parallel branches conflict-free\nREADME.md merge=union\n",
-        )?;
-    }
+    // the index and the verification ledger union-merge; lines already there stay
+    crate::ledger::ensure_attributes(&app.repo, &dir)?;
     Ok(rep)
 }
 

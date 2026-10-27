@@ -255,6 +255,10 @@ pub fn status(app: &App) -> Result<String> {
         };
         s.push_str(&format!("  {hook:<20} {state}\n"));
     }
+    // hooks never see a jj commit or another client's; a gate in the team's check script or CI does
+    s.push_str(
+        "\nCommits made without these hooks (jj, other clients) are checked nowhere here: gate the team's check script or CI with `kontext drift --fail` (exit 2 when a change left recorded knowledge behind) or `kontext ci --strict`.\n",
+    );
     Ok(s)
 }
 

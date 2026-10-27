@@ -986,6 +986,53 @@ fn changed_since(app: &App, entries: &[Entry], refs: &dyn Fn(&Entry) -> String) 
     Some((format!("\n## {heading}\n{}\n", lines.join("\n")), Some(head)))
 }
 
+/// Said once in a brief that lists a governing entry whose paths changed since its verification.
+pub(crate) const READ_BEFORE_CHANGING: &str =
+    "Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.";
+
+/// Whether an entry governs one of the focus paths: the entries a brief serves for them.
+fn governs(e: &Entry, focus: &Focus) -> bool {
+    e.is_active() && focus.paths.iter().any(|p| e.paths.iter().any(|ep| path_overlaps(ep, p) || path_matches(ep, p)))
+}
+
+/// `verified read at a7450a5 (2026-10-27); 3 commits on its paths since: subject; subject` — how a
+/// governing entry was last looked at and what changed since, from the ledger and the history.
+pub(crate) fn currency_line(
+    v: Option<&crate::verification::Verification>,
+    since: Option<&crate::verification::Since>,
+    premises: &[crate::verification::Premise],
+) -> String {
+    let mut s = match v {
+        None => "never verified".to_string(),
+        Some(v) => {
+            let kind = match (v.kind.as_str(), v.passed) {
+                ("verify", Some(true)) => "verify (passed)".to_string(),
+                ("verify", _) => "verify (FAILED)".to_string(),
+                (k, _) => k.to_string(),
+            };
+            let at = v.commit.as_deref().map(|c| format!(" at {}", &c[..c.len().min(7)])).unwrap_or_default();
+            format!("verified {kind}{at} ({})", v.at.get(..10).unwrap_or(&v.at))
+        }
+    };
+    if let Some(since) = since.filter(|s| s.commits > 0) {
+        let subjects: Vec<String> = since.recent.iter().take(2).map(|(_, subject)| util::truncate_chars(subject, 60)).collect();
+        let _ = write!(
+            s,
+            "; {} commit{} on its paths since: {}",
+            since.commits,
+            if since.commits == 1 { "" } else { "s" },
+            subjects.join("; ")
+        );
+        if since.commits > subjects.len() {
+            s.push_str("; …");
+        }
+    }
+    for p in premises.iter().take(2) {
+        let _ = write!(s, "; premise changed: {} is {}", p.id, p.status);
+    }
+    s
+}
+
 fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, part: Part, elsewhere: &[Elsewhere]) -> String {
     let cfg = app.cfg();
     let (entries, errors) = app.entries();
@@ -1173,6 +1220,19 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         }
     }
 
+    // for the entries that govern the focus paths: how each was verified and what changed since
+    let governing: HashSet<&str> = entries.iter().filter(|e| governs(e, &focus)).map(|e| e.rel_path.as_str()).collect();
+    let currency =
+        (!governing.is_empty()).then(|| crate::verification::Context::load(app, &entries, &|e| governing.contains(e.rel_path.as_str())));
+    // the line under a served entry, and whether its paths changed since it was verified
+    let currency_of = |e: &Entry| -> (String, bool) {
+        let Some(ctx) = currency.as_ref().filter(|_| governing.contains(e.rel_path.as_str())) else { return (String::new(), false) };
+        let since = ctx.since(e);
+        let line = format!("  {}\n", currency_line(ctx.verification(e).as_ref(), since, &crate::verification::premises(e, &entries)));
+        (line, since.is_some_and(|s| s.commits > 0))
+    };
+    let mut changed_paths = false;
+
     // decisions
     let mut decisions: Vec<(&Entry, f32)> =
         entries.iter().filter(|e| e.kind == "decision" && e.is_active()).map(|e| (e, relevance(e, &focus))).collect();
@@ -1190,11 +1250,13 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
                 .filter(|d| !r.trim_start_matches(part.prefix).starts_with(*d))
                 .map(|d| format!(" ({d})"))
                 .unwrap_or_default();
-            let line = format!("- [{r}] {}{date}\n", marks.line(e, 150));
+            let (current, changed) = currency_of(e);
+            let line = format!("- [{r}] {}{date}\n{current}", marks.line(e, 150));
             if util::est_tokens(&(sec.clone() + &line)) as isize > budget_left * 6 / 10 {
                 break;
             }
             sec.push_str(&line);
+            changed_paths |= changed;
             shown += 1;
         }
         if shown < total {
@@ -1209,7 +1271,9 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
             };
             let _ = writeln!(sec, "- … {} more: {how}", total - shown);
         }
-        add(&mut out, &sec, &mut budget_left);
+        if !add(&mut out, &sec, &mut budget_left) {
+            changed_paths = false;
+        }
     }
 
     // conventions, learnings, incidents
@@ -1221,10 +1285,19 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         }
         list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
         let mut sec = format!("\n{h2} {heading}\n");
+        let mut changed = false;
         for (e, _) in list.iter().take(max) {
             let _ = writeln!(sec, "- {} <kx:{}>", marks.line(e, 140), reference(e));
+            let (current, c) = currency_of(e);
+            sec.push_str(&current);
+            changed |= c;
         }
-        add(&mut out, &sec, &mut budget_left);
+        if add(&mut out, &sec, &mut budget_left) {
+            changed_paths |= changed;
+        }
+    }
+    if changed_paths {
+        add(&mut out, &format!("\n{READ_BEFORE_CHANGING}\n"), &mut budget_left);
     }
 
     // module map
@@ -1698,6 +1771,12 @@ impl CheckReport {
         self.issues.iter().filter(|i| i.level == Level::Error).count()
             + self.secrets.iter().filter(|(_, f)| f.severity == secrets::Severity::High).count()
     }
+
+    /// Warnings: issues of that level and the secrets that do not block. Info lines are neither.
+    pub fn warnings(&self) -> usize {
+        self.issues.iter().filter(|i| i.level == Level::Warn).count()
+            + self.secrets.iter().filter(|(_, f)| f.severity != secrets::Severity::High).count()
+    }
 }
 
 fn allow_patterns(app: &App) -> Vec<regex::Regex> {
@@ -1773,7 +1852,43 @@ pub fn check_all(app: &App) -> CheckReport {
             }
         }
     }
+    rep.issues.extend(ledger_issues(app, &entries));
     rep
+}
+
+/// What the verification ledger says about the entries: a `checked` date behind the ledger (a merge
+/// took the older side) is a warning; a link to an entry that no longer holds is worth knowing, and
+/// never changes the entry that links to it.
+fn ledger_issues(app: &App, entries: &[Entry]) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    let lines = crate::ledger::read(app);
+    let newest = crate::ledger::latest(&lines, true);
+    for e in entries.iter().filter(|e| e.is_active()) {
+        if let Some(line) = crate::verification::behind(e, newest.get(e.id.as_str()).copied()) {
+            issues.push(Issue {
+                level: Level::Warn,
+                path: e.rel_path.clone(),
+                msg: format!(
+                    "checked date {} behind its ledger ({}); run kontext confirm --repair",
+                    e.checked.as_deref().unwrap_or("(none)"),
+                    line.at
+                ),
+            });
+        }
+        for p in crate::verification::premises(e, entries) {
+            let what = match (p.status.as_str(), p.superseded_by.as_slice()) {
+                ("superseded", []) => "which is superseded".to_string(),
+                ("superseded", by) => format!("which is superseded by {}", by.join(", ")),
+                (status, _) => format!("which is {status}"),
+            };
+            issues.push(Issue {
+                level: Level::Info,
+                path: e.rel_path.clone(),
+                msg: format!("{} links to {}, {what}: does it still hold?", e.id, p.id),
+            });
+        }
+    }
+    issues
 }
 
 pub fn render_check(rep: &CheckReport) -> String {

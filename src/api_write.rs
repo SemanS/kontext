@@ -98,6 +98,10 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<ops::Prepar
     if let Some(id) = optional(value, "id")? {
         entry.set_extra("external_id", FmValue::Str(id.into()));
     }
+    if let Some(command) = optional(value, "verify")?.filter(|v| !v.trim().is_empty()) {
+        crate::store::validate_verify(command).map_err(|m| error("invalid_input", m))?;
+        entry.verify = Some(command.to_string());
+    }
     if let Some(extra) = value.get("extra").filter(|v| !v.is_null()) {
         let map = extra.as_object().ok_or_else(|| error("invalid_input", "extra must be an object of strings or string arrays"))?;
         for (k, v) in map {
@@ -124,6 +128,7 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<ops::Prepar
                         | "review_by"
                         | "review-by"
                         | "checked"
+                        | "verify"
                         | "summary"
                         | "tags"
                         | "paths"
@@ -605,16 +610,100 @@ fn retire(app: &App, input: &Value) -> Result<Value> {
     Ok(result)
 }
 
-/// Record that an entry still holds: `checked` becomes now (UTC, to the second) in its own file,
-/// nothing else changes, and the file is staged so the confirmation is reviewed with the change that
-/// prompted it. A time rather than a day: confirming again later the same day must change the file,
-/// since a change of the file is what drift counts as a look.
+/// Record that entries still hold: `checked` becomes now (UTC, to the second) in each one's own
+/// file, nothing else changes, a line per entry goes to the verification ledger, and both are staged
+/// so the confirmation is reviewed with the change that prompted it. A time rather than a day:
+/// confirming again later the same day must change the file, since a change of the file is what
+/// drift counts as a look.
+///
+/// Input: `id` or `ids`, `because` (one line), `kind` (`read` or `agent`; default `agent`, since
+/// the machine API is mostly called for agents — a client confirming for a person says `read`),
+/// or `repair: true` alone. More than five ids in one call are a `bulk` stamp, whoever asked.
 pub(crate) fn confirm(app: &App, input: &Value) -> Result<Value> {
-    let id = required(input, "id")?;
-    let _file = write_guard(app)?;
+    if input.get("repair").and_then(Value::as_bool) == Some(true) {
+        return repair(app);
+    }
+    let mut ids = strings(input, "ids")?;
+    if let Some(id) = optional(input, "id")?.filter(|s| !s.trim().is_empty()) {
+        ids.insert(0, id.to_string());
+    }
+    if ids.is_empty() {
+        return Err(error("invalid_input", "id must be a nonempty string (or ids a nonempty array, or repair true)"));
+    }
+    let kind = match optional(input, "kind")?.unwrap_or("agent") {
+        k @ ("read" | "agent") => k,
+        other => return Err(error("invalid_input", format!("kind must be read or agent, not '{other}'"))),
+    };
+    let because = optional(input, "because")?;
+    if because.is_some_and(|b| b.chars().count() > 500) {
+        return Err(error("invalid_input", "because must be at most 500 characters"));
+    }
+    let results = confirm_ids(app, &ids, kind, because);
+    if input.get("ids").is_none() {
+        // the one-entry form keeps its result shape
+        return results.into_iter().next().expect("one id");
+    }
+    let mut confirmed = Vec::new();
+    let mut failed = Vec::new();
+    for (id, r) in ids.iter().zip(results) {
+        match r {
+            Ok(v) => confirmed.push(v),
+            Err(e) => {
+                failed.push(json!({"id":id,"code":crate::api::error_code(&e).unwrap_or("operation_failed"),"message":format!("{e:#}")}))
+            }
+        }
+    }
+    Ok(json!({"confirmed":confirmed,"failed":failed}))
+}
+
+/// Confirm each id as `kind` (`bulk` past [`crate::ledger::BULK_OVER`] ids), one result per id in
+/// order. The CLI and the MCP tool share it, so one invocation is one judgement of bulk.
+pub(crate) fn confirm_ids(app: &App, ids: &[String], kind: &str, because: Option<&str>) -> Vec<Result<Value>> {
+    let kind = if ids.len() > crate::ledger::BULK_OVER { "bulk" } else { kind };
+    let guard = write_guard(app);
     let _local = app.write_lock.lock().unwrap();
+    if let Err(e) = guard {
+        let message = format!("{e:#}");
+        return ids.iter().map(|_| Err(error("operation_failed", message.clone()))).collect();
+    }
+    let now = crate::ledger::now();
     let (entries, _) = app.entries();
-    let entry = Store::find(&entries, id).ok_or_else(|| error("not_found", format!("no entry '{id}'")))?;
+    let because = because.map(|b| distill::mask_text(app, b));
+    let mut results = Vec::new();
+    let mut lines = Vec::new();
+    for id in ids {
+        let r = confirm_one(app, &entries, id, &now);
+        if let Ok(v) = &r {
+            lines.push(crate::ledger::line(app, &now, v["id"].as_str().unwrap_or(id), kind, None, because.as_deref()));
+        }
+        results.push(r);
+    }
+    if let Err(e) = crate::ledger::append(app, &lines) {
+        let message = format!("the entries were confirmed but the ledger could not be written: {e:#}");
+        return results.into_iter().map(|r| r.and_then(|_| Err(error("operation_failed", message.clone())))).collect();
+    }
+    let commit = app.repo.head();
+    for r in results.iter_mut().flatten() {
+        r["ledger"] = json!({"at":now,"kind":kind,"commit":commit,"because":because,"path":crate::ledger::rel_path(app)});
+    }
+    results
+}
+
+/// A file kontext rewrites must hold no unstaged edits: staging must not take a user's unstaged
+/// edits of the file along; staged ones are theirs already.
+fn ready_to_stage(app: &App, entry: &Entry, what: &str) -> Result<()> {
+    let state = app.repo.git(&["status", "--porcelain=v1", "--untracked-files=all", "--", &entry.rel_path])?;
+    if state.starts_with("??") {
+        return Err(error("operation_conflict", format!("{} is not committed yet: there is nothing to {what}", entry.rel_path)));
+    }
+    if state.as_bytes().get(1).is_some_and(|b| *b != b' ') {
+        return Err(error("operation_conflict", format!("{} has unstaged changes: stage or revert them first", entry.rel_path)));
+    }
+    Ok(())
+}
+
+fn confirm_one(app: &App, entries: &[Entry], id: &str, now: &str) -> Result<Value> {
+    let entry = Store::find(entries, id).ok_or_else(|| error("not_found", format!("no entry '{id}'")))?;
     if !entry.is_active() {
         return Err(error(
             "operation_conflict",
@@ -622,23 +711,86 @@ pub(crate) fn confirm(app: &App, input: &Value) -> Result<Value> {
         ));
     }
     app.store().validate_reserved(entry).map_err(|e| error("invalid_input", e.to_string()))?;
-    // staging must not take a user's unstaged edits of the file along; staged ones are theirs already
-    let state = app.repo.git(&["status", "--porcelain=v1", "--untracked-files=all", "--", &entry.rel_path])?;
-    if state.starts_with("??") {
-        return Err(error("operation_conflict", format!("{} is not committed yet: there is nothing to confirm", entry.rel_path)));
-    }
-    if state.as_bytes().get(1).is_some_and(|b| *b != b' ') {
-        return Err(error("operation_conflict", format!("{} has unstaged changes: stage or revert them first", entry.rel_path)));
-    }
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    ready_to_stage(app, entry, "confirm")?;
+    write_checked(app, entry, now)?;
+    Ok(json!({"id":entry.id,"path":entry.rel_path,"checked":now}))
+}
+
+fn write_checked(app: &App, entry: &Entry, at: &str) -> Result<()> {
     let before = std::fs::read_to_string(app.repo.abs(&entry.rel_path))?;
-    let after = Store::checked_text(entry, &now, &before)
+    let after = Store::checked_text(entry, at, &before)
         .ok_or_else(|| error("invalid_input", format!("{} has no title heading to record the confirmation under", entry.rel_path)))?;
     if after != before {
         util::write_atomic(&app.repo.abs(&entry.rel_path), &after)?;
     }
     app.repo.git(&["add", "--", &entry.rel_path])?;
-    Ok(json!({"id":entry.id,"path":entry.rel_path,"checked":now}))
+    Ok(())
+}
+
+/// Rewrite the `checked:` cache of every active entry whose file is behind its newest confirmation
+/// in the ledger (a merge took the older side), and stage it. The ledger itself is not touched.
+fn repair(app: &App) -> Result<Value> {
+    let _file = write_guard(app)?;
+    let _local = app.write_lock.lock().unwrap();
+    let (entries, _) = app.entries();
+    let lines = crate::ledger::read(app);
+    let newest = crate::ledger::latest(&lines, true);
+    let mut repaired = Vec::new();
+    let mut skipped = Vec::new();
+    for entry in entries.iter().filter(|e| e.is_active()) {
+        let Some(line) = crate::verification::behind(entry, newest.get(entry.id.as_str()).copied()) else { continue };
+        let done = app
+            .store()
+            .validate_reserved(entry)
+            .map_err(|e| error("invalid_input", e.to_string()))
+            .and_then(|_| ready_to_stage(app, entry, "repair"))
+            .and_then(|_| write_checked(app, entry, &line.at));
+        match done {
+            Ok(()) => repaired.push(json!({"id":entry.id,"path":entry.rel_path,"from":entry.checked,"to":line.at})),
+            Err(e) => skipped.push(json!({"id":entry.id,"path":entry.rel_path,"reason":format!("{e:#}")})),
+        }
+    }
+    Ok(json!({"repaired":repaired,"skipped":skipped}))
+}
+
+/// Run an entry's `verify` command from the repository root, append a `verify` line with the outcome
+/// to the ledger and stage it. Never for an inactive entry; an entry without a command is invalid
+/// input. The command runs without the write lock: it may take minutes.
+pub(crate) fn verify(app: &App, input: &Value) -> Result<Value> {
+    let id = required(input, "id")?;
+    let because = optional(input, "because")?;
+    let (entries, _) = app.entries();
+    let entry = Store::find(&entries, id).ok_or_else(|| error("not_found", format!("no entry '{id}'")))?;
+    if !entry.is_active() {
+        return Err(error(
+            "operation_conflict",
+            format!("{} is {}: its command is not run", entry.id, entry.status.as_deref().unwrap_or("inactive")),
+        ));
+    }
+    let command = entry.verify.clone().ok_or_else(|| {
+        error("invalid_input", format!("{} has no `verify` command; add one to its file or confirm it by reading", entry.id))
+    })?;
+    crate::store::validate_verify(&command).map_err(|m| error("invalid_input", format!("{}: {m}", entry.id)))?;
+    let commit = app.repo.head();
+    let outcome = crate::verification::run(&app.repo.root, &command, crate::verification::timeout())?;
+    let at = crate::ledger::now();
+    {
+        let _file = write_guard(app)?;
+        let _local = app.write_lock.lock().unwrap();
+        let mut line = crate::ledger::line(
+            app,
+            &at,
+            &entry.id,
+            "verify",
+            Some(outcome.passed),
+            because.map(|b| distill::mask_text(app, b)).as_deref(),
+        );
+        // the commit the command ran against, not whatever HEAD became while it ran
+        line.commit = commit.clone();
+        crate::ledger::append(app, &[line])?;
+    }
+    Ok(json!({"id":entry.id,"command":command,"passed":outcome.passed,"exit_code":outcome.exit_code,"timed_out":outcome.timed_out,
+        "output_tail":outcome.output_tail,"at":at,"commit":commit,"path":crate::ledger::rel_path(app)}))
 }
 
 fn local_entry_json(entry: &Entry, state: &str) -> Value {
@@ -790,6 +942,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "drafts.stage" => stage(app, input),
         "drafts.retire" => retire(app, input),
         "drafts.confirm" => confirm(app, input),
+        "drafts.verify" => verify(app, input),
         "drafts.revise" => revise(app, input),
         "drafts.extract" => {
             let text = required(input, "text")?;

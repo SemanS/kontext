@@ -2,6 +2,20 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+**A verification is a commit in a ledger, and the brief says what changed since.** A `checked:` date was a stamp anyone could set, often in bulk, and a merge could silently replace it with an older one. Now:
+
+- **Ledger.** `kontext confirm`, `ctx_confirm` and `drafts.confirm` also append a line to `.ai/confirmations.log`: the UTC time, the entry, how it was looked at (`read` from the CLI, `agent` from the MCP tool, `bulk` for more than five entries in one call), the commit `HEAD` named, who, and an optional reason (`--because`). `kontext init` and the first write add `confirmations.log merge=union` to `.ai/.gitattributes`, so branches merge without a conflict. `checked:` is still written as a cache. See [Verifications](../concepts/03-capture-and-review.md#verifications).
+- **Repair.** `kontext check` warns when an entry's `checked` is behind its ledger; `kontext confirm --repair` (`drafts.confirm` with `repair: true`) rewrites it from the ledger.
+- **Executable checks.** An entry may carry `verify:`, one shell command. `kontext verify <id>`, `ctx_verify` and the new `drafts.verify` run it from the repository root with a timeout (`KONTEXT_VERIFY_TIMEOUT_SECS`, default 120) and record pass or fail in the ledger.
+- **What changed since.** For each entry governing the focus paths, `ctx_brief` says how it was last verified (kind, short commit, day) and how many commits touched its paths since, with their first subjects; once per brief it asks to read those before changing their paths.
+- **API.** Entries from `entries.list`, `entries.get`, `entries.search`, `entries.governing` and `entries.drift` carry `verification`, `since`, `verify` and `premises`; `checked` is the newer of the file and the ledger. `drafts.confirm` takes `because`, `kind`, `ids` and `repair`. API version stays 1. See [the application API](../reference/05-application-api.md#verification).
+- **Changed premises.** An active entry that links to a superseded, retired or deprecated one (`[[id]]`, `supersedes`, `extends`) is flagged in the brief, the API and as an info line of `kontext check`; nothing is rewritten.
+- **Gate.** `kontext hooks status` and the docs point teams to `kontext drift --fail` in their check script or CI, which also covers jj commits; no hook blocks a commit for drift.
+
+**Migration.** None needed. The first confirmation creates `.ai/confirmations.log` and adds a line to `.ai/.gitattributes`; commit both. `kontext check` counts info lines as neither errors nor warnings.
+
 ## 0.5.0 (2026-10-26)
 
 **Decisions can say what was rejected.** A decision entry may carry an optional `## Alternatives` section between `## Decision` and `## Consequences`: the options considered and why each was rejected, so a later challenge or drift does not reopen one that already failed. It is free Markdown, not front matter, and nothing requires it. See [the entry format](../concepts/02-knowledge-store.md).

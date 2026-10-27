@@ -3,6 +3,7 @@ id: documentation-is-bilingual-with-mirrored-trees
 kind: convention
 title: Documentation is bilingual with mirrored trees
 date: 2026-09-28
+checked: 2026-10-27T20:20:09Z
 paths: [docs/**, README.md, README_SK.md, CONTRIBUTING.md, CONTRIBUTING_SK.md]
 author: SemanS
 origin: cli
