@@ -19,6 +19,7 @@ mod inbox;
 mod index;
 mod init;
 mod jpath;
+mod ledger;
 mod mcp;
 mod model;
 mod ops;
@@ -33,6 +34,7 @@ mod template;
 mod threads;
 mod tools;
 mod util;
+mod verification;
 
 /// Run the normal CLI using the same private engine as application clients.
 pub fn run_cli() {

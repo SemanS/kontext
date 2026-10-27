@@ -107,7 +107,17 @@ fn confirm_sets_checked_stages_it_and_refuses_what_it_cannot_confirm() {
     assert!(is_utc_second(&at) && at.starts_with(&chrono_today()), "a UTC time to the second: {at}");
     assert!(out.contains(&format!("confirmed money-in-cents — checked {at} in .ai/conventions/money-in-cents.md (staged)")), "{out}");
     assert_eq!(after, before.replace("date: 2026-01-10\n", &format!("date: 2026-01-10\nchecked: {at}\n")), "one line and nothing else");
-    assert_eq!(r.git(&["diff", "--cached", "--name-only"]), ".ai/conventions/money-in-cents.md");
+    assert_eq!(
+        r.git(&["diff", "--cached", "--name-only"]),
+        ".ai/.gitattributes\n.ai/confirmations.log\n.ai/conventions/money-in-cents.md",
+        "the entry, its ledger line and the attribute that union-merges the ledger"
+    );
+    assert!(r.read(".ai/.gitattributes").contains("confirmations.log merge=union"));
+    let line = r.read(".ai/confirmations.log");
+    let fields: Vec<&str> = line.trim_end_matches('\n').split('\t').collect();
+    assert_eq!(fields.len(), 7, "{line}");
+    assert_eq!(&fields[..4], &[at.as_str(), "money-in-cents", "read", r.git(&["rev-parse", "HEAD"]).as_str()], "{line}");
+    assert_eq!(&fields[5..], &["-", ""], "no outcome, no reason");
     // confirming again later the same day changes the line, and only the line
     std::thread::sleep(std::time::Duration::from_millis(1100));
     let again = r.ok("drafts.confirm", json!({"id":"money-in-cents"}));
@@ -115,7 +125,8 @@ fn confirm_sets_checked_stages_it_and_refuses_what_it_cannot_confirm() {
     assert!(is_utc_second(&later) && later > at, "{later} after {at}");
     assert_eq!(
         again,
-        json!({"id":"money-in-cents","path":".ai/conventions/money-in-cents.md","checked":later,"repository":again["repository"]})
+        json!({"id":"money-in-cents","path":".ai/conventions/money-in-cents.md","checked":later,"repository":again["repository"],
+            "ledger":{"at":later,"kind":"agent","commit":r.git(&["rev-parse", "HEAD"]),"because":null,"path":".ai/confirmations.log"}})
     );
     let after = r.read(".ai/conventions/money-in-cents.md");
     assert_eq!(after, before.replace("date: 2026-01-10\n", &format!("date: 2026-01-10\nchecked: {later}\n")));
@@ -169,13 +180,26 @@ fn confirming_again_the_same_day_clears_drift_after_later_commits() {
     assert_eq!(r.ok("entries.drift", json!({"base":confirmed}))["entries"], json!([]), "staged, it counts as a look");
     r.commit("docs: money rule still holds after the fix");
     assert_eq!(r.ok("entries.drift", json!({"base":confirmed,"head":"HEAD"}))["entries"], json!([]));
-    // a date written by hand keeps working
+    // a date written by hand behind the ledger (what a merge taking the older side leaves) is
+    // reported, the ledger's time stands, and repair rewrites the cache from it
     let path = ".ai/conventions/money-in-cents.md";
     let text = r.read(path);
     let line = text.lines().find(|l| l.starts_with("checked: ")).unwrap().to_string();
+    let ledger_at = line.trim_start_matches("checked: ").to_string();
     r.write(path, &text.replace(&line, "checked: 2026-01-11"));
-    assert_eq!(r.ok("entries.get", json!({"id":"money-in-cents"}))["entry"]["checked"], "2026-01-11");
-    assert!(r.kontext(&["check"]).contains("0 error(s)"));
+    assert_eq!(r.ok("entries.get", json!({"id":"money-in-cents"}))["entry"]["checked"], ledger_at.as_str());
+    let check = r.kontext(&["check"]);
+    assert!(
+        check.contains("0 error(s)")
+            && check.contains("checked date 2026-01-11 behind its ledger (")
+            && check.contains("run kontext confirm --repair"),
+        "{check}"
+    );
+    r.git(&["add", "-A"]);
+    let repaired = r.kontext(&["confirm", "--repair"]);
+    assert!(repaired.contains(&format!("repaired money-in-cents — checked 2026-01-11 → {ledger_at}")), "{repaired}");
+    assert!(r.read(path).contains(&format!("\nchecked: {ledger_at}\n")));
+    assert!(r.kontext(&["confirm", "--repair"]).contains("nothing to repair"));
 }
 
 #[test]
@@ -196,7 +220,8 @@ fn drift_lists_what_a_range_left_behind_and_a_look_takes_it_off() {
     assert_eq!(
         out["entries"],
         json!([{"id":"money-in-cents","kind":"convention","title":"Rule money-in-cents","path":".ai/conventions/money-in-cents.md",
-            "date":"2026-01-10","changed":["src/billing/invoice.rs"],"commits":[{"sha":billing,"subject":"feat(billing): totals in cents"}]}])
+            "date":"2026-01-10","changed":["src/billing/invoice.rs"],"commits":[{"sha":billing,"subject":"feat(billing): totals in cents"}],
+            "verification":null,"since":null,"verify":null,"premises":[]}])
     );
     assert_eq!(out["base"], base.as_str());
     assert_eq!(out["head"], head.as_str());

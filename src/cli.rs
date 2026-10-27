@@ -208,11 +208,29 @@ enum Cmd {
         #[arg(long)]
         strict: bool,
     },
-    /// Confirm that entries still hold: sets `checked` to now (UTC) in each entry's file and stages it
+    /// Confirm that entries still hold: sets `checked` to now (UTC) in each entry's file, appends a line to the verification ledger and stages both
     Confirm {
+        /// The entries: kx:<id>, ids or unique prefixes (more than five in one call are recorded as a bulk stamp)
+        #[arg(required_unless_present = "repair")]
+        ids: Vec<String>,
+        /// Why it still holds, in one line (kept in the ledger)
+        #[arg(long, value_name = "TEXT")]
+        because: Option<String>,
+        /// Rewrite the `checked` date of entries whose file is behind their ledger (a merge took the older side) and stage them
+        #[arg(long, conflicts_with_all = ["ids", "because"])]
+        repair: bool,
+    },
+    /// Run entries' `verify` commands from the repository root and record pass or fail in the verification ledger
+    Verify {
         /// The entries: kx:<id>, ids or unique prefixes
         #[arg(required = true)]
         ids: Vec<String>,
+        /// Why it was run, in one line (kept in the ledger)
+        #[arg(long, value_name = "TEXT")]
+        because: Option<String>,
+        /// Print the results as JSON (one drafts.verify result per entry)
+        #[arg(long)]
+        json: bool,
     },
     /// Validate knowledge files and scan them for secrets
     Check {
@@ -840,22 +858,102 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(2);
             }
         }
-        Cmd::Confirm { ids } => {
+        Cmd::Confirm { ids, because, repair } => {
             let app = open(&dir)?;
+            if repair {
+                let out = crate::api_write::confirm(&app, &json!({"repair": true}))?;
+                let repaired = out["repaired"].as_array().cloned().unwrap_or_default();
+                let skipped = out["skipped"].as_array().cloned().unwrap_or_default();
+                for r in &repaired {
+                    println!(
+                        "repaired {} — checked {} → {} in {} (staged)",
+                        r["id"].as_str().unwrap_or(""),
+                        r["from"].as_str().unwrap_or("none"),
+                        r["to"].as_str().unwrap_or(""),
+                        r["path"].as_str().unwrap_or("")
+                    );
+                }
+                for r in &skipped {
+                    eprintln!("kontext: {}: {}", r["id"].as_str().unwrap_or(""), r["reason"].as_str().unwrap_or(""));
+                }
+                if repaired.is_empty() && skipped.is_empty() {
+                    println!("nothing to repair: every entry's checked date matches its ledger");
+                }
+                return Ok(if skipped.is_empty() { 0 } else { 1 });
+            }
             let mut failed = 0;
-            for id in &ids {
-                match crate::api_write::confirm(&app, &json!({"id": id})) {
-                    Ok(out) => println!(
-                        "confirmed {} — checked {} in {} (staged)",
-                        out["id"].as_str().unwrap_or(id),
-                        out["checked"].as_str().unwrap_or(""),
-                        out["path"].as_str().unwrap_or("")
-                    ),
+            let mut ledger: Option<Value> = None;
+            for (id, r) in ids.iter().zip(crate::api_write::confirm_ids(&app, &ids, "read", because.as_deref())) {
+                match r {
+                    Ok(out) => {
+                        println!(
+                            "confirmed {} — checked {} in {} (staged)",
+                            out["id"].as_str().unwrap_or(id),
+                            out["checked"].as_str().unwrap_or(""),
+                            out["path"].as_str().unwrap_or("")
+                        );
+                        ledger = Some(out["ledger"].clone());
+                    }
                     Err(e) => {
                         eprintln!("kontext: {id}: {e:#}");
                         failed += 1;
                     }
                 }
+            }
+            if let Some(l) = ledger {
+                println!(
+                    "ledger: {} line(s) of kind {} at {} in {} (staged)",
+                    ids.len() - failed,
+                    l["kind"].as_str().unwrap_or("read"),
+                    l["commit"].as_str().map(|c| &c[..c.len().min(8)]).unwrap_or("no commit"),
+                    l["path"].as_str().unwrap_or("")
+                );
+            }
+            if failed > 0 {
+                return Ok(1);
+            }
+        }
+        Cmd::Verify { ids, because, json: as_json } => {
+            let app = open(&dir)?;
+            let mut failed = 0;
+            let mut results = Vec::new();
+            for id in &ids {
+                match crate::api_write::verify(&app, &json!({"id": id, "because": because})) {
+                    Ok(out) => {
+                        if out["passed"] != json!(true) {
+                            failed += 1;
+                        }
+                        if !as_json {
+                            println!(
+                                "{} {} — `{}` {} at {} (ledger staged)",
+                                if out["passed"] == json!(true) { "passed" } else { "FAILED" },
+                                out["id"].as_str().unwrap_or(id),
+                                out["command"].as_str().unwrap_or(""),
+                                match (out["timed_out"].as_bool(), out["exit_code"].as_i64()) {
+                                    (Some(true), _) => "timed out".to_string(),
+                                    (_, Some(code)) => format!("exited {code}"),
+                                    _ => "was killed".to_string(),
+                                },
+                                out["commit"].as_str().map(|c| &c[..c.len().min(8)]).unwrap_or("no commit")
+                            );
+                            if out["passed"] != json!(true) {
+                                let tail = out["output_tail"].as_str().unwrap_or("");
+                                let lines: Vec<&str> = tail.lines().collect();
+                                for l in &lines[lines.len().saturating_sub(15)..] {
+                                    println!("  | {l}");
+                                }
+                            }
+                        }
+                        results.push(out);
+                    }
+                    Err(e) => {
+                        eprintln!("kontext: {id}: {e:#}");
+                        failed += 1;
+                    }
+                }
+            }
+            if as_json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
             }
             if failed > 0 {
                 return Ok(1);
@@ -866,12 +964,7 @@ fn run(cli: Cli) -> Result<i32> {
             let rep = if staged { ops::check_staged(&app)? } else { ops::check_all(&app) };
             let text = ops::render_check(&rep);
             print!("{text}");
-            println!(
-                "{} file(s) checked, {} error(s), {} warning(s)",
-                rep.checked,
-                rep.errors(),
-                rep.issues.len() + rep.secrets.len() - rep.errors()
-            );
+            println!("{} file(s) checked, {} error(s), {} warning(s)", rep.checked, rep.errors(), rep.warnings());
             if rep.errors() > 0 {
                 return Ok(1);
             }
@@ -1020,7 +1113,7 @@ fn run(cli: Cli) -> Result<i32> {
 /// `kontext ci`: the check of every entry, then the drift of the range.
 fn ci_report(rep: &ops::CheckReport, report: &crate::drift::Report, default_base: bool, markdown: bool) -> String {
     use std::fmt::Write;
-    let warnings = rep.issues.len() + rep.secrets.len() - rep.errors();
+    let warnings = rep.warnings();
     let summary = format!("{} file(s) checked, {} error(s), {warnings} warning(s)", rep.checked, rep.errors());
     let issues = ops::render_check(rep);
     // a shallow clone has no merge base with the default branch, and the range is then empty

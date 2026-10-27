@@ -24,6 +24,13 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "entries.drift" => drift(app, input),
         _ => Err(crate::api::error("unsupported_operation", format!("unknown read operation '{operation}'"))),
     }?;
+    let mut result = result;
+    // how each entry was verified and what changed since: the newest ledger line, its commit and the
+    // commits after it (an export is pinned to a reviewed ref and carries the entries as committed)
+    if matches!(operation, "entries.list" | "entries.get" | "entries.search" | "entries.governing" | "entries.drift") {
+        let (all, _) = app.entries();
+        crate::verification::annotate_result(app, &all, &mut result);
+    }
     // drift entries describe a range, not the working view of one entry
     if matches!(operation, "status" | "entries.export" | "entries.drift") { Ok(result) } else { working_result(app, result) }
 }
@@ -43,6 +50,7 @@ pub fn entry_json(entry: &Entry) -> Value {
     let mut out = json!({
         "id":entry.id,"kind":entry.kind,"title":entry.title,"body":entry.body,
         "summary":entry.summary_text(usize::MAX),"status":entry.status,"date":entry.date,"review_by":entry.review_by,"checked":entry.checked,
+        "verify":entry.verify,
         "paths":entry.paths,"tags":entry.tags,"file":entry.rel_path,"markdown":entry.markdown(),
         "style":entry.style,"supersedes":entry.supersedes,"superseded_by":entry.superseded_by,
         "commits":entry.commits,"author":entry.author,"visibility":entry.visibility,"origin":entry.origin,
@@ -167,7 +175,10 @@ fn working_result(app: &App, mut result: Value) -> Result<Value> {
         }
     }
     if let Some(base) = result.get("snapshot") {
-        result["snapshot"] = json!(format!("kx1-{}", crate::util::short_hash(&json!([base, view.changes]).to_string())));
+        // a verification changes what a reader shows even when no entry file changed
+        let ledger = crate::verification::ledger_stamp(app);
+        let parts = if ledger.is_empty() { json!([base, view.changes]) } else { json!([base, view.changes, ledger]) };
+        result["snapshot"] = json!(format!("kx1-{}", crate::util::short_hash(&parts.to_string())));
     }
     result["view"] = json!("working_tree");
     result["revision"] = json!(view.revision);

@@ -66,6 +66,8 @@ fn annotations(name: &str) -> Value {
         "ctx_challenge" => ("Challenge a knowledge entry", false, false),
         // sets one line of the entry's own file and stages it for review
         "ctx_confirm" => ("Confirm a knowledge entry still holds", false, false),
+        // runs a command the entry names, then appends one ledger line and stages it
+        "ctx_verify" => ("Run a knowledge entry's verify command", false, false),
         "ctx_drift" => ("Knowledge a change left behind", true, false),
         "ctx_prepare_commit" => ("Prepare the commit", false, false),
         "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
@@ -93,6 +95,7 @@ const TAKES_DIR: &[&str] = &[
     "ctx_capture",
     "ctx_challenge",
     "ctx_confirm",
+    "ctx_verify",
     "ctx_inbox",
     "ctx_prepare_commit",
 ];
@@ -191,9 +194,19 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_confirm",
-            "description": "Say that a recorded entry still holds after the code it governs changed: sets its `checked` time to now (UTC) and stages its file, so the confirmation is reviewed with the change. Freshness and drift count from it. Only when you checked the entry against the code; if it no longer holds, use ctx_challenge or record a replacement.",
+            "description": "Say that a recorded entry still holds after the code it governs changed: sets its `checked` time to now (UTC), appends an `agent` line (with HEAD and your reason) to the verification ledger and stages both, so the confirmation is reviewed with the change. Freshness and drift count from it. Only when you checked the entry against the code; if it no longer holds, use ctx_challenge or record a replacement. An agent's confirmation is shown as a stamp: when the entry names a `verify` command, ctx_verify proves more.",
             "inputSchema": {"type": "object", "properties": {
-                "id": s("The entry: kx:<id>, an id or its unique prefix")
+                "id": s("The entry: kx:<id>, an id or its unique prefix"),
+                "ids": arr("Several entries at once (more than five are recorded as a bulk stamp)"),
+                "because": s("One line: what you checked it against")
+            }}
+        }),
+        json!({
+            "name": "ctx_verify",
+            "description": "Run a recorded entry's `verify` command (one shell command from the repository root, with a timeout) and record pass or fail with HEAD in the verification ledger, staged with your change. Returns the outcome and the end of the output. An entry without a `verify` command cannot be verified this way: read it and ctx_confirm it.",
+            "inputSchema": {"type": "object", "properties": {
+                "id": s("The entry: kx:<id>, an id or its unique prefix"),
+                "because": s("One line: why you ran it")
             }, "required": ["id"]}
         }),
         json!({
@@ -532,14 +545,63 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             Ok(crate::drift::render_text(&report, true))
         }
         "ctx_confirm" => {
+            let mut ids = list_arg(args, "ids");
+            if let Some(id) = str_arg(args, "id") {
+                ids.insert(0, id);
+            }
+            if ids.is_empty() {
+                bail!("id is required");
+            }
+            let because = str_arg(args, "because");
+            let mut lines = Vec::new();
+            let mut failed = Vec::new();
+            for (id, r) in ids.iter().zip(crate::api_write::confirm_ids(app, &ids, "agent", because.as_deref())) {
+                match r {
+                    Ok(out) => lines.push(format!(
+                        "Confirmed {} ({}): checked {} in {} (staged).",
+                        out["id"].as_str().unwrap_or_default(),
+                        out["ledger"]["kind"].as_str().unwrap_or("agent"),
+                        out["checked"].as_str().unwrap_or_default(),
+                        out["path"].as_str().unwrap_or_default()
+                    )),
+                    Err(e) => failed.push(format!("{id}: {e:#}")),
+                }
+            }
+            if lines.is_empty() {
+                bail!("{}", failed.join("; "));
+            }
+            lines.push("Commit it with the change that prompted the look.".into());
+            if !failed.is_empty() {
+                lines.push(format!("Not confirmed: {}", failed.join("; ")));
+            }
+            Ok(lines.join("\n"))
+        }
+        "ctx_verify" => {
             let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
-            let out = crate::api_write::confirm(app, &json!({"id": id}))?;
-            Ok(format!(
-                "Confirmed {}: checked {} in {} (staged). Commit it with the change that prompted the look.",
+            let out = crate::api_write::verify(app, &json!({"id": id, "because": str_arg(args, "because")}))?;
+            let passed = out["passed"] == json!(true);
+            let how = match (out["timed_out"].as_bool(), out["exit_code"].as_i64()) {
+                (Some(true), _) => "timed out".to_string(),
+                (_, Some(code)) => format!("exited {code}"),
+                _ => "was killed".to_string(),
+            };
+            let mut text = format!(
+                "{} {}: `{}` {how} at {} (ledger line staged; commit it with your change).",
+                if passed { "Passed" } else { "FAILED" },
                 out["id"].as_str().unwrap_or_default(),
-                out["checked"].as_str().unwrap_or_default(),
-                out["path"].as_str().unwrap_or_default()
-            ))
+                out["command"].as_str().unwrap_or_default(),
+                out["commit"].as_str().map(|c| &c[..c.len().min(8)]).unwrap_or("no commit")
+            );
+            let tail = out["output_tail"].as_str().unwrap_or_default().trim_end();
+            if !tail.is_empty() {
+                text.push_str(&format!("\nOutput (end):\n{tail}"));
+            }
+            if !passed {
+                text.push_str(
+                    "\nThe entry does not hold as written, or its command is broken: fix the code, or correct or supersede the entry.",
+                );
+            }
+            Ok(text)
         }
         "ctx_prepare_commit" => {
             let promote = list_arg(args, "promote");
