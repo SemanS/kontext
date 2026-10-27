@@ -2,7 +2,7 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
-## Unreleased
+## 0.7.0 (2026-10-27)
 
 **A capture names the command that proved it, and a verification says where it landed.**
 

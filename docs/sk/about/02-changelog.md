@@ -2,7 +2,7 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## Nevydané
+## 0.7.0 (2026-10-27)
 
 **Zachytenie uvedie príkaz, ktorý ho dokázal, a overenie povie, kde pristálo.**
 
