@@ -378,6 +378,9 @@ struct CaptureArgs {
     /// When it should be looked at again (YYYY-MM-DD), e.g. for a temporary rule
     #[arg(long)]
     review_by: Option<String>,
+    /// The command that proved it (one line, run with sh from the repository root by `kontext verify`)
+    #[arg(long, value_name = "COMMAND")]
+    verify: Option<String>,
     /// Keep it personal (never promoted; mirrored to personal adapters)
     #[arg(long)]
     private: bool,
@@ -740,6 +743,7 @@ fn run(cli: Cli) -> Result<i32> {
                     status: a.status,
                     promote: a.promote,
                     review_by: a.review_by,
+                    verify: a.verify,
                     origin: "cli".into(),
                     ..Default::default()
                 },

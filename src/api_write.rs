@@ -86,6 +86,7 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<ops::Prepar
         commits: strings(value, "commits")?,
         review_by: optional(value, "review_by")?.map(String::from),
         evidence: evidence_input(value)?,
+        verify: optional(value, "verify")?.map(String::from),
         origin: "application".into(),
         source: source.map(String::from),
         ..Default::default()
@@ -97,10 +98,6 @@ fn prepare(app: &App, value: &Value, source: Option<&str>) -> Result<ops::Prepar
     }
     if let Some(id) = optional(value, "id")? {
         entry.set_extra("external_id", FmValue::Str(id.into()));
-    }
-    if let Some(command) = optional(value, "verify")?.filter(|v| !v.trim().is_empty()) {
-        crate::store::validate_verify(command).map_err(|m| error("invalid_input", m))?;
-        entry.verify = Some(command.to_string());
     }
     if let Some(extra) = value.get("extra").filter(|v| !v.is_null()) {
         let map = extra.as_object().ok_or_else(|| error("invalid_input", "extra must be an object of strings or string arrays"))?;
@@ -1182,6 +1179,51 @@ mod tests {
         assert_eq!(result["entry"]["commits"], json!([commit]));
         assert_eq!(result["entry"]["status"], "proposed");
         assert_eq!(call(&repo.app(), "drafts.stage", &input).unwrap()["entry"], result["entry"]);
+    }
+    #[test]
+    fn capture_keeps_the_command_that_proved_it_through_the_inbox_and_promotion() {
+        let repo = TestRepo::new();
+        let app = repo.app();
+        let input = json!({"entry":{"kind":"learning","title":"Rounding is per line","body":"Totals round each line.","paths":["src/billing.rs"],"verify":"cargo test rounding"}});
+        let draft = call(&app, "drafts.capture", &input).unwrap();
+        assert_eq!(draft["entry"]["verify"], "cargo test rounding");
+        let text = std::fs::read_to_string(Inbox::open(&app.repo).dir.join(format!("{}.md", draft["id"].as_str().unwrap()))).unwrap();
+        assert!(text.contains("\nverify: cargo test rounding\n"), "{text}");
+        assert_eq!(call(&app, "inbox.list", &json!({})).unwrap()["entries"][0]["verify"], "cargo test rounding");
+        let staged = call(&app, "drafts.stage", &json!({"candidate_id":draft["id"],"operation_id":"promote-verify"})).unwrap();
+        assert_eq!(staged["entry"]["verify"], "cargo test rounding");
+        assert_eq!(app.entries().0[0].verify.as_deref(), Some("cargo test rounding"));
+
+        // the agent and CLI path, into the fields style
+        std::fs::write(
+            repo.0.join(".ai/kontext.toml"),
+            "[init]\nllm='test-no-model'\n[store.kinds.decision]\npath='docs/adr'\nstyle='fields'\n",
+        )
+        .unwrap();
+        let app = repo.app();
+        let req = |verify: &str| CaptureReq {
+            kind: "decision".into(),
+            title: "Totals are integer cents".into(),
+            body: "No floats in money.".into(),
+            origin: "agent".into(),
+            verify: Some(verify.into()),
+            ..Default::default()
+        };
+        let out = ops::capture(&app, req("grep -rq 'i64' src/billing.rs")).unwrap();
+        let done = ops::promote(&app, std::slice::from_ref(&out.id), false).unwrap();
+        let file = std::fs::read_to_string(repo.0.join(&done[0].1)).unwrap();
+        assert!(file.contains("**Verify:** grep -rq 'i64' src/billing.rs"), "{file}");
+        let promoted = app.entries().0.into_iter().find(|e| e.rel_path == done[0].1).unwrap();
+        assert_eq!(promoted.verify.as_deref(), Some("grep -rq 'i64' src/billing.rs"));
+
+        // validated like the entry field
+        let long = "x".repeat(crate::store::MAX_VERIFY_CHARS + 1);
+        assert!(ops::capture(&app, req(&long)).is_err());
+        for bad in [json!("cargo test\nrm -rf /"), json!(long), json!(42)] {
+            let mut input = input.clone();
+            input["entry"]["verify"] = bad;
+            assert_eq!(crate::api::execute(&app, "drafts.capture", &input)["error"]["code"], "invalid_input");
+        }
     }
     #[test]
     fn private_capture_does_not_require_team_store() {

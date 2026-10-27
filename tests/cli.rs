@@ -375,6 +375,8 @@ fn end_to_end() {
         "Carts expire after a day",
         "--body",
         "Abandoned carts are dropped after 24 hours to keep the store small.",
+        "--verify",
+        "grep -q 86400 apps/api/src/cart.ts",
     ]);
     let pathless = cap.lines().find(|l| l.starts_with("captured ")).unwrap().rsplit(':').next().unwrap().trim().to_string();
     s.write("apps/api/src/cart.ts", "export class Cart { total() { return 0; } expires = 86400; }\n");
@@ -386,6 +388,7 @@ fn end_to_end() {
         .unwrap();
     let text = std::fs::read_to_string(promoted.path()).unwrap();
     assert!(text.contains("paths: [apps/api/src/cart.ts]"), "{text}");
+    assert!(text.contains("verify: grep -q 86400 apps/api/src/cart.ts"), "{text}");
     s.ok_git(&["add", "-A"]);
     s.ok_git(&["commit", "-q", "-m", "feat(cart): carts expire after a day"]);
 
