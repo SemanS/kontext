@@ -2,6 +2,14 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+**A capture names the command that proved it, and a verification says where it landed.**
+
+- **Capture with its proof.** `kontext capture --verify "<command>"`, `verify` in `ctx_capture` and in the `entry` of `drafts.capture` record the command that proved a learning or decision; it is validated like the entry field (one line, at most 500 characters) and kept through the inbox and promotion. The capture guidance (the tool description, the server instructions and the `AGENTS.md` block) says so. See [Capturing](../concepts/03-capture-and-review.md#capturing).
+- **A draft takes it later.** `kontext inbox verify <id> "<command>"` (`--clear`), `ctx_inbox` with `action=verify` and the new operation `inbox.verify` set or clear the command of an inbox draft.
+- **Where it landed.** `verification.landed` is the commit in `HEAD`'s history that first added the entry's newest ledger line, or null while it is only staged or in the working tree; for a `checked:` date alone, the last commit that changed the entry's file. `since` is unchanged. API version stays 1. See [the application API](../reference/05-application-api.md#verification).
+
 ## 0.6.0 (2026-10-27)
 
 **A verification is a commit in a ledger, and the brief says what changed since.** A `checked:` date was a stamp anyone could set, often in bulk, and a merge could silently replace it with an older one. Now:

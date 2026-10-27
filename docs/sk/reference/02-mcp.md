@@ -79,6 +79,7 @@ Lokálny zdroj zahŕňa aj poznámky v inboxe tohto klonu (`inbox:<id>`, označe
 | `source` | string | | kde sa našiel, napr. označenie vlákna z `ctx_threads` (zostáva len v inboxe) |
 | `review_by` | string | `review_after` druhu | `YYYY-MM-DD`: kedy ho znova pozrieť (pravidlo, ktoré platí počas migrácie) |
 | `evidence` | object[] | | `{ref, quote?}`: `pr:<id>`, `issue:<id>`, `task:<id>`, `code:<repo>@<rev>:<cesta>#L<a>-<b>`, `url:<url>`; pozri [Evidencia](./05-application-api.md#maintenance) |
+| `verify` | string | | príkaz, ktorý ho dokázal (poučenie alebo rozhodnutie overené testom nesie ten test): jeden riadok, najviac 500 znakov, spúšťa ho `ctx_verify` |
 
 Odpoveď uvedie súvisiace záznamy ako poznámky (`related, check: <názov> <kx:id> — <dôvod>`), so štítkom od modelu, napr. `possible conflict, check`, keď sa ho [`entries.related`](./05-application-api.md#related) na tento text už pýtalo. Či záznam niečo nahrádza, rozhodneš ty; poznámka to nikdy netvrdí.
 
@@ -135,8 +136,9 @@ Kompaktné, zamaskované prepisy vlákien agentov tohto repozitára na tomto po�
 
 | Parameter | Typ | Predvolene | |
 | --- | --- | --- | --- |
-| `action` | `list` \| `show` \| `promote` \| `drop` | `list` | |
-| `ids` | string[] | | pre show / promote / drop |
+| `action` | `list` \| `show` \| `promote` \| `drop` \| `verify` | `list` | |
+| `ids` | string[] | | pre show / promote / drop; pri verify jedno ID |
+| `verify` | string | | pri `action=verify`: príkaz, ktorý návrh dokázal (ako v `ctx_capture`); `""` ho odstráni. Povýšenie ho zachová |
 
 ### `ctx_prepare_commit`
 

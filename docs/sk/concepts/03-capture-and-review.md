@@ -15,7 +15,7 @@ kontext oddeľuje **zapamätanie si** od **zdieľania**. Zachytiť sa dá čoko�
                                                  teammates pull → sync events → their adapters
 ```
 
-## Zachytávanie
+## Zachytávanie {#capturing}
 
 Zachytenie potrebuje druh, titulok a telo (alebo zhrnutie). Dobré zachytenia sú krátke (*čo, prečo, dôsledky*) a uvádzajú cesty, ktorých sa týkajú:
 
@@ -31,6 +31,15 @@ Agenti volajú `ctx_capture` s rovnakými poliami. Pri zachytení kontext:
 - rozhodnutiam predvolene nastaví `status: accepted` a zapíše autora (`git config user.name`) a pôvod (`agent` alebo `cli`),
 - zaradí udalosť `capture` pre adaptéry, ktoré ju odoberajú,
 - založí ho v repozitári, ktorému patria jeho `paths`, napríklad v submodule s vlastným úložiskom ([Viac repozitárov](09-several-repositories.md)).
+
+Poučenie alebo rozhodnutie, ktoré si dokázal príkazom, nesie ten príkaz, aby sa dalo neskôr [dokázať znova](#verify):
+
+```sh
+kontext capture --kind learning --title "Totals round per line, not per invoice" \
+  --paths "src/billing/**" --body "…" --verify "cargo test -p billing rounding_is_per_line"
+```
+
+`--verify` (`verify` v `ctx_capture` a `drafts.capture`) sa overuje ako pole záznamu: jeden riadok, najviac 500 znakov; iné sa odmietne (v API `invalid_input`). Návrh ho zachová a rovnako záznam, do ktorého sa povýši, v oboch štýloch súborov. Návrh zachytený bez neho ho dostane neskôr: `kontext inbox verify <id> "<príkaz>"` (`ctx_inbox` s `action=verify`, operácia `inbox.verify`); `--clear` (prázdny reťazec) ho odstráni.
 
 ## Viditeľnosť
 
@@ -133,6 +142,8 @@ Pre každý záznam, ktorý riadi cesty z `focus`, pridá [`ctx_brief`](./04-con
 Počíta sa od commitu, ktorý overenie uviedlo, alebo od commitu, ktorý jeho riadok denníka priniesol, ak je novší (zmena, s ktorou prešlo review), a to ne-merge commity na riadených súboroch záznamu bez súborov znalostí. Overenie známe len z dátumu `checked:` sa počíta ako pri aktuálnosti. Záznam, ktorý nikto neoveril, hovorí `never verified`. Keď má niektorý vypísaný záznam commity odvtedy, brief raz pridá: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Na rozdiel od aktuálnosti tu nie je prah: už jeden commit na riadenej ceste je dôvod čítať.
 
 Strojové API vracia to isté pri každom zázname (`entries.list`, `entries.get`, `entries.governing`, `entries.drift`): `verification`, `since`, `verify` a `premises`. Pozri [aplikačné API](../reference/05-application-api.md#verification).
+
+`verification.landed` hovorí, kde je overenie súčasťou histórie: celé ID commitu v histórii `HEAD`, ktorý ako prvý pridal najnovší riadok denníka pre záznam, alebo `null`, kým je ten riadok len stagnutý alebo v pracovnom strome. Odberateľ tak odlíši „kontrola prešla a je commitnutá“ od „prešla, ešte necommitnutá“ bez čítania denníka. Pri overení známom len z dátumu `checked:` je to posledný commit, ktorý zmenil súbor záznamu (`null`, kým má súbor necommitnuté zmeny alebo nebol nikdy commitnutý).
 
 ### Zmenené predpoklady {#premises}
 

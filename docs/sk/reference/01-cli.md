@@ -86,6 +86,7 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 | `--private` | nechá ho osobným (nikdy sa nepovýši) |
 | `--promote` | zapíše ho hneď do úložiska namiesto inboxu |
 | `--review-by <YYYY-MM-DD>` | kedy ho znova pozrieť (inak `review_after` druhu, ak je nastavené) |
+| `--verify <príkaz>` | príkaz, ktorý ho dokázal: jeden riadok, najviac 500 znakov, spúšťa ho [`kontext verify`](../concepts/03-capture-and-review.md#verify) |
 
 ### `kontext challenge <id> <prečo…> [--private]`
 
@@ -113,9 +114,9 @@ Záznamy, ktoré rozsah commitov nechal za sebou: aktívne záznamy, ktorých `p
 | `--json` | | výsledok `entries.drift` ako JSON |
 | `--fail` | | skončí so stavom 2, keď je vypísaný nejaký záznam: brána pre tímový kontrolný skript alebo CI, ktorá pokryje aj commity bez hookov (jj) |
 
-### `kontext inbox [list | show <id> | drop <id…>]`
+### `kontext inbox [list | show <id> | drop <id…> | verify <id> <príkaz|--clear>]`
 
-Lokálni kandidáti. `list` je predvolený.
+Lokálni kandidáti. `list` je predvolený. `verify` nastaví príkaz, ktorý návrh dokázal (overuje sa ako `--verify` pri `capture`); `--clear` ho odstráni. Povýšenie ho zachová.
 
 ### `kontext promote <id…> [--no-stage]`
 

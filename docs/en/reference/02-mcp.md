@@ -79,6 +79,7 @@ The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *
 | `source` | string | | where it was found, e.g. a thread label from `ctx_threads` (kept in the inbox only) |
 | `review_by` | string | `review_after` of the kind | `YYYY-MM-DD`: when to look at it again (a rule that holds during a migration) |
 | `evidence` | object[] | | `{ref, quote?}`: `pr:<id>`, `issue:<id>`, `task:<id>`, `code:<repo>@<rev>:<path>#L<a>-<b>`, `url:<url>`; see [Evidence](./05-application-api.md#maintenance) |
+| `verify` | string | | the command that proved it (a learning or decision you checked with a test carries that test): one line, at most 500 characters, run by `ctx_verify` |
 
 The answer lists related entries as notes (`related, check: <title> <kx:id> — <reason>`), with a model's label such as `possible conflict, check` when [`entries.related`](./05-application-api.md#related) already asked one for this text. Decide whether it supersedes anything; the note never says so.
 
@@ -135,8 +136,9 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
-| `action` | `list` \| `show` \| `promote` \| `drop` | `list` | |
-| `ids` | string[] | | for show / promote / drop |
+| `action` | `list` \| `show` \| `promote` \| `drop` \| `verify` | `list` | |
+| `ids` | string[] | | for show / promote / drop; one id for verify |
+| `verify` | string | | for `action=verify`: the command that proved the draft (as in `ctx_capture`); `""` clears it. Promotion keeps it |
 
 ### `ctx_prepare_commit`
 
