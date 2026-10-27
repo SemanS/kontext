@@ -86,6 +86,7 @@ Runs scan → history → render → wire → deepen. Safe to re-run.
 | `--private` | keep it personal (never promoted) |
 | `--promote` | write into the store now instead of the inbox |
 | `--review-by <YYYY-MM-DD>` | when to look at it again (else the kind's `review_after`, if set) |
+| `--verify <command>` | the command that proved it: one line, at most 500 characters, run by [`kontext verify`](../concepts/03-capture-and-review.md#verify) |
 
 ### `kontext challenge <id> <why…> [--private]`
 
@@ -113,9 +114,9 @@ The entries a range of commits left behind: active entries whose `paths` cover c
 | `--json` | | the `entries.drift` result as JSON |
 | `--fail` | | exit with status 2 when an entry is listed: the gate for a team's check script or CI, which also covers commits made without hooks (jj) |
 
-### `kontext inbox [list | show <id> | drop <id…>]`
+### `kontext inbox [list | show <id> | drop <id…> | verify <id> <command|--clear>]`
 
-Local candidates. `list` is the default.
+Local candidates. `list` is the default. `verify` sets the command that proved a draft (validated like `--verify` of `capture`); `--clear` removes it. Promotion keeps it.
 
 ### `kontext promote <id…> [--no-stage]`
 

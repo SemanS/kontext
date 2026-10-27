@@ -32,6 +32,15 @@ Agents call `ctx_capture` with the same fields. On capture kontext:
 - queues a `capture` event for adapters that subscribe to it,
 - files it with the repository that owns its `paths`, such as a submodule with its own store ([Several repositories](09-several-repositories.md)).
 
+A learning or decision you proved with a command carries that command, so it can be [proved again](#verify) later:
+
+```sh
+kontext capture --kind learning --title "Totals round per line, not per invoice" \
+  --paths "src/billing/**" --body "…" --verify "cargo test -p billing rounding_is_per_line"
+```
+
+`--verify` (`verify` in `ctx_capture` and `drafts.capture`) is validated like the entry field: one line, at most 500 characters; anything else is refused (`invalid_input` in the API). The draft keeps it and so does the entry it is promoted into, in either file style. A draft captured without one takes it later: `kontext inbox verify <id> "<command>"` (`ctx_inbox` with `action=verify`, the `inbox.verify` operation); `--clear` (an empty string) removes it.
+
 ## Visibility
 
 | Visibility | Stays | Can be promoted | Typical use |
@@ -133,6 +142,8 @@ For each entry that governs the focus paths, [`ctx_brief`](./04-context-layers.m
 The count starts at the commit the verification named, or at the commit that landed its ledger line if that is newer (the change it was reviewed with), and takes non-merge commits on the entry's governed files, knowledge files left out. A verification known only from a `checked:` date counts as freshness does. An entry never verified says `never verified`. When any listed entry has commits since, the brief adds once: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Unlike freshness there is no threshold: one commit on a governed path is already a reason to read.
 
 The machine API returns the same with every entry (`entries.list`, `entries.get`, `entries.governing`, `entries.drift`): `verification`, `since`, `verify` and `premises`. See [the application API](../reference/05-application-api.md#verification).
+
+`verification.landed` says where the verification is part of history: the full id of the commit in `HEAD`'s history that first added the entry's newest ledger line, or `null` while that line is only staged or in the working tree. A consumer tells "this check passed and the pass is committed" from "passed, not committed yet" without reading the ledger. For a verification known only from a `checked:` date it is the last commit that changed the entry's file (`null` while the file has uncommitted changes or was never committed).
 
 ### Changed premises {#premises}
 

@@ -469,6 +469,8 @@ pub struct CaptureReq {
     /// Where it comes from: references (`pr:12`, `task:x`, `code:<repo>@<rev>:<path>#L1-3`, `url:…`)
     /// with an optional short quote.
     pub evidence: Vec<(String, Option<String>)>,
+    /// The command that proved it (one line, run from the repository root by `kontext verify`).
+    pub verify: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -518,6 +520,13 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared
     let title = clean(req.title.trim());
     let body = clean(req.body.trim());
     let summary = req.summary.as_deref().map(|s| clean(s.trim())).filter(|s| !s.is_empty());
+    let verify = match req.verify.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        Some(v) => {
+            crate::store::validate_verify(v).map_err(|m| anyhow!(m))?;
+            Some(clean(v))
+        }
+        None => None,
+    };
     let mut notes = Vec::new();
     if redactions > 0 {
         notes.push(format!("{redactions} secret-looking value(s) were redacted"));
@@ -563,6 +572,7 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared
         visibility: Some(visibility.clone()),
         origin: Some(req.origin.clone()),
         commits: req.commits.iter().map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect(),
+        verify,
         body,
         ..Default::default()
     };

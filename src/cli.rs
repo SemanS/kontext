@@ -378,6 +378,9 @@ struct CaptureArgs {
     /// When it should be looked at again (YYYY-MM-DD), e.g. for a temporary rule
     #[arg(long)]
     review_by: Option<String>,
+    /// The command that proved it (one line, run with sh from the repository root by `kontext verify`)
+    #[arg(long, value_name = "COMMAND")]
+    verify: Option<String>,
     /// Keep it personal (never promoted; mirrored to personal adapters)
     #[arg(long)]
     private: bool,
@@ -394,6 +397,16 @@ enum InboxCmd {
     Show { id: String },
     /// Discard candidates
     Drop { ids: Vec<String> },
+    /// Set the command that proved a draft (`verify`), or clear it; promotion keeps it
+    Verify {
+        id: String,
+        /// One shell command run from the repository root, e.g. "cargo test rounding"
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        command: Option<String>,
+        /// Remove the draft's verify command
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 // `--hooks-dir`, not `--dir`: the global `-C/--dir` shares its id with a subcommand's `dir`, so
@@ -740,6 +753,7 @@ fn run(cli: Cli) -> Result<i32> {
                     status: a.status,
                     promote: a.promote,
                     review_by: a.review_by,
+                    verify: a.verify,
                     origin: "cli".into(),
                     ..Default::default()
                 },
@@ -771,6 +785,13 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                 }
                 InboxCmd::Show { id } => println!("{}", inbox.get(&id).ok_or_else(|| anyhow!("no inbox entry '{id}'"))?.markdown()),
+                InboxCmd::Verify { id, command, clear: _ } => {
+                    let out = crate::api_write::inbox_verify(&app, &json!({"id": id, "verify": command.unwrap_or_default()}))?;
+                    match out["verify"].as_str() {
+                        Some(c) => println!("{}: verify `{c}`", out["id"].as_str().unwrap_or(&id)),
+                        None => println!("{}: no verify command", out["id"].as_str().unwrap_or(&id)),
+                    }
+                }
                 InboxCmd::Drop { ids } => {
                     for id in ids {
                         let e = inbox.get(&id).ok_or_else(|| anyhow!("no inbox entry '{id}'"))?;

@@ -375,8 +375,18 @@ fn end_to_end() {
         "Carts expire after a day",
         "--body",
         "Abandoned carts are dropped after 24 hours to keep the store small.",
+        "--verify",
+        "grep -q 86400 apps/api/src/cart.ts",
     ]);
     let pathless = cap.lines().find(|l| l.starts_with("captured ")).unwrap().rsplit(':').next().unwrap().trim().to_string();
+    // a draft takes the command that proved it later, or loses it
+    let note = s.kontext(&["capture", "--kind", "learning", "--title", "Carts are per session", "--body", "One cart per session."]);
+    let note = note.lines().find(|l| l.starts_with("captured ")).unwrap().rsplit(':').next().unwrap().trim().to_string();
+    assert!(s.kontext(&["inbox", "verify", &note, "true"]).contains("verify `true`"));
+    assert!(s.kontext(&["inbox", "show", &note]).contains("\nverify: \"true\"\n"), "a YAML word is quoted");
+    assert!(s.kontext(&["inbox", "verify", &note, "--clear"]).contains("no verify command"));
+    assert!(!s.kontext(&["inbox", "show", &note]).contains("verify:"));
+    s.kontext(&["inbox", "drop", &note]);
     s.write("apps/api/src/cart.ts", "export class Cart { total() { return 0; } expires = 86400; }\n");
     s.kontext(&["prepare-commit", "--promote", &pathless]);
     let promoted = std::fs::read_dir(s.repo.join(".ai/decisions"))
@@ -386,6 +396,7 @@ fn end_to_end() {
         .unwrap();
     let text = std::fs::read_to_string(promoted.path()).unwrap();
     assert!(text.contains("paths: [apps/api/src/cart.ts]"), "{text}");
+    assert!(text.contains("verify: grep -q 86400 apps/api/src/cart.ts"), "{text}");
     s.ok_git(&["add", "-A"]);
     s.ok_git(&["commit", "-q", "-m", "feat(cart): carts expire after a day"]);
 

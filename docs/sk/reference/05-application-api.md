@@ -49,6 +49,7 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `entries.drift` | `base?`, `head?`, `kinds?` | záznamy, ktorých riadené súbory sa v rozsahu zmenili bez pohľadu na záznam ([podrobnosti](#drift)) |
 | `inbox.list` | `state?`: `pending` (predvolene), `dismissed`, `promoted`, `all` | kandidáti a zachovaná lokálna história |
 | `inbox.drop` | `id`, `reason?` | zamietnutie lokálneho kandidáta |
+| `inbox.verify` | `id`, `verify` (`""` ho odstráni) | `id`, `verify` a `entry`: návrh s príkazom, ktorý ho dokázal; povýšenie ho zachová ([podrobnosti](#inbox-verify)) |
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | kandidát v inboxe, poznámky, počet redakcií, `evidence` a `related_entries` |
 | `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?` | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | záznam stagnutý so stavom `deprecated` a poznámkou `## Retired` ([podrobnosti](#retire)) |
@@ -61,7 +62,8 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `operations.get` | `operation_id`, `fingerprint?` | pôvodný výsledok dokončeného zápisu alebo chyba nedokončenej/konfliktnej operácie |
 
 Objekt `entry` obsahuje `kind`, `title`, `body` a voliteľné `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, `commits`, `review_by`, `verify` a `evidence` ([nižšie](#maintenance)). Cesty zostávajú po celý čas poľom. Formulovanie vybraného
+`supersedes`, `visibility`, `commits`, `review_by`, `verify` a `evidence` ([nižšie](#maintenance)). `verify` je príkaz, ktorý
+záznam dokázal: jeden riadok s najviac 500 znakmi, inak `invalid_input`. Cesty zostávajú po celý čas poľom. Formulovanie vybraného
 poznatku je oddelené od hľadania nových poznatkov, aby deduplikácia neodstránila to, čo človek
 výslovne vybral. Extrakcia a návrh konvencie vyžadujú použiteľný LLM; formulovanie bez vybraného
 modelu môže zachovať dodaný poznatok.
@@ -216,7 +218,8 @@ Pridané po 0.5.0. Každý záznam, ktorý vrátia `entries.list`, `entries.get`
 {"checked": "2026-10-27T09:12:44Z",
  "verify": "cargo test -p billing cents",
  "verification": {"at": "2026-10-27T09:12:44Z", "kind": "read", "commit": "<celý sha>", "by": "Jana Nová",
-                  "because": "overené voči zmene DPH", "passed": null, "source": "ledger", "verified": true},
+                  "because": "overené voči zmene DPH", "passed": null, "source": "ledger", "verified": true,
+                  "landed": "<celý sha>"},
  "since": {"commits": 3, "head": "<celý sha>", "paths": ["src/billing/invoice.rs"],
            "recent": [{"sha": "<celý sha>", "subject": "feat(billing): VAT per line"}]},
  "premises": [{"id": "2026-09-01-prices-are-floats", "status": "superseded", "superseded_by": ["2026-09-28-prices-are-integer-cents"]}]}
@@ -227,6 +230,12 @@ Pridané po 0.5.0. Každý záznam, ktorý vrátia `entries.list`, `entries.get`
   null; `source` je `ledger`, alebo `frontmatter` pre `checked` bez novšieho riadku v denníku (vtedy je
   `kind` `read` a `commit`, `by` a `because` sú null). `verified` je true pri `read` a pri prejdenom
   `verify`: riadky `agent` a `bulk` sú pečiatky.
+- `verification.landed` (pridané po 0.6.0) je celé ID commitu v histórii `HEAD`, ktorý ako prvý pridal
+  najnovší riadok záznamu v denníku, alebo null, kým je ten riadok len stagnutý alebo v pracovnom strome:
+  „prešlo a je commitnuté“ oproti „prešlo, ešte necommitnuté“. Pri `source: "frontmatter"` je to
+  posledný commit v histórii `HEAD`, ktorý zmenil súbor záznamu, null, kým má súbor necommitnuté zmeny
+  alebo nebol nikdy commitnutý. `since` sa nemení: už počíta od neskoršieho z `commit` a commitu, ktorý
+  riadok priniesol.
 - `checked` ostáva reťazcom: novší z poľa v súbore a najnovšieho potvrdenia záznamu v denníku (riadok
   `verify` nie je potvrdenie).
 - `since` počíta ne-merge commity na riadených súboroch záznamu (bez súborov znalostí) po overení: po
@@ -240,7 +249,23 @@ Pridané po 0.5.0. Každý záznam, ktorý vrátia `entries.list`, `entries.get`
   Prázdne, keď také nie sú. V žiadnom zázname sa nič neprepíše.
 
 Jeden `git log` a jeden `git log -p` denníka pokryjú všetky záznamy, uložené v cache podľa `HEAD`; zoznam
-stojí jeden `rev-parse`, kým sa nič necommitne. `snapshot` pracovného stromu sa zmení, keď sa zmení denník.
+stojí jeden `rev-parse`, kým sa nič necommitne. `landed` pridá pre každý `HEAD` jeden `git log` súborov,
+ktorých overenie je len dátum `checked`, a pri každom čítaní `git status` týchto súborov. `snapshot`
+pracovného stromu sa zmení, keď sa zmení denník.
+
+### Doplnenie dôkazu návrhu {#inbox-verify}
+
+`inbox.verify {id, verify}` nastaví alebo nahradí príkaz `verify` čakajúceho návrhu v inboxe, ktorý
+zachytil tento worktree; takto sa doplní návrh zachytený bez príkazu, ktorý ho dokázal, bez nového
+zachytenia. Prázdny reťazec príkaz odstráni. Príkaz sa overuje ako pole záznamu (`invalid_input`);
+neznámy návrh je `not_found`, návrh iného aktívneho worktree `worktree_conflict`, námietka
+`invalid_input`. Povýšenie (`drafts.stage` s `candidate_id`, `ctx_prepare_commit`, `kontext promote`) ho
+zachová.
+
+```json
+{"id": "2026-10-27-cache-keys-carry-the-tenant", "verify": "cargo test cache_key",
+ "entry": {"id": "2026-10-27-cache-keys-carry-the-tenant", "verify": "cargo test cache_key", "publication": {"state": "local"}, "…": "…"}}
+```
 
 ### Návrh náhrady {#revise}
 

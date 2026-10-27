@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 pub const INSTRUCTIONS: &str = "kontext is this repository's shared, reviewed team context — decisions, conventions, learnings, incidents and the module map — plus any connected memory, history and code systems. \
 Start each task with ctx_brief (pass `focus` with the paths or topic you will work on). Use ctx_search / ctx_read for detail and ctx_why to learn why code is the way it is. \
-When you and the user settle something durable (a decision, a convention, a non-obvious pitfall), record it with ctx_capture — short: what, why, consequences, and the paths it governs. \
+When you and the user settle something durable (a decision, a convention, a non-obvious pitfall), record it with ctx_capture — short: what, why, consequences, and the paths it governs; a learning or decision you proved with a command carries that command as `verify`. \
 Before committing, run ctx_prepare_commit and promote the candidates that belong to the change so they are reviewed together with it. \
 Shared knowledge changes only through commits and review; supersede a decision instead of rewriting it. \
 Another worktree, submodule or repository? Pass `dir` (a path inside it).";
@@ -156,7 +156,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_capture",
-            "description": "Record something durable: a decision, a convention, a non-obvious learning or pitfall, an incident. Short (what, why, consequences), with the paths it governs: it goes to the repository that owns them. It waits in the local inbox until promoted into a commit (promote=true writes it into the store now); visibility=private keeps it personal.",
+            "description": "Record something durable: a decision, a convention, a non-obvious learning or pitfall, an incident. Short (what, why, consequences), with the paths it governs: it goes to the repository that owns them. A learning or decision you proved with a command (a test, a grep) carries that command as `verify`, so ctx_verify can prove it again. It waits in the local inbox until promoted into a commit (promote=true writes it into the store now); visibility=private keeps it personal.",
             "inputSchema": {"type": "object", "properties": {
                 "kind": {"type": "string", "enum": ["decision", "convention", "learning", "incident"], "description": "What it is (pitfalls are learnings)"},
                 "title": s("Short statement, e.g. 'Use Tantivy for local recall'"),
@@ -170,6 +170,7 @@ fn tool_list() -> Vec<Value> {
                 "source": s("Where it was found, e.g. thread claude:4f1c2a9b (kept in the inbox only)"),
                 "status": s("Decisions: proposed | accepted (default)"),
                 "review_by": s("When the entry should be looked at again, YYYY-MM-DD (a temporary rule, a workaround); optional"),
+                "verify": s("The command that proved it: one line, at most 500 characters, run with sh from the repository root, e.g. `cargo test -p billing rounding`. Optional"),
                 "evidence": {"type": "array", "description": "Sources it rests on: {ref, quote?}. ref is pr:<id>, issue:<id>, task:<id>, code:<repo>@<rev>:<path>#L<a>-<b> or url:<url>; a quote (≤200 chars) of a code ref is checked against that revision", "items": {"type": "object", "properties": {"ref": {"type": "string"}, "quote": {"type": "string"}}, "required": ["ref"]}},
                 "promote": {"type": "boolean", "description": "Write into the repo store now instead of the inbox"}
             }, "required": ["kind", "title", "body"]}
@@ -237,10 +238,11 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_inbox",
-            "description": "Local knowledge candidates captured in this clone (not shared yet): list, show, promote (write into the repo store and stage), or drop.",
+            "description": "Local knowledge candidates captured in this clone (not shared yet): list, show, promote (write into the repo store and stage), drop, or verify (set the command that proved a draft, `verify`, on one id; an empty string clears it; promotion keeps it).",
             "inputSchema": {"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["list", "show", "promote", "drop"]},
-                "ids": arr("Candidate ids for show/promote/drop")
+                "action": {"type": "string", "enum": ["list", "show", "promote", "drop", "verify"]},
+                "ids": arr("Candidate ids for show/promote/drop/verify (verify: one id)"),
+                "verify": s("For action=verify: the command that proved the draft, one line of at most 500 characters run with sh from the repository root; \"\" clears it")
             }}
         }),
         json!({
@@ -368,6 +370,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 source: str_arg(args, "source"),
                 commits: list_arg(args, "commits"),
                 review_by: str_arg(args, "review_by"),
+                verify: str_arg(args, "verify"),
                 evidence: args
                     .get("evidence")
                     .and_then(Value::as_array)
@@ -528,6 +531,16 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                     }
                     let done = ops::promote(app, &ids, true)?;
                     Ok(done.iter().map(|(id, rel)| format!("- {id} → {rel} (staged)\n")).collect())
+                }
+                "verify" => {
+                    let [id] = ids.as_slice() else { bail!("action=verify takes one id") };
+                    let out = crate::api_write::inbox_verify(app, &json!({"id": id, "verify": args.get("verify")}))?;
+                    Ok(match out["verify"].as_str() {
+                        Some(c) => {
+                            format!("{} now names `{c}` as its verify command; promotion keeps it.", out["id"].as_str().unwrap_or(id))
+                        }
+                        None => format!("{} has no verify command now.", out["id"].as_str().unwrap_or(id)),
+                    })
                 }
                 "drop" => {
                     for id in &ids {

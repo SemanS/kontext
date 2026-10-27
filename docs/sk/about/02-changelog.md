@@ -2,6 +2,14 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané
+
+**Zachytenie uvedie príkaz, ktorý ho dokázal, a overenie povie, kde pristálo.**
+
+- **Zachytenie s dôkazom.** `kontext capture --verify "<príkaz>"`, `verify` v `ctx_capture` a v `entry` operácie `drafts.capture` zapíšu príkaz, ktorý poučenie alebo rozhodnutie dokázal; overuje sa ako pole záznamu (jeden riadok, najviac 500 znakov) a zachová sa cez inbox aj povýšenie. Hovorí to aj návod na zachytávanie (popis nástroja, inštrukcie servera a blok v `AGENTS.md`). Pozri [Zachytávanie](../concepts/03-capture-and-review.md#capturing).
+- **Návrh ho dostane neskôr.** `kontext inbox verify <id> "<príkaz>"` (`--clear`), `ctx_inbox` s `action=verify` a nová operácia `inbox.verify` nastavia alebo odstránia príkaz návrhu v inboxe.
+- **Kde pristálo.** `verification.landed` je commit v histórii `HEAD`, ktorý ako prvý pridal najnovší riadok záznamu v denníku, alebo null, kým je riadok len stagnutý alebo v pracovnom strome; pri samotnom dátume `checked:` posledný commit, ktorý zmenil súbor záznamu. `since` sa nemení. Verzia API ostáva 1. Pozri [aplikačné API](../reference/05-application-api.md#verification).
+
 ## 0.6.0 (2026-10-27)
 
 **Overenie je commit v denníku a brief hovorí, čo sa odvtedy zmenilo.** Dátum `checked:` bola pečiatka, ktorú mohol nastaviť ktokoľvek, často hromadne, a merge ju mohol potichu nahradiť staršou. Teraz:

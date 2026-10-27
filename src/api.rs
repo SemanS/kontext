@@ -16,6 +16,7 @@ pub const OPERATIONS: &[&str] = &[
     "entries.drift",
     "inbox.list",
     "inbox.drop",
+    "inbox.verify",
     "drafts.capture",
     "drafts.stage",
     "drafts.extract",

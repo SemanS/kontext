@@ -50,6 +50,7 @@ explicit stale state when it cannot be refreshed.
 | `entries.drift` | `base?`, `head?`, `kinds?` | entries whose governed files changed in the range without a look at the entry ([details](#drift)) |
 | `inbox.list` | `state?`: `pending` (default), `dismissed`, `promoted`, `all` | local candidates and retained workflow history |
 | `inbox.drop` | `id`, `reason?` | dismiss a local candidate |
+| `inbox.verify` | `id`, `verify` (`""` clears it) | `id`, `verify` and `entry`: the draft with the command that proved it; promotion keeps it ([details](#inbox-verify)) |
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
 | `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
@@ -62,7 +63,8 @@ explicit stale state when it cannot be refreshed.
 | `operations.get` | `operation_id`, `fingerprint?` | the original completed write result, or an explicit incomplete/conflict error |
 
 The `entry` object includes `kind`, `title`, `body`, and optional `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, `commits`, `review_by`, `verify` and `evidence` ([below](#maintenance)). Keep paths as arrays throughout the workflow. A selected
+`supersedes`, `visibility`, `commits`, `review_by`, `verify` and `evidence` ([below](#maintenance)). `verify` is the command that
+proved the entry: one line of at most 500 characters, else `invalid_input`. Keep paths as arrays throughout the workflow. A selected
 finding can be formalized separately from extracting new findings, so deduplication does not discard
 something the user explicitly chose to keep. Extraction and guidance generation require a usable LLM;
 formalization can preserve the supplied finding when no model is selected.
@@ -220,7 +222,8 @@ Added after 0.5.0. Every entry returned by `entries.list`, `entries.get`, `entri
 {"checked": "2026-10-27T09:12:44Z",
  "verify": "cargo test -p billing cents",
  "verification": {"at": "2026-10-27T09:12:44Z", "kind": "read", "commit": "<full sha>", "by": "Jane Doe",
-                  "because": "checked against the VAT change", "passed": null, "source": "ledger", "verified": true},
+                  "because": "checked against the VAT change", "passed": null, "source": "ledger", "verified": true,
+                  "landed": "<full sha>"},
  "since": {"commits": 3, "head": "<full sha>", "paths": ["src/billing/invoice.rs"],
            "recent": [{"sha": "<full sha>", "subject": "feat(billing): VAT per line"}]},
  "premises": [{"id": "2026-09-01-prices-are-floats", "status": "superseded", "superseded_by": ["2026-09-28-prices-are-integer-cents"]}]}
@@ -231,6 +234,12 @@ Added after 0.5.0. Every entry returned by `entries.list`, `entries.get`, `entri
   otherwise; `source` is `ledger`, or `frontmatter` for a `checked` with no newer ledger line (then
   `kind` is `read` and `commit`, `by` and `because` are null). `verified` is true for a `read` and a
   passed `verify`: `agent` and `bulk` lines are stamps.
+- `verification.landed` (added after 0.6.0) is the full id of the commit in `HEAD`'s history that
+  first added the entry's newest ledger line, or null while that line is only staged or in the working
+  tree: "passed and committed" against "passed, not committed yet". For `source: "frontmatter"` it is
+  the last commit in `HEAD`'s history that changed the entry's file, null while the file has
+  uncommitted changes or was never committed. `since` does not change: it already counts from the
+  later of `commit` and the commit that landed the line.
 - `checked` stays a string: the newer of the field in the file and the entry's newest confirmation
   in the ledger (a `verify` line is not a confirmation).
 - `since` counts the non-merge commits on the entry's governed files (knowledge files left out) after
@@ -245,7 +254,23 @@ Added after 0.5.0. Every entry returned by `entries.list`, `entries.get`, `entri
   Empty when there are none. Nothing is rewritten in either entry.
 
 One `git log` and one `git log -p` of the ledger cover every entry, cached per `HEAD`; a list costs a
-`rev-parse` while nothing is committed. The working-tree `snapshot` changes when the ledger does.
+`rev-parse` while nothing is committed. `landed` adds, per `HEAD`, a `git log` of the files whose
+verification is a `checked` date alone, and a `git status` of those files on each read. The working-tree
+`snapshot` changes when the ledger does.
+
+### Completing a draft's proof {#inbox-verify}
+
+`inbox.verify {id, verify}` sets or replaces the `verify` command of a pending inbox draft that this
+worktree captured, the way a draft captured without the command that proved it is completed without
+capturing it again; an empty string clears it. The command is validated like the entry field
+(`invalid_input`); an unknown draft is `not_found`, one another active worktree captured
+`worktree_conflict`, a challenge `invalid_input`. Promotion (`drafts.stage` with `candidate_id`,
+`ctx_prepare_commit`, `kontext promote`) keeps it.
+
+```json
+{"id": "2026-10-27-cache-keys-carry-the-tenant", "verify": "cargo test cache_key",
+ "entry": {"id": "2026-10-27-cache-keys-carry-the-tenant", "verify": "cargo test cache_key", "publication": {"state": "local"}, "…": "…"}}
+```
 
 ### Drafting a replacement {#revise}
 
