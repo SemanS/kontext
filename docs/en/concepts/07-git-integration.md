@@ -35,6 +35,8 @@ A colocated [jj](https://jj-vcs.github.io/jj/) repository is a git repository to
 - `kontext drift`: the knowledge your change, committed or not, left behind since the default branch;
 - `kontext check`: validation and the secret scan the pre-commit hook would have run.
 
+For the team, put the gate where every commit passes, whatever made it: the check script (`bun run check`, `make check`) or CI runs `kontext drift --fail` (exit status 2 when a change left recorded knowledge behind) or `kontext ci --strict`. kontext adds no git hook that blocks a commit for drift, since a jj commit would never meet it; `kontext hooks status` says the same.
+
 `kontext confirm` and the promotions stage files in git's index; jj takes the files from the working copy and ignores the index, so this is harmless. Trailers are not added for you: write them into the description (`prepare-commit` lists them).
 
 ## Trailers

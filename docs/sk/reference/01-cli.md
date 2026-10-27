@@ -91,9 +91,15 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 Povie, že záznam už neplatí, a prečo. Námietka čaká v lokálnom inboxe; `prepare-commit` ponúkne vyradenie záznamu alebo zaznamenanie náhrady, ktorá ho nahrádza.
 
-### `kontext confirm <id…>`
+### `kontext confirm <id…> [--because <text>] | --repair`
 
-Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na aktuálny čas v UTC (`YYYY-MM-DDTHH:MM:SSZ`) v súbore každého záznamu, nič iné nezmení a súbor stagne. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
+Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na aktuálny čas v UTC (`YYYY-MM-DDTHH:MM:SSZ`) v súbore každého záznamu, nič iné nezmení, pridá za každý záznam riadok `read` do [denníka overení](../concepts/03-capture-and-review.md#verifications) (`bulk`, keď je ID viac ako päť) a oboje stagne. `--because` uloží do denníka jednoriadkový dôvod. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
+
+`--repair` prepíše `checked` každého aktívneho záznamu, ktorého súbor zaostáva za jeho najnovším potvrdením v denníku (merge vzal staršiu stranu), a súbor stagne; keď niektorý prepísať nejde, skončí so stavom 1.
+
+### `kontext verify <id…> [--because <text>] [--json]`
+
+Spustí príkaz [`verify`](../concepts/03-capture-and-review.md#verify) každého záznamu cez `sh -c` z koreňa repozitára (zastaví ho po `KONTEXT_VERIFY_TIMEOUT_SECS`, predvolene 120), pridá do denníka riadok `verify` s výsledkom a commitom a stagne ho. Vypíše výsledok a pri zlyhaní koniec výstupu; `--json` vypíše výsledky `drafts.verify`. Odmietne záznam bez príkazu a neaktívny záznam. Keď príkaz zlyhá alebo je ID odmietnuté, skončí so stavom 1.
 
 ### `kontext drift`
 
@@ -105,7 +111,7 @@ Záznamy, ktoré rozsah commitov nechal za sebou: aktívne záznamy, ktorých `p
 | `--head <rev>` | pracovný strom | koniec rozsahu; bez neho sa počítajú aj necommitnuté a nesledované zmeny |
 | `-k, --kind <druh>` | decision, convention, learning, incident | druhy na kontrolu (opakovateľné) |
 | `--json` | | výsledok `entries.drift` ako JSON |
-| `--fail` | | skončí so stavom 2, keď je vypísaný nejaký záznam |
+| `--fail` | | skončí so stavom 2, keď je vypísaný nejaký záznam: brána pre tímový kontrolný skript alebo CI, ktorá pokryje aj commity bez hookov (jj) |
 
 ### `kontext inbox [list | show <id> | drop <id…>]`
 

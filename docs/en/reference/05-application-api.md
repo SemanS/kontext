@@ -53,7 +53,8 @@ explicit stale state when it cannot be refreshed.
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
 | `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
-| `drafts.confirm` | `id` | `id`, `path` and `checked`: the entry confirmed now and staged ([details](#confirm)) |
+| `drafts.confirm` | `id` or `ids`, `because?`, `kind?`; or `repair: true` | `id`, `path`, `checked` and `ledger`: the entry confirmed now, its ledger line appended, both staged ([details](#confirm)) |
+| `drafts.verify` | `id`, `because?` | the outcome of the entry's `verify` command, recorded in the ledger and staged ([details](#verify)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | a draft that supersedes the entry; no writes ([details](#revise)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extracted candidates and notes; no capture or staging |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulated entry, notes and `related_entries`; no capture or staging |
@@ -61,13 +62,14 @@ explicit stale state when it cannot be refreshed.
 | `operations.get` | `operation_id`, `fingerprint?` | the original completed write result, or an explicit incomplete/conflict error |
 
 The `entry` object includes `kind`, `title`, `body`, and optional `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, `commits`, `review_by` and `evidence` ([below](#maintenance)). Keep paths as arrays throughout the workflow. A selected
+`supersedes`, `visibility`, `commits`, `review_by`, `verify` and `evidence` ([below](#maintenance)). Keep paths as arrays throughout the workflow. A selected
 finding can be formalized separately from extracting new findings, so deduplication does not discard
 something the user explicitly chose to keep. Extraction and guidance generation require a usable LLM;
 formalization can preserve the supplied finding when no model is selected.
 
-Read entries include `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `checked`, `paths`, `tags`, `file`,
-`markdown`, `style`, supersession fields and extra metadata (`extra.external_refs` holds the sources). The engine owns parsing and matching;
+Read entries include `id`, `kind`, `title`, `body`, `summary`, `status`, `date`, `review_by`, `checked`, `verify`, `paths`, `tags`, `file`,
+`markdown`, `style`, supersession fields and extra metadata (`extra.external_refs` holds the sources). `entries.list`, `entries.get`,
+`entries.search`, `entries.governing` and `entries.drift` add `verification`, `since` and `premises` ([below](#verification)). The engine owns parsing and matching;
 clients must not parse Markdown or implement a second matcher. `active_only` excludes superseded,
 deprecated and rejected entries. It does not imply that a working-tree proposal passed review.
 List queries default to 100 entries (maximum 500); follow `next_offset` until null. Snapshots change
@@ -159,7 +161,8 @@ unknown revision or one that starts with `-` is `invalid_input`; a repository wi
 An entry is listed when it is active, has `paths`, at least one file changed in the range (other than
 knowledge files) matches them — with the same matcher as `entries.governing` — and the entry's own
 file did **not** change in the same range: an edit, a retirement or a confirmation counts as having
-looked. `date` and `checked` appear when the entry has them. `commits` are the non-merge commits of
+looked. `date` and `checked` appear when the entry has them; `verification`, `since`, `verify` and `premises`
+are added as for the other reads ([below](#verification)). `commits` are the non-merge commits of
 `base..head` that touched the matched files, newest first; it is empty when the change is only
 uncommitted. With an explicit `head` the entries are read as committed at `head`. Entries are ordered
 by id. The answer involves no model.
@@ -168,14 +171,81 @@ by id. The answer involves no model.
 
 `drafts.confirm {id}` records that an entry still holds: it sets `checked` to the current UTC
 time to the second (`YYYY-MM-DDTHH:MM:SSZ`) in the entry's own file, changing nothing else byte for
-byte, and stages the file like `drafts.retire`. The result is `{id, path, checked}` with the same
-string; its first ten characters are the day, so comparing it with a `YYYY-MM-DD` as a string stays
+byte, appends a line to the [verification ledger](../concepts/03-capture-and-review.md#verifications)
+(`.ai/confirmations.log`) and stages both like `drafts.retire`. The result is `{id, path, checked, ledger}`
+with the same string in `checked` and `ledger.at`; its first ten characters are the day, so comparing it with a `YYYY-MM-DD` as a string stays
 correct. Confirming again later the same day changes the file, so drift sees the new look. A
 `checked` written by hand may also be a bare `YYYY-MM-DD`; read entries return it as written. An
 unknown entry is `not_found`; an inactive one, one that is not committed yet, or a file with unstaged
 edits is `operation_conflict`. `checked` appears on read entries and on
 [`CommittedEntry`](#rust-embedding) in the embedding facade, so an application can recognise a
 confirmation in a reviewed revision.
+
+Added after 0.5.0, all optional:
+
+- `because`: one line (at most 500 characters) kept in the ledger.
+- `kind`: `read` when a person confirmed it in the client, `agent` (the default) when an agent did.
+  More than five ids in one call are recorded as `bulk` whatever `kind` says.
+- `ids`: several entries in one call. The result is then `{confirmed: [{id, path, checked, ledger}],
+  failed: [{id, code, message}]}`.
+- `repair: true` (alone): rewrites the cached `checked` of every active entry whose file is behind its
+  newest ledger confirmation, and stages the files. The result is `{repaired: [{id, path, from, to}],
+  skipped: [{id, path, reason}]}`.
+
+`ledger` is `{at, kind, commit, because, path}`: the line's time, its kind, `HEAD` (null before the
+first commit), the reason (null without one) and the ledger's path.
+
+### Running an entry's check {#verify}
+
+`drafts.verify {id, because?}` (added after 0.5.0) runs the entry's `verify` command with `sh -c` from the
+repository root, stdin closed, stopped after `KONTEXT_VERIFY_TIMEOUT_SECS` (default 120), then appends a
+`verify` line with the outcome and stages the ledger:
+
+```json
+{"id": "…", "command": "cargo test -p billing cents", "passed": true, "exit_code": 0, "timed_out": false,
+ "output_tail": "…last 2 KB of stdout and stderr…", "at": "2026-10-27T09:40:02Z", "commit": "<full sha>",
+ "path": ".ai/confirmations.log"}
+```
+
+`exit_code` is null when the command was stopped. An entry without `verify` is `invalid_input`; an
+inactive one is `operation_conflict` and its command never runs; an unknown one is `not_found`. The
+command runs without the write lock, so other writes wait only for the append.
+
+### Verification, what changed since, premises {#verification}
+
+Added after 0.5.0. Every entry returned by `entries.list`, `entries.get`, `entries.search`,
+`entries.governing` and `entries.drift` carries:
+
+```json
+{"checked": "2026-10-27T09:12:44Z",
+ "verify": "cargo test -p billing cents",
+ "verification": {"at": "2026-10-27T09:12:44Z", "kind": "read", "commit": "<full sha>", "by": "Jane Doe",
+                  "because": "checked against the VAT change", "passed": null, "source": "ledger", "verified": true},
+ "since": {"commits": 3, "head": "<full sha>", "paths": ["src/billing/invoice.rs"],
+           "recent": [{"sha": "<full sha>", "subject": "feat(billing): VAT per line"}]},
+ "premises": [{"id": "2026-09-01-prices-are-floats", "status": "superseded", "superseded_by": ["2026-09-28-prices-are-integer-cents"]}]}
+```
+
+- `verification` is the newest of the entry's ledger lines and its `checked` field; null when it has
+  neither. `kind` is `read`, `agent`, `bulk` or `verify`; `passed` is a boolean for `verify` and null
+  otherwise; `source` is `ledger`, or `frontmatter` for a `checked` with no newer ledger line (then
+  `kind` is `read` and `commit`, `by` and `because` are null). `verified` is true for a `read` and a
+  passed `verify`: `agent` and `bulk` lines are stamps.
+- `checked` stays a string: the newer of the field in the file and the entry's newest confirmation
+  in the ledger (a `verify` line is not a confirmation).
+- `since` counts the non-merge commits on the entry's governed files (knowledge files left out) after
+  the verification: after the commit it named, or the commit that landed its ledger line when that is
+  newer; by time when neither is in `HEAD`'s history; for a `checked` without a ledger line, the way
+  freshness counts. `paths` are the changed governed files, sorted, at most 20; `recent` the newest
+  of the commits, at most five; `head` is `HEAD`. Null for an entry never verified, an inactive one
+  or one without `paths`.
+- `verify` is the entry's command, or null.
+- `premises` lists the entries this active entry links to (`[[id]]` in its body, `supersedes`, an
+  `extends` field) that are superseded, retired or deprecated, except the one it superseded itself.
+  Empty when there are none. Nothing is rewritten in either entry.
+
+One `git log` and one `git log -p` of the ledger cover every entry, cached per `HEAD`; a list costs a
+`rev-parse` while nothing is committed. The working-tree `snapshot` changes when the ledger does.
 
 ### Drafting a replacement {#revise}
 

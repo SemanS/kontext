@@ -4,6 +4,7 @@ kind: decision
 title: Drift is the knowledge a range changed the code of without a look at the entry
 status: accepted
 date: 2026-10-20
+checked: 2026-10-27T20:20:09Z
 summary: entries.drift lists active entries whose paths match files changed in base..head (or base..HEAD plus the working tree) and whose own file was not changed in the same range; deterministic, git-only, no model.
 paths: [src/drift.rs, src/api_read.rs, src/cli.rs, src/tools.rs]
 author: SemanS

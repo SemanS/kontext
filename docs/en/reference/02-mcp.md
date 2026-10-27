@@ -8,11 +8,11 @@ Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol vers
 `input` and optional `dir`. It returns `structuredContent` and `outputSchema` as well as a complete
 JSON text copy. Existing tools below retain their text results.
 
-Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
 
 ### Another repository: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -96,9 +96,20 @@ Records that an entry no longer holds, as a local inbox candidate of kind `chall
 
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
-| `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
+| `id` | string | | the entry: `kx:<id>`, an id or its unique prefix |
+| `ids` | string[] | | several entries at once; more than five are recorded as `bulk` |
+| `because` | string | | one line: what the entry was checked against |
 
-Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) time to now (UTC, to the second), changes nothing else in the file, and stages it, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead.
+Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) time to now (UTC, to the second), changes nothing else in the file, appends an `agent` line with `HEAD` and the reason to the [verification ledger](../concepts/03-capture-and-review.md#verifications), and stages both, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead. An agent's confirmation is shown as a stamp, not as a verification; `ctx_verify` proves more where the entry names a command.
+
+### `ctx_verify`
+
+| Parameter | Type | Default | |
+| --- | --- | --- | --- |
+| `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
+| `because` | string | | one line: why it was run |
+
+Runs the entry's [`verify`](../concepts/03-capture-and-review.md#verify) command from the repository root (with a timeout), appends a `verify` line with pass or fail and `HEAD` to the ledger and stages it, and answers with the outcome and the end of the output. An entry without a command, or an inactive one, is refused. Not read-only: it runs a command the repository names.
 
 ### `ctx_drift`
 

@@ -52,6 +52,7 @@ Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/`. Oba stromy si sú
 | `src/index.rs` | index Tantivy |
 | `src/freshness.rs` | záznamy, ktorých `paths` sa od posledného pohľadu na ne výrazne zmenili |
 | `src/drift.rs` | záznamy, ktorých kód rozsah commitov (alebo pracovný strom) zmenil bez pohľadu na ne |
+| `src/ledger.rs`, `src/verification.rs` | denník overení (`.ai/confirmations.log`); ako bol každý záznam overený, čo sa odvtedy zmenilo, zmenené predpoklady, príkazy `verify` |
 | `src/adapters/` | register, drivery, MCP klient, mapovanie výsledkov |
 | `src/init/` | scan, history, render, deepen |
 | `src/hooks.rs`, `src/events.rs` | git hooky, outbox |

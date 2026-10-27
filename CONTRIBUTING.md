@@ -54,6 +54,7 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 | `src/index.rs` | Tantivy index |
 | `src/freshness.rs` | entries whose `paths` changed a lot since someone last looked at them |
 | `src/drift.rs` | entries a range of commits (or the working tree) changed the code of without a look |
+| `src/ledger.rs`, `src/verification.rs` | the verification ledger (`.ai/confirmations.log`); how each entry was verified, what changed since, changed premises, `verify` commands |
 | `src/adapters/` | registry, drivers, MCP client, result mapping |
 | `src/init/` | scan, history, render, deepen |
 | `src/hooks.rs`, `src/events.rs` | git hooks, outbox |

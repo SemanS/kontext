@@ -91,9 +91,15 @@ Runs scan → history → render → wire → deepen. Safe to re-run.
 
 Say that an entry no longer holds, and why. The challenge waits in the local inbox; `prepare-commit` offers to retire the entry or to record a replacement that supersedes it.
 
-### `kontext confirm <id…>`
+### `kontext confirm <id…> [--because <text>] | --repair`
 
-Confirm that entries still hold: sets [`checked`](../concepts/02-knowledge-store.md#checked) to the current UTC time (`YYYY-MM-DDTHH:MM:SSZ`) in each entry's own file, changes nothing else, and stages the file. Refuses an unknown or inactive entry, an entry that is not committed yet and a file with unstaged edits. Exit status 1 when any id fails.
+Confirm that entries still hold: sets [`checked`](../concepts/02-knowledge-store.md#checked) to the current UTC time (`YYYY-MM-DDTHH:MM:SSZ`) in each entry's own file, changes nothing else, appends a `read` line per entry to the [verification ledger](../concepts/03-capture-and-review.md#verifications) (`bulk` when more than five ids are given) and stages both. `--because` keeps a one-line reason in the ledger. Refuses an unknown or inactive entry, an entry that is not committed yet and a file with unstaged edits. Exit status 1 when any id fails.
+
+`--repair` rewrites the `checked` of every active entry whose file is behind its newest ledger confirmation (a merge took the older side) and stages it; exit status 1 when one could not be rewritten.
+
+### `kontext verify <id…> [--because <text>] [--json]`
+
+Run each entry's [`verify`](../concepts/03-capture-and-review.md#verify) command with `sh -c` from the repository root (stopped after `KONTEXT_VERIFY_TIMEOUT_SECS`, default 120), append a `verify` line with pass or fail and the commit to the ledger, and stage it. Prints the outcome, and the end of the output when it failed; `--json` prints the `drafts.verify` results. Refuses an entry without a command and an inactive entry. Exit status 1 when a command failed or an id was refused.
 
 ### `kontext drift`
 
@@ -105,7 +111,7 @@ The entries a range of commits left behind: active entries whose `paths` cover c
 | `--head <rev>` | the working tree | end of the range; without it uncommitted and untracked changes count too |
 | `-k, --kind <kind>` | decision, convention, learning, incident | kinds to check (repeatable) |
 | `--json` | | the `entries.drift` result as JSON |
-| `--fail` | | exit with status 2 when an entry is listed |
+| `--fail` | | exit with status 2 when an entry is listed: the gate for a team's check script or CI, which also covers commits made without hooks (jj) |
 
 ### `kontext inbox [list | show <id> | drop <id…>]`
 
