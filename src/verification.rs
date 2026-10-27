@@ -548,7 +548,8 @@ pub fn run(root: &Path, command: &str, limit: std::time::Duration) -> anyhow::Re
             timed_out = true;
             #[cfg(unix)]
             {
-                let _ = Command::new("kill").arg("-KILL").arg(format!("-{}", child.id())).stderr(Stdio::null()).status();
+                // `--` before the negative id: procps's kill on Linux reads `-123` as an option, BSD's does not mind
+                let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status();
             }
             let _ = child.kill();
             break child.wait()?;
