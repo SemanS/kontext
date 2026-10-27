@@ -790,6 +790,34 @@ pub(crate) fn verify(app: &App, input: &Value) -> Result<Value> {
         "output_tail":outcome.output_tail,"at":at,"commit":commit,"path":crate::ledger::rel_path(app)}))
 }
 
+/// Set or clear the `verify` command of an inbox draft of this worktree (an empty string clears
+/// it): how a draft captured without the command that proved it is completed without re-capturing.
+/// Promotion keeps it.
+pub(crate) fn inbox_verify(app: &App, input: &Value) -> Result<Value> {
+    let id = required(input, "id")?;
+    let command = match input.get("verify") {
+        Some(Value::String(s)) => s.trim(),
+        Some(Value::Null) | None => return Err(error("invalid_input", "verify must be a string (an empty string clears it)")),
+        _ => return Err(error("invalid_input", "verify must be a string")),
+    };
+    let command = if command.is_empty() {
+        None
+    } else {
+        crate::store::validate_verify(command).map_err(|m| error("invalid_input", m))?;
+        Some(if app.cfg().capture.redact { crate::secrets::redact(command).0 } else { command.to_string() })
+    };
+    let _file = write_guard(app)?;
+    let _local = app.write_lock.lock().unwrap();
+    let inbox = Inbox::open(&app.repo);
+    let e = inbox.get(id).ok_or_else(|| error("not_found", "no such inbox candidate"))?;
+    owned(app, &e)?;
+    if e.kind == "challenge" {
+        return Err(error("invalid_input", "a challenge is not an entry: it takes no verify command"));
+    }
+    let e = inbox.set_verify(&e.id, command)?;
+    Ok(json!({"id":e.id,"verify":e.verify,"entry":local_entry_json(&e,"local")}))
+}
+
 fn local_entry_json(entry: &Entry, state: &str) -> Value {
     let mut value = entry_json(entry);
     value["publication"] = json!({"state":state,"revision":null,"staged":false,"modified":false});
@@ -934,6 +962,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
             inbox.remove(&e.id)?;
             Ok(json!({"id":e.id,"dropped":true,"entry":local_entry_json(&e,"dismissed")}))
         }
+        "inbox.verify" => inbox_verify(app, input),
         "operations.get" => operation_get(app, input),
         "drafts.capture" => capture(app, input),
         "drafts.stage" => stage(app, input),
@@ -1224,6 +1253,39 @@ mod tests {
             input["entry"]["verify"] = bad;
             assert_eq!(crate::api::execute(&app, "drafts.capture", &input)["error"]["code"], "invalid_input");
         }
+    }
+    #[test]
+    fn inbox_verify_sets_and_clears_a_drafts_command() {
+        let repo = TestRepo::new();
+        let app = repo.app();
+        let draft = call(
+            &app,
+            "drafts.capture",
+            &json!({"entry":{"kind":"learning","title":"Cache keys carry the tenant","body":"Found while debugging."}}),
+        )
+        .unwrap();
+        let id = draft["id"].as_str().unwrap();
+        assert_eq!(draft["entry"]["verify"], Value::Null);
+        let set = call(&app, "inbox.verify", &json!({"id":id,"verify":"  cargo test cache_key  "})).unwrap();
+        assert_eq!((set["id"].as_str(), set["verify"].as_str()), (Some(id), Some("cargo test cache_key")));
+        assert_eq!(set["entry"]["verify"], "cargo test cache_key");
+        assert_eq!(set["entry"]["extra"]["captured"], draft["entry"]["extra"]["captured"], "the rest of the draft stays");
+        assert_eq!(Inbox::open(&app.repo).get(id).unwrap().verify.as_deref(), Some("cargo test cache_key"));
+        let replaced = call(&app, "inbox.verify", &json!({"id":id,"verify":"cargo test cache_key -- --exact"})).unwrap();
+        assert_eq!(replaced["verify"], "cargo test cache_key -- --exact");
+        let cleared = call(&app, "inbox.verify", &json!({"id":id,"verify":""})).unwrap();
+        assert_eq!(cleared["verify"], Value::Null);
+        assert!(Inbox::open(&app.repo).get(id).unwrap().verify.is_none());
+        let code = |input: Value| crate::api::execute(&app, "inbox.verify", &input)["error"]["code"].clone();
+        assert_eq!(code(json!({"id":id})), "invalid_input");
+        assert_eq!(code(json!({"id":id,"verify":"a\nb"})), "invalid_input");
+        assert_eq!(code(json!({"id":"no-such-draft","verify":"true"})), "not_found");
+        // the MCP tool does the same through ctx_inbox
+        let text =
+            crate::tools::call(&app, "ctx_inbox", &json!({"action":"verify","ids":[id],"verify":"cargo test cache_key"}), "agent").unwrap();
+        assert!(text.contains("cargo test cache_key"), "{text}");
+        let staged = call(&app, "drafts.stage", &json!({"candidate_id":id,"operation_id":"promote-inbox-verify"})).unwrap();
+        assert_eq!(staged["entry"]["verify"], "cargo test cache_key");
     }
     #[test]
     fn private_capture_does_not_require_team_store() {

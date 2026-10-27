@@ -107,6 +107,16 @@ impl Inbox {
         Ok(e)
     }
 
+    /// Set (or with None clear) a draft's `verify` command in place; everything else stays.
+    pub fn set_verify(&self, id: &str, verify: Option<String>) -> Result<Entry> {
+        let path = self.dir.join(format!("{id}.md"));
+        let text = std::fs::read_to_string(&path).map_err(|_| anyhow::anyhow!("no inbox entry '{id}'"))?;
+        let mut e = Entry::parse(&format!("inbox/{id}.md"), &text, "learning");
+        e.verify = verify;
+        util::write_atomic(&path, &e.markdown())?;
+        Ok(e)
+    }
+
     pub fn remove(&self, id: &str) -> Result<()> {
         let p = self.dir.join(format!("{id}.md"));
         if !p.exists() {

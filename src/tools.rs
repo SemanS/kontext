@@ -238,10 +238,11 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_inbox",
-            "description": "Local knowledge candidates captured in this clone (not shared yet): list, show, promote (write into the repo store and stage), or drop.",
+            "description": "Local knowledge candidates captured in this clone (not shared yet): list, show, promote (write into the repo store and stage), drop, or verify (set the command that proved a draft, `verify`, on one id; an empty string clears it; promotion keeps it).",
             "inputSchema": {"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["list", "show", "promote", "drop"]},
-                "ids": arr("Candidate ids for show/promote/drop")
+                "action": {"type": "string", "enum": ["list", "show", "promote", "drop", "verify"]},
+                "ids": arr("Candidate ids for show/promote/drop/verify (verify: one id)"),
+                "verify": s("For action=verify: the command that proved the draft, one line of at most 500 characters run with sh from the repository root; \"\" clears it")
             }}
         }),
         json!({
@@ -530,6 +531,16 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                     }
                     let done = ops::promote(app, &ids, true)?;
                     Ok(done.iter().map(|(id, rel)| format!("- {id} → {rel} (staged)\n")).collect())
+                }
+                "verify" => {
+                    let [id] = ids.as_slice() else { bail!("action=verify takes one id") };
+                    let out = crate::api_write::inbox_verify(app, &json!({"id": id, "verify": args.get("verify")}))?;
+                    Ok(match out["verify"].as_str() {
+                        Some(c) => {
+                            format!("{} now names `{c}` as its verify command; promotion keeps it.", out["id"].as_str().unwrap_or(id))
+                        }
+                        None => format!("{} has no verify command now.", out["id"].as_str().unwrap_or(id)),
+                    })
                 }
                 "drop" => {
                     for id in &ids {
