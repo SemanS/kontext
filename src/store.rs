@@ -52,6 +52,9 @@ pub struct Entry {
     /// confirm` writes it, a UTC second (`YYYY-MM-DDTHH:MM:SSZ`). Freshness and drift count changes
     /// from here, as they do from an edit of the entry's own file.
     pub checked: Option<String>,
+    /// How to check the entry still holds: one shell command run from the repository root by
+    /// `kontext verify`, whose outcome lands in the verification ledger.
+    pub verify: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub paths: Vec<String>,
@@ -69,6 +72,8 @@ pub struct Entry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
+    /// Worth knowing, never a failure: a premise that changed under an entry.
+    Info,
     Warn,
     Error,
 }
@@ -83,6 +88,7 @@ pub struct Issue {
 impl std::fmt::Display for Issue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let lvl = match self.level {
+            Level::Info => "info",
             Level::Error => "error",
             Level::Warn => "warn",
         };
@@ -182,6 +188,7 @@ impl Entry {
         s("date", &self.date);
         s("review_by", &self.review_by);
         s("checked", &self.checked);
+        s("verify", &self.verify);
         s("summary", &self.summary);
         let mut l = |k: &str, val: &Vec<String>| {
             if !val.is_empty() {
@@ -234,6 +241,7 @@ impl Entry {
         field("Date", self.date.clone().unwrap_or_default());
         field("Review by", self.review_by.clone().unwrap_or_default());
         field("Checked", self.checked.clone().unwrap_or_default());
+        field("Verify", self.verify.clone().unwrap_or_default());
         field("Summary", self.summary.clone().unwrap_or_default());
         field("Tags", self.tags.join(", "));
         field("Paths", self.paths.join(", "));
@@ -419,6 +427,7 @@ const FIELD_KEYS: &[&str] = &[
     "review-by",
     "review_by",
     "checked",
+    "verify",
     "tags",
     "paths",
     "supersedes",
@@ -526,6 +535,7 @@ impl Entry {
             "summary" | "description" => self.summary = Some(v.as_str()),
             "review_by" | "review-by" | "review by" => self.review_by = Some(v.as_str()).filter(|s| !s.trim().is_empty()),
             "checked" => self.checked = Some(v.as_str()).filter(|s| !s.trim().is_empty()),
+            "verify" => self.verify = Some(v.as_str()).filter(|s| !s.trim().is_empty()),
             "tags" => self.tags = v.as_list(),
             "paths" | "scope" if matches!(v, FmValue::List(_)) || key == "paths" => self.paths = v.as_list(),
             "supersedes" => self.supersedes = v.as_list(),
@@ -917,6 +927,11 @@ impl<'a> Store<'a> {
                 push(Level::Error, format!("checked {c} is in the future"));
             }
         }
+        if let Some(v) = &e.verify
+            && let Err(msg) = validate_verify(v)
+        {
+            push(Level::Error, msg);
+        }
         let lines = e.body.lines().filter(|l| !l.trim().is_empty()).count();
         let max = self.cfg.store.max_body_lines;
         if max > 0 && lines > max && e.get_extra("generated").is_none() {
@@ -1028,6 +1043,23 @@ fn kind_heading(k: &str) -> String {
             s
         }
     }
+}
+
+/// The most a `verify` command may hold: a command, not a script.
+pub const MAX_VERIFY_CHARS: usize = 500;
+
+/// A `verify:` command is one line of at most [`MAX_VERIFY_CHARS`] characters.
+pub fn validate_verify(v: &str) -> std::result::Result<(), String> {
+    if v.trim().is_empty() {
+        return Err("verify is empty".into());
+    }
+    if v.contains(['\r', '\n', '\0']) {
+        return Err("verify must be one line (one shell command)".into());
+    }
+    if v.chars().count() > MAX_VERIFY_CHARS {
+        return Err(format!("verify is longer than {MAX_VERIFY_CHARS} characters; put the steps in a script and call it"));
+    }
+    Ok(())
 }
 
 /// A confirmation: a day, or the UTC second `kontext confirm` writes so that confirming again the
