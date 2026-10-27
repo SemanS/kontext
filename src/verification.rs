@@ -44,6 +44,11 @@ pub struct Verification {
     pub passed: Option<bool>,
     /// `ledger` or `frontmatter` (a `checked:` date with no ledger line behind it).
     pub source: &'static str,
+    /// The commit in HEAD's history that landed this verification: for a ledger line, the commit
+    /// that first added it; for a `checked:` date, the last commit that changed the entry's file.
+    /// None while it is only staged or in the working tree (and when nobody asked: [`of`] leaves it
+    /// to [`Context::load_landed`]).
+    pub landed: Option<String>,
 }
 
 impl Verification {
@@ -55,7 +60,7 @@ impl Verification {
 
     pub fn to_json(&self) -> Value {
         json!({"at":self.at,"kind":self.kind,"commit":self.commit,"by":self.by,"because":self.because,
-            "passed":self.passed,"source":self.source,"verified":self.verified()})
+            "passed":self.passed,"source":self.source,"verified":self.verified(),"landed":self.landed})
     }
 }
 
@@ -71,6 +76,7 @@ pub fn of(entry: &Entry, newest: Option<&Line>) -> Option<Verification> {
         because: Some(l.because.clone()).filter(|b| !b.is_empty()),
         passed: l.passed,
         source: "ledger",
+        landed: None,
     };
     let from_fm = |c: &str| Verification {
         at: c.to_string(),
@@ -80,6 +86,7 @@ pub fn of(entry: &Entry, newest: Option<&Line>) -> Option<Verification> {
         because: None,
         passed: None,
         source: "frontmatter",
+        landed: None,
     };
     match (newest, fm) {
         (Some(l), Some(c)) if seconds(c) > seconds(&l.at) => Some(from_fm(c)),
@@ -320,6 +327,8 @@ struct Cache {
 pub struct Context {
     lines: Vec<Line>,
     since: BTreeMap<String, Since>,
+    /// By entry file: the commit that landed its verification (only with [`Context::load_landed`]).
+    landed: BTreeMap<String, String>,
 }
 
 impl Context {
@@ -332,7 +341,17 @@ impl Context {
             Some(head) => since_all(app, entries, &lines, head, want),
             None => BTreeMap::new(),
         };
-        Context { lines, since }
+        Context { lines, since, landed: BTreeMap::new() }
+    }
+
+    /// [`Context::load`], and where each selected entry's verification landed (what the machine
+    /// API reports; the brief does not need it).
+    pub fn load_landed(app: &App, entries: &[Entry], want: &dyn Fn(&Entry) -> bool) -> Context {
+        let mut ctx = Context::load(app, entries, want);
+        if let Some(head) = app.repo.head() {
+            ctx.landed = landed_all(app, entries, &ctx.lines, &head, want);
+        }
+        ctx
     }
 
     pub fn newest(&self) -> HashMap<&str, &Line> {
@@ -340,7 +359,11 @@ impl Context {
     }
 
     pub fn verification(&self, entry: &Entry) -> Option<Verification> {
-        of(entry, self.newest().get(entry.id.as_str()).copied())
+        self.with_landed(entry, of(entry, self.newest().get(entry.id.as_str()).copied()))
+    }
+
+    fn with_landed(&self, entry: &Entry, verification: Option<Verification>) -> Option<Verification> {
+        verification.map(|v| Verification { landed: self.landed.get(&entry.rel_path).cloned(), ..v })
     }
 
     pub fn since(&self, entry: &Entry) -> Option<&Since> {
@@ -356,7 +379,7 @@ impl Context {
         confirmations: &HashMap<&str, &Line>,
         value: &mut Value,
     ) {
-        let verification = of(entry, newest.get(entry.id.as_str()).copied());
+        let verification = self.with_landed(entry, of(entry, newest.get(entry.id.as_str()).copied()));
         value["verification"] = verification.as_ref().map(Verification::to_json).unwrap_or(Value::Null);
         value["since"] = self.since(entry).map(Since::to_json).unwrap_or(Value::Null);
         value["verify"] = json!(entry.verify);
@@ -407,15 +430,7 @@ fn since_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &dy
     let oldest = looks.iter().map(Look::time).min().unwrap_or_default();
     let Some(history) = read_history(app, head, oldest) else { return BTreeMap::new() };
     let commits = parse_commits(&history);
-    let landings = if looks.iter().any(|l| matches!(l.from, Start::Ledger { .. })) {
-        let rel = ledger::rel_path(app);
-        app.repo
-            .git_opt(&["log", "-p", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", "--format=%x00%H", head, "--", &rel])
-            .map(|log| parse_landings(&log))
-            .unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
+    let landings = if looks.iter().any(|l| matches!(l.from, Start::Ledger { .. })) { read_landings(app, head) } else { HashMap::new() };
     let store = app.store();
     let since = count(&looks, &commits, &landings, head, &|f| store.is_store_path(f));
     if let Ok(text) = serde_json::to_string(&Cache { key, since: since.clone() }) {
@@ -423,6 +438,80 @@ fn since_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &dy
         let _ = util::write_atomic(&path, &text);
     }
     since
+}
+
+/// For every ledger line in HEAD's history, the commit that first added it.
+fn read_landings(app: &App, head: &str) -> HashMap<(String, String), String> {
+    let rel = ledger::rel_path(app);
+    app.repo
+        .git_opt(&["log", "-p", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", "--format=%x00%H", head, "--", &rel])
+        .map(|log| parse_landings(&log))
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct LandedCache {
+    key: String,
+    landed: BTreeMap<String, String>,
+}
+
+/// By entry file, the commit in HEAD's history that landed each selected entry's verification: the
+/// commit that first added its newest ledger line, or for a `checked:` date alone the last commit
+/// that changed its file — unless the file has uncommitted changes, since the date may be one of them.
+/// Cached per HEAD and verifications; the working-tree check is not.
+fn landed_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &dyn Fn(&Entry) -> bool) -> BTreeMap<String, String> {
+    let newest = ledger::latest(lines, false);
+    let targets: Vec<(&Entry, Verification)> =
+        entries.iter().filter(|e| want(e)).filter_map(|e| Some((e, of(e, newest.get(e.id.as_str()).copied())?))).collect();
+    if targets.is_empty() {
+        return BTreeMap::new();
+    }
+    let files: Vec<&str> = targets.iter().filter(|(_, v)| v.source == "frontmatter").map(|(e, _)| e.rel_path.as_str()).collect();
+    let fingerprint: String = targets.iter().map(|(e, v)| format!("{}|{}|{}|{};", e.id, e.rel_path, v.source, v.at)).collect();
+    let key = format!("{head}:{}", util::short_hash(&fingerprint));
+    let path = app.repo.worktree_state_dir().join("verification-landed.json");
+    let cached = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<LandedCache>(&t).ok()).filter(|c| c.key == key);
+    let mut landed = match cached {
+        Some(c) => c.landed,
+        None => {
+            let mut landed = BTreeMap::new();
+            if targets.iter().any(|(_, v)| v.source == "ledger") {
+                let landings = read_landings(app, head);
+                for (e, v) in targets.iter().filter(|(_, v)| v.source == "ledger") {
+                    if let Some(sha) = landings.get(&(e.id.clone(), v.at.clone())) {
+                        landed.insert(e.rel_path.clone(), sha.clone());
+                    }
+                }
+            }
+            if !files.is_empty() {
+                let mut args = vec!["log", "-z", "--no-renames", "--name-only", "--format=%x00%H", head, "--"];
+                args.extend(files.iter().copied());
+                if let Ok(log) = app.repo.git(&args) {
+                    // newest first: the first commit that names a file is the last that changed it
+                    for (sha, paths) in crate::freshness::parse_log(&log) {
+                        for p in paths.into_iter().filter(|p| files.contains(p)) {
+                            landed.entry(p.to_string()).or_insert_with(|| sha.trim().to_string());
+                        }
+                    }
+                }
+            }
+            if let Ok(text) = serde_json::to_string(&LandedCache { key, landed: landed.clone() }) {
+                let _ = std::fs::create_dir_all(app.repo.worktree_state_dir());
+                let _ = util::write_atomic(&path, &text);
+            }
+            landed
+        }
+    };
+    if !files.is_empty() {
+        let mut args = vec!["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all", "--"];
+        args.extend(files.iter().copied());
+        if let Ok(status) = app.repo.git(&args) {
+            for dirty in status.split('\0').filter_map(|l| l.get(3..)) {
+                landed.remove(dirty);
+            }
+        }
+    }
+    landed
 }
 
 /// Non-merge commits of HEAD from two days before the oldest look (the count then compares exact
@@ -479,7 +568,7 @@ pub fn annotate_result(app: &App, all: &[Entry], result: &mut Value) {
         all.iter().find(|e| Some(e.rel_path.as_str()) == file && e.id == id).or_else(|| all.iter().find(|e| e.id == id))
     };
     let wanted: BTreeSet<String> = targets.iter().filter_map(|v| find(v)).map(|e| e.rel_path.clone()).collect();
-    let ctx = Context::load(app, all, &|e| wanted.contains(&e.rel_path));
+    let ctx = Context::load_landed(app, all, &|e| wanted.contains(&e.rel_path));
     let newest = ctx.newest();
     let confirmations = ledger::latest(&ctx.lines, true);
     for v in targets {
@@ -914,6 +1003,47 @@ mod repo_tests {
         assert_eq!(err("gone"), "operation_conflict");
         assert!(!f.0.join("ran").exists(), "an inactive entry's command never runs");
         assert_eq!(err("nope"), "not_found");
+    }
+
+    #[test]
+    fn a_verification_says_which_commit_landed_it() {
+        let f = Fixture::new();
+        f.entry("cached", "checked: 2026-01-11\n", "Only a date in the file.");
+        f.entry("looked", "", "Confirmed through the ledger.");
+        f.write("src/lib.rs", "\n");
+        let seed = f.commit("seed");
+        f.write("src/lib.rs", "pub fn a() {}\n");
+        f.commit("feat: a");
+        let app = f.app();
+        let cached = get(&app, "cached")["verification"].clone();
+        assert_eq!(
+            (cached["source"].clone(), cached["landed"].clone()),
+            (json!("frontmatter"), json!(seed)),
+            "the last commit of its file"
+        );
+        assert_eq!(get(&app, "looked")["verification"], Value::Null);
+
+        crate::api_write::confirm_ids(&app, &["looked".into()], "read", None);
+        let staged = get(&app, "looked")["verification"].clone();
+        assert_eq!(staged["source"], "ledger");
+        assert_eq!(staged["landed"], Value::Null, "only staged");
+        let landed = f.commit("docs: looked still holds");
+        assert_eq!(get(&app, "looked")["verification"]["landed"], landed.as_str());
+        assert_eq!(get(&app, "looked")["since"]["commits"], 0);
+        let listed = ok(&app, "entries.list", json!({}));
+        let row = listed["entries"].as_array().unwrap().iter().find(|e| e["id"] == "looked").unwrap().clone();
+        assert_eq!(row["verification"]["landed"], landed.as_str());
+
+        // a later commit leaves it where it landed; a `checked:` date edited in the working tree has not landed
+        f.write("src/lib.rs", "pub fn a() -> u8 { 1 }\n");
+        f.commit("feat: a returns one");
+        assert_eq!(get(&app, "looked")["verification"]["landed"], landed.as_str());
+        assert_eq!(get(&app, "looked")["since"]["commits"], 1);
+        f.write(".ai/conventions/cached.md", &f.read(".ai/conventions/cached.md").replace("2026-01-11", "2026-01-12"));
+        assert_eq!(get(&app, "cached")["verification"]["landed"], Value::Null);
+        // the brief has no use for it
+        let brief = crate::ops::brief(&app, &["src/lib.rs".into()], 6000, false);
+        assert!(brief.contains("verified read at"), "{brief}");
     }
 
     #[test]
