@@ -2,6 +2,13 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+**Skills for knowledge maintenance, and flows in the brief.**
+
+- **Skills.** `kontext connect skills --write` installs four `SKILL.md` recipes into `.claude/skills/` (project scope, to commit): `kontext-audit` (a budgeted look at the entries most likely stale: confirm, challenge or supersede, never delete), `kontext-flows` (reorganise the store into flows), `kontext-verify` (give entries a `verify` command) and `kontext-merge` (find duplicates and conflicts with `entries.related`, draft one superseding entry per group). They are compiled into the binary; re-running the command after an upgrade brings the files back to the shipped text. See [Claude Code](../agent-integrations/02-claude-code.md#skills).
+- **Flows.** An `architecture` entry with id `flow-<name>` (or tagged `flow`) is a curated trail through the knowledge along one process: a `## Trail` of `[[id]] — sentence` steps. A focused `ctx_brief` lists the flows whose `paths` overlap the focus, with their step count, under *Flows through the focus*; an unfocused brief says in one line how many flows exist. See [Flows](../concepts/02-knowledge-store.md#flows).
+
 ## 0.7.0 (2026-10-27)
 
 **A capture names the command that proved it, and a verification says where it landed.**

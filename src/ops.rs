@@ -770,6 +770,22 @@ pub fn module_docs(entries: &[Entry]) -> Vec<&Entry> {
     entries.iter().filter(|e| e.kind == "architecture" && e.id.starts_with("mod-")).collect()
 }
 
+/// Flows: architecture entries that are a curated trail through the knowledge along one process
+/// (`flow-<name>`, or tagged `flow`), the shape the `kontext-flows` skill writes.
+pub fn flow_docs(entries: &[Entry]) -> Vec<&Entry> {
+    entries
+        .iter()
+        .filter(|e| e.kind == "architecture" && e.is_active() && (e.id.starts_with("flow-") || e.tags.iter().any(|t| t == "flow")))
+        .collect()
+}
+
+/// How many numbered `[[id]]` steps a flow's trail has.
+pub fn trail_steps(body: &str) -> usize {
+    body.lines()
+        .filter(|l| l.trim_start().split_once(". ").is_some_and(|(n, rest)| n.parse::<u32>().is_ok() && rest.starts_with("[[")))
+        .count()
+}
+
 pub fn init_progress(entries: &[Entry]) -> (usize, usize) {
     let mods = module_docs(entries);
     let done = mods.iter().filter(|e| e.get_extra("deepened").is_some()).count();
@@ -995,6 +1011,9 @@ fn changed_since(app: &App, entries: &[Entry], refs: &dyn Fn(&Entry) -> String) 
     }
     Some((format!("\n## {heading}\n{}\n", lines.join("\n")), Some(head)))
 }
+
+/// Flows listed in a focused brief before the rest are pointed at.
+const FLOWS_SHOWN: usize = 4;
 
 /// Said once in a brief that lists a governing entry whose paths changed since its verification.
 pub(crate) const READ_BEFORE_CHANGING: &str =
@@ -1308,6 +1327,30 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
     }
     if changed_paths {
         add(&mut out, &format!("\n{READ_BEFORE_CHANGING}\n"), &mut budget_left);
+    }
+
+    // flows: the trails a reader follows along the processes the task touches; an unfocused
+    // brief (a session start) only says in one line that they exist
+    let flows = flow_docs(&entries);
+    if !flows.is_empty() {
+        let mut ranked: Vec<(&Entry, f32)> = flows.iter().map(|e| (*e, relevance(e, &focus))).filter(|(_, r)| *r > 0.0).collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.title.cmp(&b.0.title)));
+        if !focused {
+            let sec = format!(
+                "\n{h2} Flows\n- {} trail(s) through the knowledge along a process — `ctx_brief` with `focus` lists the ones through your paths\n",
+                flows.len()
+            );
+            add(&mut out, &sec, &mut budget_left);
+        } else if !ranked.is_empty() {
+            let mut sec = format!("\n{h2} Flows through the focus\n");
+            for (e, _) in ranked.iter().take(FLOWS_SHOWN) {
+                let _ = writeln!(sec, "- {} ({} steps) <kx:{}>", marks.line(e, 140), trail_steps(&e.body), reference(e));
+            }
+            if ranked.len() > FLOWS_SHOWN {
+                let _ = writeln!(sec, "- … {} more: `ctx_search kinds=[architecture] query=flow`", ranked.len() - FLOWS_SHOWN);
+            }
+            add(&mut out, &sec, &mut budget_left);
+        }
     }
 
     // module map

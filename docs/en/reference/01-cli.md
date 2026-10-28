@@ -174,7 +174,7 @@ For a CI job: `kontext check` over every entry plus `kontext drift` over the com
 | Command | Meaning |
 | --- | --- |
 | `kontext mcp` | run the MCP server on stdio |
-| `kontext connect <target> [--write]` | `claude`, `claude-hooks`, `codex`, `cursor`, `opencode`, `agents-md` |
+| `kontext connect <target> [--write]` | `claude`, `claude-hooks`, `skills`, `codex`, `cursor`, `opencode`, `agents-md` |
 | `kontext call <tool> ['<json>']` | call an agent tool locally, e.g. `kontext call ctx_why '{"target":"src/api"}'` |
 
 ## Maintenance

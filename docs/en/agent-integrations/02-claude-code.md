@@ -57,6 +57,23 @@ kontext connect claude-hooks --write
 | `/mcp__kontext__kontext-commit` | prepare the current change for commit |
 | `/mcp__kontext__kontext-reflect` | capture what this session decided or learned |
 
+## Skills {#skills}
+
+Four recipes for knowledge maintenance ship with the binary as `SKILL.md` files. Install them into the project (commit them, so the team's agents share them):
+
+```sh
+kontext connect skills --write        # .claude/skills/kontext-*/SKILL.md
+```
+
+| Skill | Use |
+| --- | --- |
+| `kontext-audit` | look at the entries most likely stale within a budget; confirm, challenge or supersede each, never delete |
+| `kontext-flows` | reorganise the store into [flows](../concepts/02-knowledge-store.md#flows): curated trails through the entries, one jj change or commit per flow |
+| `kontext-verify` | give entries a `verify` command that proves the claim, so `kontext verify` re-runs it |
+| `kontext-merge` | find entries that say the same thing or disagree (`entries.related`) and draft one superseding entry per group |
+
+Each one ends in the local inbox or staged files for a person to review and commit; nothing in `.ai/` changes before that. Re-running `connect skills --write` after an upgrade brings the files back to the shipped text. The same files work in any client that reads the `SKILL.md` layout.
+
 ## CLAUDE.md
 
 ```sh

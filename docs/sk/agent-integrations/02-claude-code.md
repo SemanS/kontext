@@ -57,6 +57,23 @@ kontext connect claude-hooks --write
 | `/mcp__kontext__kontext-commit` | príprava aktuálnej zmeny na commit |
 | `/mcp__kontext__kontext-reflect` | zachytenie toho, čo sa v tejto session rozhodlo alebo zistilo |
 
+## Skills {#skills}
+
+Štyri recepty na údržbu znalostí sa dodávajú s binárkou ako súbory `SKILL.md`. Nainštaluj ich do projektu (a commitni, aby ich zdieľali agenti celého tímu):
+
+```sh
+kontext connect skills --write        # .claude/skills/kontext-*/SKILL.md
+```
+
+| Skill | Použitie |
+| --- | --- |
+| `kontext-audit` | v rámci rozpočtu sa pozrie na záznamy, ktoré sú najskôr zastarané; každý potvrdí, spochybní alebo nahradí, nikdy nemaže |
+| `kontext-flows` | preusporiada sklad do [flows](../concepts/02-knowledge-store.md#flows): kurátorských trás cez záznamy, jedna jj zmena alebo commit na flow |
+| `kontext-verify` | dá záznamom príkaz `verify`, ktorý tvrdenie dokáže, aby ho `kontext verify` vedel spustiť znova |
+| `kontext-merge` | nájde záznamy, ktoré hovoria to isté alebo si odporujú (`entries.related`), a navrhne jeden nahrádzajúci záznam na skupinu |
+
+Každý končí v lokálnom inboxe alebo v stagnutých súboroch, ktoré človek skontroluje a commitne; v `.ai/` sa pred tým nič nemení. Opätovné `connect skills --write` po aktualizácii vráti súbory na dodávaný text. Tie isté súbory fungujú v každom klientovi, ktorý číta rozloženie `SKILL.md`.
+
 ## CLAUDE.md
 
 ```sh

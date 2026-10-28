@@ -13,6 +13,7 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Changed since … | knowledge added, changed or removed since this worktree's last brief, at most five lines ([below](#changed)) |
 | Decisions | active decisions, most relevant to the focus first, one line each (up to `brief.max_decisions`) |
 | Conventions · Learnings & pitfalls · Incidents | one line each, focus-ranked |
+| Flows through the focus | with a focus, the [flows](02-knowledge-store.md#flows) whose `paths` overlap it (up to four, with their step count); an unfocused brief says in one line how many flows exist |
 | Modules | module summaries (up to `brief.max_modules`); for focused modules the start of their overview |
 | Submodules | a section for a submodule with its own knowledge when focus paths lie in it, or when this repository has none; otherwise a one-line pointer |
 | Local notes | notes in this clone's inbox (team candidates and private notes) that match the focus, or the newest three |

@@ -174,7 +174,7 @@ Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad c
 | Príkaz | Význam |
 | --- | --- |
 | `kontext mcp` | spustí MCP server na stdio |
-| `kontext connect <target> [--write]` | `claude`, `claude-hooks`, `codex`, `cursor`, `opencode`, `agents-md` |
+| `kontext connect <target> [--write]` | `claude`, `claude-hooks`, `skills`, `codex`, `cursor`, `opencode`, `agents-md` |
 | `kontext call <tool> ['<json>']` | zavolá nástroj agenta lokálne, napr. `kontext call ctx_why '{"target":"src/api"}'` |
 
 ## Údržba

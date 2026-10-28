@@ -2,6 +2,13 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané
+
+**Skills na údržbu znalostí a flows v briefe.**
+
+- **Skills.** `kontext connect skills --write` nainštaluje štyri recepty `SKILL.md` do `.claude/skills/` (projektový rozsah, na commitnutie): `kontext-audit` (pohľad s rozpočtom na záznamy, ktoré sú najskôr zastarané: potvrdiť, spochybniť alebo nahradiť, nikdy nemazať), `kontext-flows` (preusporiadanie skladu do flows), `kontext-verify` (príkaz `verify` pre záznamy) a `kontext-merge` (duplicity a rozpory cez `entries.related`, jeden nahrádzajúci záznam na skupinu). Sú skompilované do binárky; opätovné spustenie po aktualizácii vráti súbory na dodávaný text. Pozri [Claude Code](../agent-integrations/02-claude-code.md#skills).
+- **Flows.** Záznam druhu `architecture` s id `flow-<name>` (alebo štítkom `flow`) je kurátorská trasa cez znalosti pozdĺž jedného procesu: `## Trail` s krokmi `[[id]] — veta`. `ctx_brief` s focusom vypíše flows, ktorých `paths` sa s focusom prekrývajú, s počtom krokov, pod *Flows cez focus*; brief bez focusu povie v jednom riadku, koľko flows existuje. Pozri [Flows](../concepts/02-knowledge-store.md#flows).
+
 ## 0.7.0 (2026-10-27)
 
 **Zachytenie uvedie príkaz, ktorý ho dokázal, a overenie povie, kde pristálo.**

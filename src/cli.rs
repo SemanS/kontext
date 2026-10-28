@@ -260,9 +260,9 @@ enum Cmd {
         /// Print this preset's TOML
         name: Option<String>,
     },
-    /// Wire an agent client: claude, claude-hooks, codex, cursor, opencode, agents-md
+    /// Wire an agent client: claude, claude-hooks, skills, codex, cursor, opencode, agents-md
     Connect {
-        /// claude, claude-hooks, codex, cursor, opencode or agents-md
+        /// claude, claude-hooks, skills, codex, cursor, opencode or agents-md
         target: String,
         /// Write the config (default: print what to add)
         #[arg(long)]
@@ -301,7 +301,7 @@ struct InitArgs {
     /// Do not install git hooks
     #[arg(long)]
     no_hooks: bool,
-    /// Also wire agent clients (comma-separated: claude,claude-hooks,cursor,opencode,agents-md)
+    /// Also wire agent clients (comma-separated: claude,claude-hooks,skills,cursor,opencode,agents-md)
     #[arg(long, value_delimiter = ',')]
     connect: Vec<String>,
     /// Run pending deepen tasks with an llm adapter

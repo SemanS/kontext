@@ -32,6 +32,10 @@ Názov adresára aj umiestnenie každého druhu sa dajú nastaviť ([konfigurác
 
 Pri zachytávaní sa akceptujú aliasy: `adr` → decision, `pitfall`/`gotcha` → learning (so štítkom `pitfall`), `note`/`lesson` → learning, `rule`/`guideline` → convention, `postmortem`/`outage` → incident.
 
+### Flows {#flows}
+
+Sklad, ktorý rástol zachytávaním, je kopa zoradená podľa dátumu a druhu. **Flow** je záznam druhu `architecture`, ktorý ju číta ako proces: `architecture/flows/flow-<name>.md`, id `flow-<name>` (alebo štítok `flow`), `paths` s modulmi, cez ktoré proces prechádza, a `## Trail` — číslovaný zoznam `[[id-záznamu]] — jedna veta` v poradí, v akom čitateľ záznamy stretáva, s nadpismi `###` pre etapy. Flow záznamy prepája a nič na nich nemení: nekopíruje, nepremenúva, nevyraďuje, takže trailery, denník overení a ostatné odkazy ďalej platia. Brief s focusom vypíše flows cez cesty focusu s počtom krokov; píše ich [skill](../agent-integrations/02-claude-code.md#skills) `kontext-flows`.
+
 ## Formát záznamu
 
 Predvolený štýl je plochý front matter a krátke telo:

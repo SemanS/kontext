@@ -32,6 +32,10 @@ The directory name and every kind's location are configurable ([configuration](.
 
 Aliases are accepted when capturing: `adr` → decision, `pitfall`/`gotcha` → learning (tagged `pitfall`), `note`/`lesson` → learning, `rule`/`guideline` → convention, `postmortem`/`outage` → incident.
 
+### Flows {#flows}
+
+A store that grew by capture is a pile sorted by date and kind. A **flow** is an `architecture` entry that reads it as a process: `architecture/flows/flow-<name>.md`, id `flow-<name>` (or tagged `flow`), `paths` naming the modules the process passes through, and a `## Trail` — a numbered list of `[[entry-id]] — one sentence` in the order a reader meets the entries, with `###` headings for stages. A flow links entries and changes nothing about them: no copy, no rename, no retirement, so trailers, the ledger and other links keep resolving. A focused brief lists the flows through the focus paths with their step count; the `kontext-flows` [skill](../agent-integrations/02-claude-code.md#skills) writes them.
+
 ## Entry format
 
 The default style is flat front matter plus a short body:

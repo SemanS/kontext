@@ -29,6 +29,7 @@ mod repo;
 mod route;
 mod secrets;
 mod signals;
+mod skills;
 mod store;
 mod template;
 mod threads;

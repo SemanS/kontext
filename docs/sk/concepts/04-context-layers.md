@@ -13,6 +13,7 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Zmenené od … | znalosti pridané, zmenené alebo odobrané od posledného briefu v tomto worktree, najviac päť riadkov ([nižšie](#changed)) |
 | Rozhodnutia | aktívne rozhodnutia, najrelevantnejšie pre focus ako prvé, každé na jeden riadok (najviac `brief.max_decisions`) |
 | Konvencie · Poznatky a úskalia · Incidenty | každé na jeden riadok, zoradené podľa focusu |
+| Flows cez focus | pri focuse [flows](02-knowledge-store.md#flows), ktorých `paths` sa s ním prekrývajú (najviac štyri, s počtom krokov); brief bez focusu povie v jednom riadku, koľko flows existuje |
 | Moduly | zhrnutia modulov (najviac `brief.max_modules`); pri moduloch vo focuse aj začiatok ich prehľadu |
 | Submoduly | sekcia pre submodul s vlastnými znalosťami, keď v ňom ležia cesty z focusu alebo keď tento repozitár žiadne nemá; inak jednoriadkový odkaz |
 | Lokálne poznámky | poznámky v inboxe tohto klonu (tímoví kandidáti aj súkromné poznámky), ktoré zodpovedajú focusu, inak tri najnovšie |

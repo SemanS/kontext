@@ -1,11 +1,11 @@
-//! Wire agent clients to the kontext MCP server (and, optionally, auto-inject the brief).
+//! Wire agent clients to the kontext MCP server (and, optionally, auto-inject the brief or install the skills).
 use crate::app::App;
 use crate::util;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub const TARGETS: &[&str] = &["claude", "claude-hooks", "codex", "cursor", "opencode", "agents-md"];
+pub const TARGETS: &[&str] = &["claude", "claude-hooks", "skills", "codex", "cursor", "opencode", "agents-md"];
 
 const AGENTS_START: &str = "<!-- kontext:start -->";
 const AGENTS_END: &str = "<!-- kontext:end -->";
@@ -107,6 +107,7 @@ pub fn connect(app: &App, target: &str, write: bool) -> Result<String> {
                 if changed { "updated" } else { "already configured in" }
             ))
         }
+        "skills" => crate::skills::connect(root, write),
         "cursor" => {
             let path = root.join(".cursor").join("mcp.json");
             if !write {

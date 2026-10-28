@@ -993,3 +993,48 @@ fn upstream_knowledge_and_inner_worktrees() {
     let brief = s.kontext(&["brief", "--no-adapters"]);
     assert!(!brief.contains("a nested repository"), "{brief}");
 }
+
+#[test]
+fn flows_in_brief_and_skills_connect() {
+    let s = Sandbox::new("flows");
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write(".ai/kontext.toml", "[project]\nname = \"demo\"\n");
+    s.write(
+        ".ai/decisions/use-cache.md",
+        "---\nid: use-cache\nkind: decision\ntitle: Use cache\nstatus: accepted\ndate: 2025-01-01\npaths: [src/**]\n---\n\nCache reads.\n",
+    );
+    s.write(
+        ".ai/learnings/cache-warms-late.md",
+        "---\nid: cache-warms-late\nkind: learning\ntitle: The cache warms late\ndate: 2025-01-02\npaths: [src/cache.rs]\n---\n\nThe first read misses.\n",
+    );
+    s.write(
+        ".ai/architecture/flows/flow-read.md",
+        "---\nid: flow-read\nkind: architecture\ntitle: \"Flow: a read, from the request to the cache\"\nsummary: \"Starts at the request and ends in the cache.\"\ntags: [flow, cache]\npaths: [src/**]\ndate: 2025-01-03\n---\n\nA read passes the cache.\n\n## Trail\n\n### Request\n1. [[use-cache]] — Settles that reads are cached.\n2. [[cache-warms-late]] — Bites on the first read.\n",
+    );
+    s.write(
+        ".ai/architecture/flows/flow-deploy.md",
+        "---\nid: flow-deploy\nkind: architecture\ntitle: \"Flow: a deploy\"\nsummary: \"Tag to host.\"\ntags: [flow]\npaths: [deploy/**]\ndate: 2025-01-03\n---\n\nA deploy.\n\n## Trail\n\n1. [[use-cache]] — Warms the cache after a switch.\n",
+    );
+    s.write("src/cache.rs", "fn main() {}\n");
+    s.ok_git(&["add", "-A"]);
+    s.ok_git(&["commit", "-q", "-m", "init"]);
+
+    let focused = s.kontext(&["brief", "--no-adapters", "--focus", "src/cache.rs"]);
+    assert!(focused.contains("## Flows through the focus\n- Flow: a read, from the request to the cache — Starts at the request and ends in the cache. (2 steps) <kx:flow-read>"), "{focused}");
+    let section = focused.split("## Flows through the focus").nth(1).and_then(|s| s.split("\n## ").next()).unwrap_or_default();
+    assert!(!section.contains("deploy"), "a flow off the focus paths is not listed: {focused}");
+    let unfocused = s.kontext(&["brief", "--no-adapters"]);
+    assert!(unfocused.contains("## Flows\n- 2 trail(s) through the knowledge along a process"), "{unfocused}");
+    assert!(!unfocused.contains("Flows through the focus"), "{unfocused}");
+
+    let listed = s.kontext(&["connect", "skills"]);
+    assert!(listed.contains("kontext-flows/SKILL.md — Reorganise"), "{listed}");
+    assert!(!s.repo.join(".claude").exists(), "listing writes nothing");
+    let written = s.kontext(&["connect", "skills", "--write"]);
+    assert!(written.starts_with("skills: wrote 4 of 4 into .claude/skills/"), "{written}");
+    let audit = std::fs::read_to_string(s.repo.join(".claude/skills/kontext-audit/SKILL.md")).unwrap();
+    assert!(audit.starts_with("---\nname: kontext-audit\ndescription: "), "{audit}");
+    let again = s.kontext(&["connect", "skills", "--write"]);
+    assert!(again.starts_with("skills: .claude/skills/ already has the current 4 skills"), "{again}");
+    let _ = std::fs::remove_dir_all(&s.root);
+}
