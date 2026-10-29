@@ -307,14 +307,12 @@ pub fn check_belongs(f: &Found, roots: &[String], force: bool) -> Result<()> {
 
 /// The redaction patterns for text about to leave this machine, from every config layer; an error
 /// when any of them does not compile (nothing is sent until it is fixed).
-#[allow(dead_code)] // wired by the integrator
 pub fn redaction(loaded: &crate::config::LoadedConfig) -> Result<Vec<regex::Regex>> {
     crate::secrets::redaction(loaded)
 }
 
 /// [`render`] with the configuration's redaction patterns, refusing when one does not compile:
 /// what ctx_threads, distill and autopilot call.
-#[allow(dead_code)] // wired by the integrator
 pub fn render_checked(t: &Thread, repo_root: &Path, loaded: &crate::config::LoadedConfig) -> Result<String> {
     Ok(render(t, repo_root, &redaction(loaded)?))
 }
@@ -325,14 +323,12 @@ pub fn render_checked(t: &Thread, repo_root: &Path, loaded: &crate::config::Load
 /// Per clone, what `kontext distill` already sent to a model: by thread (`claude:<id>`), the size
 /// it had and the hashes of the parts processed. Kept in `.git/kontext/distilled.json`, never
 /// committed.
-#[allow(dead_code)] // wired by the integrator
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Distilled {
     #[serde(default)]
     pub threads: std::collections::BTreeMap<String, DistilledThread>,
 }
 
-#[allow(dead_code)] // wired by the integrator
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DistilledThread {
     /// The transcript's size in bytes when it was last distilled.
@@ -343,23 +339,19 @@ pub struct DistilledThread {
 }
 
 /// The key a thread is recorded under.
-#[allow(dead_code)] // wired by the integrator
 pub fn distilled_key(f: &Found) -> String {
     format!("{}:{}", f.agent.as_str(), f.id)
 }
 
 /// The hash a rendered part is recorded under.
-#[allow(dead_code)] // wired by the integrator
 pub fn part_hash(part: &str) -> String {
     util::short_hash(part)
 }
 
-#[allow(dead_code)] // wired by the integrator
 fn distilled_path(repo: &crate::repo::Repo) -> PathBuf {
     repo.state_dir().join("distilled.json")
 }
 
-#[allow(dead_code)] // wired by the integrator
 impl Distilled {
     /// This clone's record (empty when there is none or it does not parse).
     pub fn load(repo: &crate::repo::Repo) -> Distilled {
@@ -400,7 +392,6 @@ impl Distilled {
 
 /// How a prompt names the repository: its path without the host (`team/app` for
 /// `gitlab.client.internal/team/app`), so an internal git host does not leave the machine.
-#[allow(dead_code)] // wired by the integrator
 pub fn prompt_repo_name(repo_id: &str) -> String {
     let id = repo_id.trim_matches('/');
     match id.split_once('/') {
@@ -411,7 +402,6 @@ pub fn prompt_repo_name(repo_id: &str) -> String {
 
 /// The `k` titles of `known` that share the most words with `text`: what a prompt needs to avoid
 /// duplicates, instead of the whole index.
-#[allow(dead_code)] // wired by the integrator
 pub fn relevant_titles(known: &[String], text: &str, k: usize) -> Vec<String> {
     let words = |s: &str| -> HashSet<String> {
         s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() > 3).map(|w| w.to_lowercase()).collect()
@@ -425,7 +415,6 @@ pub fn relevant_titles(known: &[String], text: &str, k: usize) -> Vec<String> {
 
 /// Titles of the candidates someone dropped from the inbox, for distill's `known` list: what was
 /// dismissed is not proposed again.
-#[allow(dead_code)] // wired by the integrator
 pub fn dismissed_titles(repo: &crate::repo::Repo) -> Vec<String> {
     let dir = crate::inbox::Inbox::open(repo).dir.join(".dismissed");
     let Ok(files) = std::fs::read_dir(dir) else { return Vec::new() };

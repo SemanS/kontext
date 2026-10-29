@@ -171,7 +171,8 @@ fn tool_list() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {
                 "focus": arr("Paths (files/dirs) or topic words to prioritise"),
                 "budget_tokens": {"type": "integer", "description": "Approximate size limit (default from config, ~1400)"},
-                "adapters": {"type": "boolean", "description": "Include sections from connected adapters with a brief op (default true)"}
+                "adapters": {"type": "boolean", "description": "Include sections from connected adapters with a brief op (default true)"},
+                "session_id": s("Your agent session id: the brief shares one session budget with the edit hooks")
             }}
         }),
         json!({
@@ -191,7 +192,9 @@ fn tool_list() -> Vec<Value> {
             "description": "Read a hit by URI: kx:<id> (knowledge entry), file:<path>[#section], git:<sha>, inbox:<id>, or an adapter URI such as viking://… Levels: 0 = one line, 1 = overview (default), 2 = full.",
             "inputSchema": {"type": "object", "properties": {
                 "uri": s("URI from ctx_search / ctx_brief, or a plain repo path"),
-                "level": {"type": "integer", "enum": [0, 1, 2]}
+                "level": {"type": "integer", "enum": [0, 1, 2]},
+                "part": {"type": "integer", "description": "Page of a long text (1 = first)"},
+                "offset": {"type": "integer", "description": "Start at this character"}
             }, "required": ["uri"]}
         }),
         json!({
@@ -284,6 +287,7 @@ fn tool_list() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["list", "show", "promote", "drop", "verify"]},
                 "ids": arr("Candidate ids for show/promote/drop/verify (verify: one id)"),
+                "reason": s("For action=drop: why, kept with the dismissed candidate"),
                 "verify": s("For action=verify: the command that proved the draft, one line of at most 500 characters run with sh from the repository root; \"\" clears it")
             }}
         }),
@@ -308,7 +312,7 @@ fn tool_list() -> Vec<Value> {
             "name": "ctx_init_submit",
             "description": "Submit the result of a ctx_init task. Writes module summaries, the project purpose or decision records into the repo's knowledge store (reviewed later in the diff).",
             "inputSchema": {"type": "object", "properties": {
-                "task_id": s("Id from ctx_init, e.g. mod:apps-web, dec:libs-billing, purpose"),
+                "task_id": s("Id from ctx_init, e.g. mod:apps-web, dec:libs-billing-1a2b3c4, purpose"),
                 "summary": s("One line, at most 200 characters: what it is for"),
                 "overview": s("Markdown, 5-15 lines"),
                 "decisions": {"type": "array", "description": "For dec:* tasks (at most 3)", "items": {"type": "object", "properties": {
@@ -369,16 +373,28 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
     match name {
         "ctx_brief" => {
             let focus = list_arg(args, "focus");
-            let budget = int_arg(args, "budget_tokens").unwrap_or(app.cfg().brief.budget_tokens);
+            let mut budget = int_arg(args, "budget_tokens").unwrap_or(app.cfg().brief.budget_tokens);
             let with_adapters = args.get("adapters").and_then(|v| v.as_bool()).unwrap_or(true);
-            Ok(ops::brief(app, &focus, budget, with_adapters))
+            // one budget per agent session, shared with the edit hooks: what they gave is not given twice
+            let session = brief_session(args);
+            let hooks = crate::hook::settings(app);
+            if let Some(id) = session.as_deref().filter(|_| hooks.enabled) {
+                budget = budget.min(crate::hook::remaining_tokens(app, id));
+            }
+            let text = ops::brief(app, &focus, budget, with_adapters);
+            if let Some(id) = session.as_deref().filter(|_| hooks.enabled)
+                && let Err(e) = crate::hook::record_spend(&app.repo, id, util::est_tokens(&text))
+            {
+                eprintln!("kontext: could not count the brief against session {id}: {e:#}");
+            }
+            Ok(text)
         }
         "ctx_search" => search_full(app, args).map(|o| o.text),
         "ctx_read" => {
             let uri = str_arg(args, "uri").ok_or_else(|| anyhow!("uri is required"))?;
             deny_private_paths(app, &uri)?;
             let level = int_arg(args, "level").unwrap_or(1).min(2) as u8;
-            ops::read(app, &uri, level)
+            ops::read_paged(app, &uri, level, ops::Paging { offset: int_arg(args, "offset"), part: int_arg(args, "part") })
         }
         "ctx_capture" => {
             // knowledge belongs to the repository that owns the paths it governs: a capture about
@@ -510,11 +526,11 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             if found.is_empty() {
                 bail!("no thread of this repository found for '{spec}'");
             }
-            let extra = crate::secrets::patterns(&app.cfg().secrets.redact);
             let mut text = String::new();
             for f in &found {
                 let t = threads::load(f)?;
-                text.push_str(&threads::render(&t, &app.repo.root, &extra));
+                // fails closed: a redaction pattern that does not compile stops the read
+                text.push_str(&threads::render_checked(&t, &app.repo.root, &app.loaded)?);
                 text.push_str("\n\n");
             }
             // a part has to fit one tool result: clients cut long ones (Codex at about 10k tokens)
@@ -582,11 +598,27 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                     })
                 }
                 "drop" => {
-                    for id in &ids {
-                        let e = inbox.get(id).ok_or_else(|| anyhow!("no inbox entry '{id}'"))?;
-                        inbox.remove(&e.id)?;
+                    if ids.is_empty() {
+                        bail!("ids is required");
                     }
-                    Ok(format!("Dropped {}.", ids.join(", ")))
+                    // every id is checked before anything changes
+                    for id in &ids {
+                        let e = inbox.get(id).ok_or_else(|| anyhow!("no inbox entry '{id}'; nothing was dropped"))?;
+                        if !crate::inbox::Origin::of(&app.repo, &e).is_ours() {
+                            return Err(crate::api::error(
+                                "worktree_conflict",
+                                format!("'{}' belongs to another active worktree; nothing was dropped", e.id),
+                            ));
+                        }
+                    }
+                    // the one write path: ownership, the locks and a `.dismissed` record (`inbox.drop`)
+                    let reason = str_arg(args, "reason");
+                    let mut dropped = Vec::new();
+                    for id in &ids {
+                        let out = crate::api_write::call(app, "inbox.drop", &json!({"id": id, "reason": reason}))?;
+                        dropped.push(out["id"].as_str().unwrap_or(id).to_string());
+                    }
+                    Ok(format!("Dropped {} (kept under inbox/.dismissed, never proposed again).", dropped.join(", ")))
                 }
                 other => bail!("unknown action '{other}'"),
             }
@@ -626,9 +658,20 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
         }
         "ctx_verify" => {
             let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
-            // TODO(agent B): call `crate::api_write::verify_with_transport(app, &req, Transport::Mcp)`
-            // when origin == "agent" (an unpinned command is returned, not run), once it lands.
-            let out = crate::api_write::verify(app, &json!({"id": id, "because": str_arg(args, "because")}))?;
+            let req = json!({"id": id, "because": str_arg(args, "because")});
+            // over MCP an unpinned command, or one on a dirty tree, is handed back, not run
+            let transport = if origin == "agent" { crate::api_write::Transport::Mcp } else { crate::api_write::Transport::Api };
+            let out = crate::api_write::verify_with_transport(app, &req, transport)?;
+            if out["ran"] == json!(false) {
+                return Ok(format!(
+                    "Not run {} ({}): `{}`\n{}\nTo record what you found, call ctx_confirm on {} (an agent stamp), never as a verify line.",
+                    out["id"].as_str().unwrap_or_default(),
+                    out["reason"].as_str().unwrap_or_default(),
+                    out["command"].as_str().unwrap_or_default(),
+                    out["note"].as_str().unwrap_or_default(),
+                    out["id"].as_str().unwrap_or_default(),
+                ));
+            }
             let passed = out["passed"] == json!(true);
             let how = match (out["timed_out"].as_bool(), out["exit_code"].as_i64()) {
                 (Some(true), _) => "timed out".to_string(),
@@ -923,19 +966,36 @@ fn named_entries<'e>(entries: &'e [crate::store::Entry], text: &str) -> Vec<&'e 
         .collect()
 }
 
+/// The agent session a `ctx_brief` belongs to: the `session_id` argument, or the session Claude Code
+/// runs the server in (`CLAUDE_SESSION_ID`).
+fn brief_session(args: &Value) -> Option<String> {
+    str_arg(args, "session_id").or_else(|| std::env::var("CLAUDE_SESSION_ID").ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
 /// The structured form of a text tool's answer, built from the answer and the request.
 fn structure(app: &App, name: &str, args: &Value, text: String) -> ToolOutput {
     let mut links = Vec::new();
     let structured = match name {
         "ctx_brief" | "ctx_why" => {
             let (entries, _) = app.entries();
-            // TODO(agent C): once `ops::governing_lines` lands, add its governing section here.
             let named = named_entries(&entries, &text);
             links = named.iter().map(|e| entry_link(&e.id, &e.title)).collect();
             let ids: Vec<&str> = named.iter().map(|e| e.id.as_str()).collect();
             if name == "ctx_brief" {
-                json!({"text": text, "focus": list_arg(args, "focus"),
-                    "budget_tokens": int_arg(args, "budget_tokens").unwrap_or(app.cfg().brief.budget_tokens), "entries": ids})
+                let focus = list_arg(args, "focus");
+                let budget = int_arg(args, "budget_tokens").unwrap_or(app.cfg().brief.budget_tokens);
+                // what governs each focus path, the same lines the edit hook gives
+                let governing: Vec<Value> = focus
+                    .iter()
+                    .map(|f| crate::route::focus_path(f))
+                    .filter(|f| f.contains('/') || f.contains('.') || crate::glob::is_glob(f))
+                    .filter_map(|p| {
+                        let lines = ops::governing_lines(app, p, budget);
+                        let ids: Vec<String> = named_entries(&entries, &lines).iter().map(|e| e.id.clone()).collect();
+                        (!lines.is_empty()).then(|| json!({"path": p, "text": lines, "entries": ids}))
+                    })
+                    .collect();
+                json!({"text": text, "focus": focus, "budget_tokens": budget, "entries": ids, "governing": governing})
             } else {
                 json!({"target": str_arg(args, "target").unwrap_or_default(), "text": text, "entries": ids})
             }

@@ -30,7 +30,6 @@ const MAX_RECENT: usize = 5;
 /// Capability strings for what this module adds to API v1 (`status.capabilities`): the
 /// `last_verified`, `since_verified`, `failing` and `amended_since` fields, and drift that needs a
 /// look at or after the last governed change and says where its base came from (`base_source`).
-#[allow(dead_code)] // wired by the integrator
 pub const CAPABILITIES: &[&str] = &["verification.last_verified", "drift.ordered"];
 
 /// The second a ledger time or a `checked` value names: a day counts from its start, so a ledger
@@ -201,7 +200,8 @@ impl Premise {
 static WIKI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\[\]|#\n]+)(?:[|#][^\[\]\n]*)?\]\]").expect("wiki link"));
 
 fn names(id: &str, list: &[String]) -> bool {
-    list.iter().any(|s| id == s || id.starts_with(&format!("{s}-")))
+    // an exact id, a path or ADR number naming it: never a prefix (`use-cents` is not `use-cents-2`)
+    list.iter().any(|s| crate::store::ref_matches(id, s))
 }
 
 /// The entries `entry` links to — `[[id]]` in its body, `supersedes`, an `extends` field — that are
@@ -527,7 +527,10 @@ fn since_all(
     (since, since_verified)
 }
 
-static LANDINGS: LazyLock<Mutex<HashMap<String, Arc<HashMap<(String, String), String>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// `(entry id, at)` of a ledger line → the commit that added it.
+type Landings = HashMap<(String, String), String>;
+
+static LANDINGS: LazyLock<Mutex<HashMap<String, Arc<Landings>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// For every ledger line in HEAD's history (bounded by `index.max_commits` commits of the ledger),
 /// the commit that first added it: one `git log -p` per HEAD and process, shared by every reader.
@@ -792,7 +795,6 @@ fn kill_group(pgid: u32) {
 
 /// Kill every verify command this process started and is still waiting for, with everything it
 /// started: the MCP server calls this when its client goes away.
-#[allow(dead_code)] // the MCP server calls it when its stdin closes
 pub fn kill_running_verifies() {
     let groups: Vec<u32> = RUNNING.lock().map(|g| g.iter().copied().collect()).unwrap_or_default();
     for pgid in groups {
@@ -1266,9 +1268,10 @@ mod repo_tests {
 
         // the brief says how each governing entry was verified and what changed since
         let brief = crate::ops::brief(&app, &["src/lib.rs".into()], 6000, false);
-        assert!(brief.contains(&format!("  verified read at {} (", &seed[..7])), "{brief}");
+        // a person's read names who looked; a stamp is never called verified
+        assert!(brief.contains(&format!("  read by Ana Test at {} (", &seed[..7])), "{brief}");
         assert!(brief.contains("; 1 commit on its paths since: feat: a returns one"), "{brief}");
-        assert!(brief.contains("verified bulk at"), "{brief}");
+        assert!(brief.contains("bulk stamp at"), "{brief}");
         assert_eq!(brief.matches(crate::ops::READ_BEFORE_CHANGING).count(), 1, "{brief}");
         let unfocused = crate::ops::brief(&app, &[], 6000, false);
         assert!(!unfocused.contains("verified ") && !unfocused.contains(crate::ops::READ_BEFORE_CHANGING));
@@ -1391,9 +1394,11 @@ mod repo_tests {
         assert_eq!(get(&app, "looked")["since"]["commits"], 1);
         f.write(".ai/conventions/cached.md", &f.read(".ai/conventions/cached.md").replace("2026-01-11", "2026-01-12"));
         assert_eq!(get(&app, "cached")["verification"]["landed"], Value::Null);
-        // the brief has no use for it
+        // the brief names who read it; a `checked:` date alone is never called verified
         let brief = crate::ops::brief(&app, &["src/lib.rs".into()], 6000, false);
-        assert!(brief.contains("verified read at"), "{brief}");
+        assert!(brief.contains("read by Ana Test at"), "{brief}");
+        assert!(brief.contains("checked (unrecorded) on 2026-01-12"), "{brief}");
+        assert!(!brief.contains("verified "), "{brief}");
     }
 
     #[test]

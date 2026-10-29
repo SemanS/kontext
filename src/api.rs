@@ -44,11 +44,13 @@ pub const FEATURES: &[&str] = &[
     "drafts.stage.amends.additive",
     "drafts.capture.extends",
     "drafts.confirm.operation_id",
+    // drafts.verify runs only a command a person pinned; otherwise untrusted_verify, nothing runs
+    "drafts.verify.pinned",
 ];
 
 /// The operations and the later inputs this binary supports.
 pub fn capabilities() -> Vec<&'static str> {
-    OPERATIONS.iter().chain(FEATURES).copied().collect()
+    OPERATIONS.iter().chain(FEATURES).chain(crate::verification::CAPABILITIES).copied().collect()
 }
 
 #[derive(Debug)]

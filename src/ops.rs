@@ -234,11 +234,15 @@ impl Marks {
     pub(crate) fn load(app: &App, entries: &[Entry]) -> Marks {
         let unapproved = if entries.is_empty() { Vec::new() } else { crate::api_read::unapproved_files(app) };
         let inbox = Inbox::open(&app.repo);
-        let against = |list: Vec<Entry>| -> HashSet<String> {
-            list.into_iter().filter(|c| c.kind == "challenge").filter_map(|c| c.get_extra("against")).collect()
+        let against = |list: &[Entry]| -> HashSet<String> {
+            list.iter().filter(|c| c.kind == "challenge").filter_map(|c| c.get_extra("against")).collect()
         };
-        let challenged = against(inbox.list());
-        let resolving = against(inbox.promoted());
+        // a challenge whose answer is staged stays in the inbox, marked `resolving`, until it lands
+        let (resolving_now, open): (Vec<Entry>, Vec<Entry>) =
+            inbox.list().into_iter().partition(|c| c.get_extra("resolving").is_some_and(|r| !r.is_empty()));
+        let challenged = against(&open);
+        let mut resolving = against(&resolving_now);
+        resolving.extend(against(&inbox.promoted()));
         Marks { unapproved, today: util::today(), challenged, resolving }
     }
 
@@ -499,7 +503,7 @@ fn nested_refs(text: &str, root: &str) -> String {
 /// The entries that replace `e`: named in its `superseded_by`, or naming it in their `supersedes`.
 fn replacements<'a>(e: &Entry, entries: &'a [Entry]) -> Vec<&'a Entry> {
     let mut out: Vec<&Entry> = e.superseded_by.iter().filter_map(|id| Store::find(entries, id)).collect();
-    for n in entries.iter().filter(|n| n.supersedes.iter().any(|s| *s == e.id)) {
+    for n in entries.iter().filter(|n| n.supersedes.iter().any(|s| Store::ref_matches(&e.id, s))) {
         if !out.iter().any(|o| o.id == n.id) {
             out.push(n);
         }
@@ -767,9 +771,25 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared
     if let Some(src) = req.source.as_deref().filter(|s| !s.is_empty()) {
         entry.set_extra("source", crate::store::FmValue::Str(src.to_string()));
     }
+    // references are written as the full ids they name today; an ambiguous one is refused, one the
+    // store does not have yet (a candidate's) stays as written
+    let (entries, _) = app.entries();
+    let mut supersedes: Vec<String> = Vec::new();
+    for s in &entry.supersedes {
+        let id = match crate::store::canonical_ref(&entries, s) {
+            Ok(id) => id,
+            Err(crate::store::RefError::Unknown(_)) => s.clone(),
+            Err(e) => return Err(crate::api::error("invalid_input", format!("supersedes '{s}': {e}"))),
+        };
+        if !supersedes.contains(&id) {
+            supersedes.push(id);
+        }
+    }
+    entry.supersedes = supersedes;
+    entry.body = crate::store::canonical_links(&entries, &entry.body)
+        .map_err(|e| crate::api::error("invalid_input", format!("a [[link]] in the body is {e}")))?;
     let links: Vec<String> = req.extends.iter().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
     if !links.is_empty() {
-        let (entries, _) = app.entries();
         entry.set_extra("extends", crate::store::FmValue::List(crate::api_write::extends_links(&entries, &links)?));
     }
     let masked: Vec<(String, Option<String>)> = req
@@ -1203,7 +1223,8 @@ fn entry_changes(app: &App, base: Option<&str>, head: &str) -> Option<Vec<EntryC
         }
         match (gone(old), e.status.as_deref()) {
             (false, Some("superseded")) => {
-                let mut by: Vec<String> = after.iter().filter(|n| n.supersedes.contains(&e.id)).map(|n| n.id.clone()).collect();
+                let mut by: Vec<String> =
+                    after.iter().filter(|n| n.supersedes.iter().any(|s| Store::ref_matches(&e.id, s))).map(|n| n.id.clone()).collect();
                 for id in &e.superseded_by {
                     if let Some(n) = Store::find(&after, id).filter(|n| !by.contains(&n.id)) {
                         by.push(n.id.clone());
@@ -1265,7 +1286,7 @@ fn changed_since(app: &App, entries: &[Entry], refs: &dyn Fn(&Entry) -> String) 
                 format!("- [{}] {} ({what}{replaces})", named(e), e.title)
             }
             // the replaced entry is named on its replacement's line when that is listed
-            "superseded" if listed.iter().any(|n| n.supersedes.iter().any(|s| *s == e.id)) => continue,
+            "superseded" if listed.iter().any(|n| n.supersedes.iter().any(|s| Store::ref_matches(&e.id, s))) => continue,
             "superseded" => {
                 let by: Vec<String> =
                     c.by.iter().map(|id| format!("[{}]", Store::find(entries, id).map(refs).unwrap_or_else(|| id.clone()))).collect();
@@ -1319,6 +1340,8 @@ pub(crate) fn look_text(v: &crate::verification::Verification) -> String {
         },
         ("agent", _) => format!("stamped by agent{at} ({date})"),
         ("bulk", _) => format!("bulk stamp{at} ({date})"),
+        // a `checked:` date in the file alone: nobody recorded who looked or at which commit
+        ("cache", _) => format!("checked (unrecorded) on {date}"),
         (k, _) if v.verified() => format!("verified {k}{at} ({date})"),
         (k, _) => format!("{k} stamp{at} ({date})"),
     }
@@ -1500,7 +1523,6 @@ fn governing_block(header: &str, lines: &[GovLine], budget: isize, compact_only:
 /// The compact governing lines for one path (a file about to be edited, existing or not), within
 /// `budget_tokens`: `- [id] Title (marks) · N commits since`, then `- also governing: [id] …` for
 /// what does not fit. Empty when nothing governs it. A path may be absolute inside the repository.
-#[allow(dead_code)] // the edit hook's entry point
 pub fn governing_lines(app: &App, path: &str, budget_tokens: usize) -> String {
     let p = std::path::Path::new(path.trim());
     let rel = if p.is_absolute() {
@@ -2342,7 +2364,8 @@ impl CheckReport {
 }
 
 fn allow_patterns(app: &App) -> Vec<regex::Regex> {
-    app.cfg().secrets.allow.iter().filter_map(|p| regex::Regex::new(p).ok()).collect()
+    // every layer's list together: a repository's allow list adds to a private one
+    crate::secrets::patterns(&crate::secrets::allow_list(&app.loaded))
 }
 
 /// Validate and secret-scan what is staged (the exact blobs that would be committed).
@@ -2520,7 +2543,17 @@ pub fn check_all(app: &App) -> CheckReport {
         });
     }
     rep.issues.extend(ledger_issues(app, &entries));
+    rep.issues.extend(redaction_issues(app));
     rep
+}
+
+/// A `secrets.redact` or `secrets.allow` pattern of any config layer that does not compile: distill,
+/// ctx_threads and autopilot refuse to send anything until it is fixed.
+fn redaction_issues(app: &App) -> Vec<Issue> {
+    secrets::pattern_errors(&app.loaded)
+        .into_iter()
+        .map(|msg| Issue { level: Level::Warn, path: "config".into(), msg: format!("{msg}; nothing is sent to a model until it is fixed") })
+        .collect()
 }
 
 /// What the verification ledger says about the entries: a `checked` date behind the ledger (a merge
@@ -2685,8 +2718,9 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     for key in &req.retire {
         challenge_for(app, &inbox, key).map_err(|e| anyhow!("{e:#}; nothing was changed"))?;
     }
+    // the one write path: ownership, the locks and a `.dismissed` record (`inbox.drop`)
     for e in &drops {
-        inbox.remove(&e.id)?;
+        crate::api_write::call(app, "inbox.drop", &serde_json::json!({"id": e.id}))?;
         let _ = writeln!(out, "- dropped inbox entry {}", e.id);
     }
     if !req.promote.is_empty() {

@@ -325,11 +325,6 @@ pub fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
     None
 }
 
-#[allow(dead_code)]
-pub fn parse_fm(fm: &str) -> Vec<(String, FmValue)> {
-    parse_fm_checked(fm).0
-}
-
 /// Keys kontext reads itself: a value of one of them the parser cannot read is an error, of any other
 /// key a warning (foreign front matter may hold YAML this subset does not model).
 const FM_KEYS: &[&str] = &[
@@ -399,9 +394,12 @@ fn flow_list(acc: &str) -> Option<Vec<String>> {
     Some(split_inline_list(inner))
 }
 
+/// Something the front matter parser could not read, and how bad it is.
+pub type Problem = (Level, String);
+
 /// Front matter read into keys and values, together with what could not be read: a line that is
 /// no `key: value`, a flow list that never closes, a nested value under a list.
-pub fn parse_fm_checked(fm: &str) -> (Vec<(String, FmValue)>, Vec<(Level, String)>) {
+pub fn parse_fm_checked(fm: &str) -> (Vec<(String, FmValue)>, Vec<Problem>) {
     let mut out: Vec<(String, FmValue)> = Vec::new();
     let mut problems: Vec<(Level, String)> = Vec::new();
     let mut open: Option<usize> = None; // last key with an empty inline value (list or block scalar)
@@ -808,7 +806,8 @@ impl Entry {
             match FIELD.captures(t) {
                 Some(c) if FIELD_KEYS.contains(&c[1].trim().to_lowercase().as_str()) => {
                     let key = c[1].trim().to_lowercase();
-                    let val = c[2].trim().trim_end_matches("**").trim().to_string();
+                    let v = c.get(2).expect("the value group always matches");
+                    let val = t[v.start()..v.end() - closing_emphasis(t, v.start(), v.end())].trim().to_string();
                     if key == "kontext metadata" {
                         if let Ok(serde_json::Value::Object(metadata)) = serde_json::from_str(&val) {
                             for (key, value) in metadata {
@@ -942,12 +941,6 @@ impl<'a> Store<'a> {
         ref_matches(id, reference)
     }
 
-    /// The full id `reference` names in the store as it is on disk (see [`canonical_ref`]).
-    #[allow(dead_code)] // for the write paths (capture, drafts, promote)
-    pub fn canonical(&self, reference: &str) -> std::result::Result<String, RefError> {
-        canonical_ref(&self.load_all().0, reference)
-    }
-
     /// Choose an id and file path for a new entry of `kind`. The id is unique across every kind, not
     /// only in its own directory: the ledger, freshness and references key on the id alone.
     pub fn allocate(&self, kind: &str, title: &str, date: &str) -> (String, String) {
@@ -1049,19 +1042,6 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
-    /// Mark `old` as superseded by `new_id`, editing the file in place. Refuses a file with unstaged
-    /// edits (they would ride into the supersede commit unreviewed) and a file it cannot put a status in.
-    pub fn mark_superseded(&self, old: &Entry, new_id: &str) -> Result<()> {
-        self.ready_to_edit(old)?;
-        let abs = self.repo.abs(&old.rel_path);
-        let text = std::fs::read_to_string(&abs)?;
-        let updated = Self::try_superseded_text(old, new_id, &text)?;
-        if updated != text {
-            util::write_atomic(&abs, &updated)?;
-        }
-        Ok(())
-    }
-
     /// Refuse to edit an entry whose file has unstaged changes: kontext stages what it edits, and a
     /// person's unrelated edits would be staged with it. An untracked file is the caller's to judge.
     pub fn ready_to_edit(&self, e: &Entry) -> Result<()> {
@@ -1074,6 +1054,7 @@ impl<'a> Store<'a> {
 
     /// [`Store::try_superseded_text`], or the text unchanged when no status can be placed. Callers that
     /// can report an error should use `try_superseded_text`.
+    #[cfg(test)]
     pub(crate) fn superseded_text(old: &Entry, new_id: &str, text: &str) -> String {
         Self::try_superseded_text(old, new_id, text).unwrap_or_else(|_| text.to_string())
     }
@@ -1120,6 +1101,7 @@ impl<'a> Store<'a> {
     }
 
     /// [`Store::try_retired_text`], or the text with only the note appended when no status can be placed.
+    #[cfg(test)]
     pub(crate) fn retired_text(old: &Entry, reason: &str, date: &str, text: &str) -> String {
         Self::try_retired_text(old, reason, date, text).unwrap_or_else(|_| {
             let eol = line_ending(text);
@@ -1151,28 +1133,6 @@ impl<'a> Store<'a> {
                 .ok_or_else(|| anyhow::anyhow!("{}: no title heading or `## Status` section to put the status in", old.rel_path))?,
         };
         Ok(format!("{bom}{}{eol}{note}", with_status.trim_end()))
-    }
-
-    /// The text of `old` with its body replaced by `body` and every byte before the body (front
-    /// matter or ADR fields, the title heading) left as it was, so the review diff is the body alone.
-    /// Falls back to the canonical writer when the body is not the end of the file.
-    pub(crate) fn amended_text(old: &Entry, body: &str, text: &str) -> String {
-        let body = format!("{}\n", body.trim_matches('\n').trim_end());
-        let current = old.body.as_str();
-        if !current.trim().is_empty() && text.ends_with(current) {
-            let head = &text[..text.len() - current.len()];
-            let sep = if head.ends_with("\n\n") || head.is_empty() {
-                ""
-            } else if head.ends_with('\n') {
-                "\n"
-            } else {
-                "\n\n"
-            };
-            return format!("{head}{sep}{body}");
-        }
-        let mut e = old.clone();
-        e.body = body;
-        e.markdown()
     }
 
     /// The text of `entry` confirmed on `date`: its `checked` field set (or added) and every other
@@ -1659,6 +1619,15 @@ fn fm_set(text: &str, keys: &[&str], write_key: &str, value: &str, after: &[&str
     None
 }
 
+/// How many bytes at the end of the value `t[start..end]` of a field line close the emphasis the line
+/// opened (`**Status: accepted**`): 2 when the key's `**` or `__` is still open where the value
+/// starts, else 0, so a glob value (`**Paths:** src/**`) keeps its `**`.
+fn closing_emphasis(t: &str, start: usize, end: usize) -> usize {
+    let value = &t[start..end];
+    let open = |m: &str| t[..start].matches(m).count() % 2 == 1 && value.ends_with(m) && value.len() > 2;
+    if open("**") || open("__") { 2 } else { 0 }
+}
+
 /// The field block of a classic ADR: `(start, end)` of each field line's value, with the field key.
 struct FieldLine {
     key: String,
@@ -1692,11 +1661,7 @@ fn field_block(text: &str) -> Option<(usize, Vec<FieldLine>)> {
         }
         let lead = start + (line.len() - line.trim_start().len());
         let (k, v) = (c.get(1)?, c.get(2)?);
-        let mut v_end = v.end();
-        let vs = &t[v.start()..v.end()];
-        if (vs.ends_with("**") || vs.ends_with("__")) && vs.len() > 2 {
-            v_end -= 2;
-        }
+        let v_end = v.end() - closing_emphasis(t, v.start(), v.end());
         let indent = &line[..line.len() - line.trim_start().len()];
         let ending = &line[line.trim_end().len()..];
         out.push(FieldLine {
@@ -1798,7 +1763,6 @@ fn fields_status(text: &str, field_value: &str, section_value: &str) -> Option<S
 
 /// How the status of a file is written: front matter, a `Status` field line, an adr-tools `## Status`
 /// section, or nowhere yet.
-#[allow(dead_code)] // for init's style detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusStyle {
     Frontmatter,
@@ -1807,7 +1771,6 @@ pub enum StatusStyle {
     Missing,
 }
 
-#[allow(dead_code)] // for init's style detection
 pub fn status_style(text: &str) -> StatusStyle {
     let (_, text) = split_bom(text);
     if split_frontmatter(text).is_some() {
@@ -1932,14 +1895,12 @@ fn resolve_in(items: &[(&str, &str)], key: &str, prefix: bool) -> std::result::R
 
 /// The full id `reference` names among `entries`, for writing it down: a brief's short prefix, an ADR
 /// number or a link becomes the id it resolves to today, so it cannot become ambiguous later.
-#[allow(dead_code)] // for the write paths (capture, drafts, promote)
 pub fn canonical_ref(entries: &[Entry], reference: &str) -> std::result::Result<String, RefError> {
     Store::find_strict(entries, reference).map(|e| e.id.clone())
 }
 
 /// Every `[[link]]` in `body` that names one entry rewritten to its full id; a link that names no
 /// entry stays as written, an ambiguous one is an error.
-#[allow(dead_code)] // for the write paths (capture, drafts, promote)
 pub fn canonical_links(entries: &[Entry], body: &str) -> std::result::Result<String, RefError> {
     static WIKI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\[\]|#\n]+)((?:[|#][^\[\]\n]*)?)\]\]").unwrap());
     let mut err = None;
@@ -2029,17 +1990,6 @@ fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn amended_text_replaces_only_the_body() {
-        let fm = "---\nid: a\nkind: learning\ntitle: A\ntags: [x,  y]\n---\n\nOld body.\n";
-        let e = Entry::parse(".ai/learnings/a.md", fm, "learning");
-        assert_eq!(Store::amended_text(&e, "New body.", fm), "---\nid: a\nkind: learning\ntitle: A\ntags: [x,  y]\n---\n\nNew body.\n");
-        let adr = "# 0002 — Use a queue\n\n**Status:** accepted\n**Paths:** src/**\n\n## Decision\n\nQueue it.\n";
-        let e = Entry::parse("docs/adr/0002-use-a-queue.md", adr, "decision");
-        let out = Store::amended_text(&e, "## Decision\n\nQueue it, retry twice.", adr);
-        assert_eq!(out, "# 0002 — Use a queue\n\n**Status:** accepted\n**Paths:** src/**\n\n## Decision\n\nQueue it, retry twice.\n");
-    }
 
     #[test]
     fn frontmatter_roundtrip() {

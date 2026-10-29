@@ -121,10 +121,9 @@ pub fn default_base_with_source(app: &App) -> Result<(String, &'static str)> {
         candidates.push((u, "upstream"));
     }
     if let Some(remote) = app.repo.git_opt(&["config", "--get", "checkout.defaultRemote"]).filter(|r| !r.is_empty() && !r.starts_with('-'))
+        && let Some(r) = remote_default(&remote)
     {
-        if let Some(r) = remote_default(&remote) {
-            candidates.push((r, "default-remote"));
-        }
+        candidates.push((r, "default-remote"));
     }
     Ok(candidates.into_iter().find_map(|(r, source)| fork(&r).map(|b| (b, source))).unwrap_or((head, "fallback-none")))
 }

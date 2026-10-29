@@ -202,7 +202,6 @@ pub fn patterns(list: &[String]) -> Vec<Regex> {
 
 /// Every pattern compiled, or the errors of those that do not (`'<pattern>': <why>`). A caller
 /// that masks text before it leaves the machine refuses to go on with any error.
-#[allow(dead_code)] // wired by the integrator
 pub fn compile_patterns(list: &[String]) -> Result<Vec<Regex>, Vec<String>> {
     let mut ok = Vec::new();
     let mut errors = Vec::new();
@@ -218,7 +217,6 @@ pub fn compile_patterns(list: &[String]) -> Result<Vec<Regex>, Vec<String>> {
 /// `secrets.<key>` (`redact` or `allow`) of every config layer together: the merged value, plus
 /// what each layer file lists, so a repository's list adds to a private one instead of replacing
 /// it. In order, without duplicates.
-#[allow(dead_code)] // wired by the integrator
 fn layered(loaded: &crate::config::LoadedConfig, key: &str) -> Vec<String> {
     let merged = match key {
         "redact" => &loaded.cfg.secrets.redact,
@@ -245,13 +243,11 @@ fn layered(loaded: &crate::config::LoadedConfig, key: &str) -> Vec<String> {
 }
 
 /// The `secrets.redact` patterns of every config layer together (private and repository).
-#[allow(dead_code)] // wired by the integrator
 pub fn redact_list(loaded: &crate::config::LoadedConfig) -> Vec<String> {
     layered(loaded, "redact")
 }
 
 /// The `secrets.allow` patterns of every config layer together.
-#[allow(dead_code)] // wired by the integrator
 pub fn allow_list(loaded: &crate::config::LoadedConfig) -> Vec<String> {
     layered(loaded, "allow")
 }
@@ -259,7 +255,6 @@ pub fn allow_list(loaded: &crate::config::LoadedConfig) -> Vec<String> {
 /// Why redaction cannot be trusted with this configuration: every `secrets.redact` or
 /// `secrets.allow` pattern of any layer that does not compile. For `kontext status`, `check` and
 /// app warnings; distill, ctx_threads and autopilot refuse to run while it is not empty.
-#[allow(dead_code)] // wired by the integrator
 pub fn pattern_errors(loaded: &crate::config::LoadedConfig) -> Vec<String> {
     let mut out = Vec::new();
     for key in ["redact", "allow"] {
@@ -272,7 +267,6 @@ pub fn pattern_errors(loaded: &crate::config::LoadedConfig) -> Vec<String> {
 
 /// The `secrets.redact` patterns of every layer, compiled, or an error naming those that do not
 /// compile: what a caller about to send text to a model uses.
-#[allow(dead_code)] // wired by the integrator
 pub fn redaction(loaded: &crate::config::LoadedConfig) -> anyhow::Result<Vec<Regex>> {
     compile_patterns(&redact_list(loaded)).map_err(|errors| {
         anyhow::anyhow!("secrets.redact has a pattern that does not compile, so nothing is sent until it is fixed: {}", errors.join("; "))

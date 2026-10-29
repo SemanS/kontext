@@ -643,6 +643,8 @@ pub fn autopilot(app: &App, llm: &str, jobs: usize, max: usize, report: &dyn Fn(
     if !adapter.has_op("llm") {
         bail!("adapter '{llm}' has no `llm` op");
     }
+    // nothing goes to a model while a redaction pattern does not compile
+    crate::secrets::redaction(&app.loaded)?;
     let (inv, hist) = load_cached(app)?;
     let state = super::load_state(app);
     let p = plan(app, &inv, &hist, &state);

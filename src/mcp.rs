@@ -43,11 +43,14 @@ fn rpc_err(code: i64, message: impl Into<String>) -> RpcError {
     (code, message.into(), None)
 }
 
+/// Public tool name → (adapter, original tool name).
+type ToolRoutes = HashMap<String, (String, String)>;
+
 /// Adapter tools re-exposed through this server, as last listed.
 #[derive(Default)]
 struct AdapterTools {
     /// definitions (sorted by name) and public name → (adapter, original tool name)
-    loaded: Option<(Vec<Value>, HashMap<String, (String, String)>)>,
+    loaded: Option<(Vec<Value>, ToolRoutes)>,
     loading: bool,
     /// adapter tool names the client last saw in a tools/list (sorted)
     announced: Option<Vec<String>>,
@@ -188,7 +191,7 @@ impl Drop for InFlight {
 
 /// Stop every running `verify` process group (a cancelled request, a closed session).
 fn kill_running_verifies() {
-    // TODO(agent B): call `crate::verification::kill_running_verifies()` here once it lands.
+    crate::verification::kill_running_verifies();
 }
 
 fn process(st: &Arc<State>, msg: &Value) -> Option<Value> {

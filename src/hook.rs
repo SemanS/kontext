@@ -211,7 +211,6 @@ fn save_session(repo: &Repo, id: &str, s: &Session) -> Result<()> {
 
 /// Count `tokens` a tool (`ctx_brief`) gave the agent of session `session_id` against the session's
 /// one budget, so hooks in the same session hold back by as much.
-#[allow(dead_code)] // tools.rs (ctx_brief) calls it once it knows the session
 pub fn record_spend(repo: &Repo, session_id: &str, tokens: usize) -> Result<()> {
     let mut s = load_session(repo, session_id);
     s.spent = s.spent.saturating_add(tokens);
@@ -219,7 +218,6 @@ pub fn record_spend(repo: &Repo, session_id: &str, tokens: usize) -> Result<()> 
 }
 
 /// Tokens session `session_id` may still be given (hooks and `ctx_brief` together).
-#[allow(dead_code)] // tools.rs (ctx_brief) caps its budget with it
 pub fn remaining_tokens(app: &App, session_id: &str) -> usize {
     settings(app).session_budget_tokens.saturating_sub(load_session(&app.repo, session_id).spent)
 }
@@ -302,7 +300,9 @@ fn parse_input(v: &Value) -> Input {
     if let Some(c) = &command {
         patch_paths(c, &mut paths);
     }
-    paths.dedup();
+    // a patch can be read from `tool_input` and from the command: each path once, in order
+    let mut seen = std::collections::HashSet::new();
+    paths.retain(|p| seen.insert(p.clone()));
     let is_shell = SHELL_TOOLS.contains(&tool.to_ascii_lowercase().as_str());
     let ev = event.to_ascii_lowercase().replace('_', "");
     let kind = match ev.as_str() {

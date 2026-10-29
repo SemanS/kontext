@@ -276,7 +276,6 @@ fn read_events(path: &Path) -> Vec<Event> {
 
 /// Keep a log under `max_bytes`: past it, the file moves to `<name>.1` (replacing an older one) and
 /// the next write starts a fresh file. Returns whether it rotated.
-#[allow(dead_code)] // wired by the integrator
 pub fn rotate_log(path: &Path, max_bytes: u64) -> std::io::Result<bool> {
     match std::fs::metadata(path) {
         Ok(m) if m.len() > max_bytes => {

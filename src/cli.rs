@@ -85,6 +85,12 @@ enum Cmd {
         /// 0 = one line, 1 = overview, 2 = full
         #[arg(long, short, default_value_t = 2)]
         level: u8,
+        /// Page of a long text (1 = first)
+        #[arg(long)]
+        part: Option<usize>,
+        /// Start at this character of a long text
+        #[arg(long)]
+        offset: Option<usize>,
     },
     /// Record a decision, convention, learning or incident (local inbox unless --promote)
     Capture(CaptureArgs),
@@ -733,13 +739,13 @@ fn run(cli: Cli) -> Result<i32> {
                 Some(InitCmd::Submit { file }) => {
                     let text = if file == "-" {
                         let mut s = String::new();
-                        std::io::stdin().read_to_string(&mut s)?;
+                        std::io::stdin().read_to_string(&mut s).context("cannot read the submission from stdin")?;
                         s
                     } else {
-                        std::fs::read_to_string(&file)?
+                        std::fs::read_to_string(&file).with_context(|| format!("cannot read the submission file {file}"))?
                     };
                     let v = init::deepen::extract_json_object(&text).ok_or_else(|| anyhow!("input is not a JSON object"))?;
-                    let sub: init::deepen::Submission = serde_json::from_value(v)?;
+                    let sub: init::deepen::Submission = serde_json::from_value(v).map_err(|e| anyhow!("invalid submission: {e}"))?;
                     println!("{}", init::deepen::submit(&app, sub)?);
                 }
                 Some(InitCmd::Skip { task_id, reason }) => {
@@ -794,9 +800,9 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
         }
-        Cmd::Read { uri, level } => {
+        Cmd::Read { uri, level, part, offset } => {
             let app = open(&dir)?;
-            println!("{}", ops::read(&app, &uri, level.min(2))?);
+            println!("{}", ops::read_paged(&app, &uri, level.min(2), ops::Paging { offset, part })?);
         }
         Cmd::Capture(a) => {
             let home = open(&dir)?;

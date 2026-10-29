@@ -430,7 +430,6 @@ impl Drop for OutputFile {
 /// `scheme://user:pass@host/path?query#frag` → `scheme://host/path`: URLs in error text keep
 /// where they went, never what authenticated them (query keys, webhook tokens, userinfo).
 pub fn strip_url_secrets(text: &str) -> String {
-    // TODO(agent F): use crate::secrets::strip_url_secrets once it lands, then drop this copy.
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(i) = rest.find("://") {
@@ -439,15 +438,8 @@ pub fn strip_url_secrets(text: &str) -> String {
         let end = after.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']')).unwrap_or(after.len());
         // punctuation closing the sentence is not part of the URL
         let end = after[..end].trim_end_matches([':', ',', '.', ';']).len();
-        let url = &after[..end];
-        let url = url.split(['?', '#']).next().unwrap_or("");
-        let (authority, path) = match url.find('/') {
-            Some(p) => (&url[..p], &url[p..]),
-            None => (url, ""),
-        };
-        let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
-        out.push_str(host);
-        out.push_str(path);
+        // the scheme is written already: one rule strips the rest (`secrets::strip_url_secrets`)
+        out.push_str(&crate::secrets::strip_url_secrets(&after[..end]));
         rest = &after[end..];
     }
     out.push_str(rest);

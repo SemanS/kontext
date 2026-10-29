@@ -450,3 +450,57 @@ fn outside_a_repository_dir_still_works() {
     let without = s.call("ctx_brief", json!({}));
     assert_eq!(without["isError"], true);
 }
+
+impl Repo {
+    /// `kontext api <operation>` in `dir` with `input`, the whole JSON answer.
+    fn api_in(&self, dir: &Path, operation: &str, input: Value) -> Value {
+        let o = self.cmd(env!("CARGO_BIN_EXE_kontext")).current_dir(dir).args(["api", operation, &input.to_string()]).output().unwrap();
+        serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{operation}: {}", String::from_utf8_lossy(&o.stderr)))
+    }
+}
+
+#[test]
+fn inbox_drop_refuses_other_worktree_candidate() {
+    let repo = Repo::new("drop-other");
+    let other = repo.root.join("other");
+    repo.git(&["worktree", "add", "-q", "-b", "feat/other", other.to_str().unwrap()]);
+    let captured = repo.api_in(
+        &other,
+        "drafts.capture",
+        json!({"entry": {"kind": "learning", "title": "Retries need jitter", "body": "Retries without jitter stampede."}}),
+    );
+    let id = captured["result"]["candidate"]["id"].as_str().or_else(|| captured["result"]["id"].as_str()).unwrap().to_string();
+    let mut s = repo.server();
+    s.initialize("2025-11-25");
+    let r = s.request("tools/call", json!({"name": "ctx_inbox", "arguments": {"action": "drop", "ids": [id]}}));
+    let text = Server::text(&r["result"]);
+    assert!(r["result"]["isError"] == true || r.get("error").is_some(), "{r}");
+    assert!(text.contains("another active worktree") || r.to_string().contains("another active worktree"), "{r}");
+    // the other worktree still has its candidate, and nothing was archived
+    let pending = repo.api_in(&other, "inbox.list", json!({}));
+    assert!(pending["result"]["entries"].as_array().unwrap().iter().any(|e| e["id"] == id.as_str()), "{pending}");
+    let dismissed = repo.api_in(&repo.repo, "inbox.list", json!({"state": "dismissed"}));
+    assert_eq!(dismissed["result"]["entries"], json!([]), "{dismissed}");
+}
+
+#[test]
+fn own_drop_is_archived() {
+    let repo = Repo::new("drop-own");
+    let mut s = repo.server();
+    s.initialize("2025-11-25");
+    let said = Server::text(&s.call(
+        "ctx_capture",
+        json!({"kind": "learning", "title": "Retries need jitter", "body": "Retries without jitter stampede.", "paths": ["src/money.ts"]}),
+    ));
+    let pending = repo.api_in(&repo.repo, "inbox.list", json!({}));
+    let id = pending["result"]["entries"][0]["id"].as_str().unwrap_or_else(|| panic!("{said}\n{pending}")).to_string();
+    let r = s.call("ctx_inbox", json!({"action": "drop", "ids": [id], "reason": "Covered by the retry convention."}));
+    assert!(Server::text(&r).contains("Dropped"), "{r}");
+    assert_eq!(repo.api_in(&repo.repo, "inbox.list", json!({}))["result"]["entries"], json!([]));
+    // dropped through inbox.drop: kept under .dismissed with when and why, never proposed again
+    let dismissed = repo.api_in(&repo.repo, "inbox.list", json!({"state": "dismissed"}));
+    let row = &dismissed["result"]["entries"][0];
+    assert_eq!(row["id"], id.as_str(), "{dismissed}");
+    assert_eq!(row["extra"]["dismissal_reason"], "Covered by the retry convention.", "{dismissed}");
+    assert!(row["extra"]["dismissed_at"].is_string(), "{dismissed}");
+}

@@ -194,13 +194,14 @@ impl App {
             *guard = Some(LocalIndex::open(&self.repo)?);
         }
         let idx = guard.as_ref().expect("index opened above");
+        // another process (a CLI capture, a second server) may have committed since this handle
+        // last looked: reload the reader on every request, not only on a refresh
+        if let Err(e) = idx.reload_if_changed() {
+            eprintln!("kontext: index reload failed: {e:#}");
+        }
         let mut last = lock(&self.last_refresh);
         if last.is_none_or(|t| t.elapsed() > Duration::from_secs(1)) {
             let (entries, _) = self.entries();
-            // `refresh` also reloads the reader when another process (a CLI capture, a second
-            // server) changed the index since this one opened it.
-            // TODO(agent G): call `idx.reload_if_changed()` here per request if it lands as a
-            // separate function instead of inside `refresh`.
             if let Err(e) = idx.refresh(&self.repo, self.cfg(), &entries) {
                 eprintln!("kontext: index refresh failed: {e:#}");
             }
@@ -211,6 +212,8 @@ impl App {
 
     pub fn warnings(&self) -> Vec<String> {
         let mut w = self.loaded.warnings.clone();
+        // a redaction pattern that does not compile: distill, threads and autopilot refuse to run
+        w.extend(crate::secrets::pattern_errors(&self.loaded));
         if let Some(reg) = self.registry_if_built() {
             w.extend(reg.errors.iter().cloned());
         }

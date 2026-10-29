@@ -39,8 +39,10 @@ fn opening(s: &str) -> String {
 }
 
 /// How much an inactive (superseded or deprecated) hit counts in the fusion: it stays in the
-/// results, marked, but below the active knowledge that replaced it.
-pub const INACTIVE_WEIGHT: f32 = 0.5;
+/// results, marked, but below the active knowledge that replaced it. In reciprocal rank fusion a
+/// factor of 0.5 sends even a source's best hit below its twentieth, out of every default result
+/// list, which is hiding it; 0.8 moves it a few places down.
+pub const INACTIVE_WEIGHT: f32 = 0.8;
 
 /// Whether a hit's status says it is no longer the team's rule.
 pub fn is_inactive(status: Option<&str>) -> bool {

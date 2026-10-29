@@ -146,55 +146,6 @@ pub fn looks(lines: &[Line]) -> HashMap<&str, Looks<'_>> {
     out
 }
 
-/// A ledger line that readers skip or that misleads them.
-#[allow(dead_code)] // wired by the integrator
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Issue {
-    /// 1-based line number in the ledger.
-    pub line: usize,
-    pub msg: String,
-}
-
-/// How far ahead of the clock a line may be dated (clock skew between machines).
-#[allow(dead_code)] // wired by the integrator
-const FUTURE_TOLERANCE_SECS: i64 = 300;
-
-/// Conflict markers, unreadable lines and lines dated in the future (they would outrank every later
-/// look). For `kontext check`; nothing is rewritten.
-#[allow(dead_code)] // wired by the integrator
-pub fn audit(text: &str) -> Vec<Issue> {
-    audit_at(text, chrono::Utc::now().timestamp())
-}
-
-/// [`audit`] against the given clock (UTC seconds).
-#[allow(dead_code)] // wired by the integrator
-pub fn audit_at(text: &str, now: i64) -> Vec<Issue> {
-    let mut out = Vec::new();
-    for (i, raw) in text.lines().enumerate() {
-        let n = i + 1;
-        let line = raw.trim_end_matches('\r');
-        if line.trim().is_empty() {
-            continue;
-        }
-        if ["<<<<<<<", "=======", ">>>>>>>", "|||||||"].iter().any(|m| line.starts_with(m)) {
-            out.push(Issue { line: n, msg: format!("{FILE}:{n}: merge conflict marker; keep both sides' lines and remove the markers") });
-            continue;
-        }
-        let Some(parsed) = Line::parse(line) else {
-            out.push(Issue { line: n, msg: format!("{FILE}:{n}: unreadable line, skipped by every reader") });
-            continue;
-        };
-        let Some(crate::store::Checked::At(at)) = crate::store::parse_checked(&parsed.at) else { continue };
-        if at.timestamp() > now + FUTURE_TOLERANCE_SECS {
-            out.push(Issue {
-                line: n,
-                msg: format!("{FILE}:{n}: {} is dated in the future ({}); it would outrank every later look", parsed.id, parsed.at),
-            });
-        }
-    }
-    out
-}
-
 /// The ledger's path relative to the repository root.
 pub fn rel_path(app: &App) -> String {
     format!("{}/{FILE}", app.store().dir())
@@ -380,17 +331,5 @@ mod tests {
         let l = looks(&more)["a"];
         assert!(!l.failing, "a later pass ends it");
         assert_eq!((l.look.unwrap().kind.as_str(), l.verified.unwrap().kind.as_str()), ("verify", "verify"));
-    }
-
-    #[test]
-    fn audit_reports_conflict_markers_unreadable_and_future_lines() {
-        let now = 1_800_000_000; // 2027-01-15T08:00:00Z
-        let text = "2026-10-27T09:30:00Z\ta\tread\t-\t-\t-\t\n<<<<<<< HEAD\n2026-10-27T09:31:00Z\tb\tread\t-\t-\t-\t\n=======\n>>>>>>> side\nnot a line\n2030-01-01T00:00:00Z\tc\tread\t-\t-\t-\t\n\n";
-        let issues = audit_at(text, now);
-        assert_eq!(issues.iter().map(|i| i.line).collect::<Vec<_>>(), vec![2, 4, 5, 6, 7]);
-        assert!(issues[0].msg.contains("conflict marker"));
-        assert!(issues[3].msg.contains("unreadable"));
-        assert!(issues[4].msg.contains("c is dated in the future"));
-        assert!(audit_at("2027-01-15T08:04:00Z\ta\tread\t-\t-\t-\t\n", now).is_empty(), "a few minutes of skew is tolerated");
     }
 }

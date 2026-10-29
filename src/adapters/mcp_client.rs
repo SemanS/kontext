@@ -95,6 +95,8 @@ impl McpClient {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
+            // an adapter that talks a lot on stderr must not fill the disk
+            let _ = crate::events::rotate_log(p, 1_000_000);
             std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
         }) {
             Some(f) => cmd.stderr(f),

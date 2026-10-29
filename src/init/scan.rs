@@ -535,7 +535,8 @@ fn adr_style(repo: &Repo, files: &[&String]) -> (String, String) {
     let mut fields = 0;
     for f in files.iter().take(5) {
         if let Some(t) = read_small(repo, f, 200_000) {
-            if t.starts_with("---") {
+            // the store's own reading of where a status goes (a BOM, an adr-tools `## Status`)
+            if crate::store::status_style(&t) == crate::store::StatusStyle::Frontmatter {
                 fm += 1;
             } else {
                 fields += 1;

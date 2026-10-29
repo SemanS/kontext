@@ -167,9 +167,12 @@ pub(crate) struct History {
     pub shallow: bool,
 }
 
+/// One commit as `git log` printed it: `(sha, time, subject, parent shas, paths)`.
+pub(crate) type RawCommit = (String, i64, String, Vec<String>, Vec<String>);
+
 impl History {
     /// A history from `(sha, time, subject, parent shas, paths)`, newest first.
-    pub(crate) fn build(raw: Vec<(String, i64, String, Vec<String>, Vec<String>)>) -> History {
+    pub(crate) fn build(raw: Vec<RawCommit>) -> History {
         let index: HashMap<String, usize> = raw.iter().enumerate().map(|(i, c)| (c.0.clone(), i)).collect();
         let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();
         let commits = raw

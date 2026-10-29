@@ -650,9 +650,16 @@ fn stage_with(app: &App, input: &Value, default_paths: &[String]) -> Result<Valu
             e.set_extra("extends", FmValue::List(extends_links(&entries, &captured)?));
         }
         let mut canonical = Vec::new();
+        // `[[links]]` in the body are written as the full ids they name today
+        e.body = crate::store::canonical_links(&entries, &e.body)
+            .map_err(|err| error("invalid_input", format!("a [[link]] in the body is {err}")))?;
         for id in &e.supersedes {
-            let old = Store::find(&entries, id)
-                .ok_or_else(|| error("not_found", format!("unknown or ambiguous superseded entry '{id}': name it by its full id")))?;
+            let old = Store::find_strict(&entries, id).map_err(|err| match err {
+                crate::store::RefError::Ambiguous(_) => error("invalid_input", format!("superseded entry '{id}': {err}")),
+                crate::store::RefError::Unknown(_) => {
+                    error("not_found", format!("unknown superseded entry '{id}': name it by its full id"))
+                }
+            })?;
             if !canonical.contains(&old.id) {
                 canonical.push(old.id.clone());
             }
@@ -662,7 +669,7 @@ fn stage_with(app: &App, input: &Value, default_paths: &[String]) -> Result<Valu
             app.store().validate_reserved(old).map_err(|err| error("invalid_input", err.to_string()))?;
             check_clean(app, &old.rel_path)?;
             let before = std::fs::read_to_string(app.repo.abs(&old.rel_path))?;
-            let after = Store::superseded_text(old, &e.id, &before);
+            let after = Store::try_superseded_text(old, &e.id, &before).map_err(|err| error("invalid_input", format!("{err:#}")))?;
             journal.related.push(Change { path: old.rel_path.clone(), before, after });
         }
         e.supersedes = canonical;
@@ -730,10 +737,13 @@ pub(crate) fn extends_links(entries: &[Entry], links: &[String]) -> Result<Vec<S
     }
     let mut out: Vec<String> = Vec::new();
     for link in links {
-        let entry = Store::find(entries, link)
-            .ok_or_else(|| error("unknown_entry", format!("extends names '{link}', which the store does not have")))?;
-        if !out.contains(&entry.id) {
-            out.push(entry.id.clone());
+        // written down as the full id it names today, so it cannot become ambiguous later
+        let id = crate::store::canonical_ref(entries, link).map_err(|e| match e {
+            crate::store::RefError::Ambiguous(_) => error("invalid_input", format!("extends names '{link}': {e}")),
+            crate::store::RefError::Unknown(_) => error("unknown_entry", format!("extends names '{link}', which the store does not have")),
+        })?;
+        if !out.contains(&id) {
+            out.push(id);
         }
     }
     Ok(out)
@@ -939,7 +949,8 @@ pub(crate) fn plan_retire(app: &App, entry: &Entry, reason: &str) -> Result<(Str
     }
     app.store().validate_reserved(entry).map_err(|e| error("invalid_input", e.to_string()))?;
     let before = std::fs::read_to_string(app.repo.abs(&entry.rel_path))?;
-    let after = Store::retired_text(entry, &distill::mask_text(app, reason), &util::today(), &before);
+    let after = Store::try_retired_text(entry, &distill::mask_text(app, reason), &util::today(), &before)
+        .map_err(|err| error("invalid_input", format!("{err:#}")))?;
     Ok((before, after))
 }
 
