@@ -1,13 +1,16 @@
-//! What a reader needs to trust an entry: how it was last verified (the newest of its ledger lines
-//! and the `checked:` cache in its file), what changed on its governed paths since that look
-//! (counted from the commit the look named, not from a date), the premises it links to that no
-//! longer hold, and running its `verify` command.
+//! What a reader needs to trust an entry: how it was last looked at (the newest of its ledger lines
+//! and the `checked:` cache in its file) and last verified (a person's read or a passed command),
+//! what changed on its governed paths since (counted by ancestry from the commits the look named and
+//! landed in, not from a date or a position in the log), the premises it links to that no longer
+//! hold, and running its `verify` command.
 //!
-//! One `git log` (and one `git log -p` of the ledger) covers every entry, cached per HEAD with a
-//! fingerprint of the looks, so listing entries costs a `rev-parse` while nothing is committed.
+//! One `git log` of HEAD (shared with freshness) and one `git log -p` of the ledger cover every
+//! entry, cached per HEAD with a fingerprint of the looks, so listing entries costs a `rev-parse`
+//! while nothing is committed.
 use crate::app::App;
+use crate::freshness::{History, Reach};
 use crate::glob::path_matches;
-use crate::ledger::{self, Line};
+use crate::ledger::{self, Line, Looks};
 use crate::store::{Checked, Entry, Store, parse_checked};
 use crate::util;
 use regex::Regex;
@@ -15,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// Statuses that make a linked entry a changed premise.
 const GONE: &[&str] = &["superseded", "deprecated", "retired"];
@@ -23,6 +26,12 @@ const GONE: &[&str] = &["superseded", "deprecated", "retired"];
 const MAX_PATHS: usize = 20;
 /// At most this many commits named per entry.
 const MAX_RECENT: usize = 5;
+
+/// Capability strings for what this module adds to API v1 (`status.capabilities`): the
+/// `last_verified`, `since_verified`, `failing` and `amended_since` fields, and drift that needs a
+/// look at or after the last governed change and says where its base came from (`base_source`).
+#[allow(dead_code)] // wired by the integrator
+pub const CAPABILITIES: &[&str] = &["verification.last_verified", "drift.ordered"];
 
 /// The second a ledger time or a `checked` value names: a day counts from its start, so a ledger
 /// line of the same day is the newer one.
@@ -37,6 +46,8 @@ fn seconds(at: &str) -> Option<i64> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verification {
     pub at: String,
+    /// `read`, `agent`, `bulk` or `verify` from the ledger; `cache` for a `checked:` date with no
+    /// ledger line behind it.
     pub kind: String,
     pub commit: Option<String>,
     pub by: Option<String>,
@@ -53,7 +64,7 @@ pub struct Verification {
 
 impl Verification {
     /// Only a person's read or a passed command counts as verified; agent and bulk confirmations
-    /// are stamps.
+    /// are stamps, and a `checked:` date nobody recorded is a cache.
     pub fn verified(&self) -> bool {
         self.kind == "read" || (self.kind == "verify" && self.passed == Some(true))
     }
@@ -65,7 +76,8 @@ impl Verification {
 }
 
 /// The newer of the entry's newest ledger line and its frontmatter `checked`; the ledger line wins
-/// a tie, since it says more.
+/// a tie, since it says more. A `checked` date alone is a `cache`: it is kept and shown, never
+/// counted as verified.
 pub fn of(entry: &Entry, newest: Option<&Line>) -> Option<Verification> {
     let fm = entry.checked.as_deref().filter(|c| seconds(c).is_some());
     let from_line = |l: &Line| Verification {
@@ -80,7 +92,7 @@ pub fn of(entry: &Entry, newest: Option<&Line>) -> Option<Verification> {
     };
     let from_fm = |c: &str| Verification {
         at: c.to_string(),
-        kind: "read".into(),
+        kind: "cache".into(),
         commit: None,
         by: None,
         because: None,
@@ -121,6 +133,26 @@ pub fn checked(entry: &Entry, newest_confirmation: Option<&Line>) -> Option<Stri
     }
 }
 
+/// An entry's newest verifying look (a person's read or a passed command): `last_verified`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastVerified {
+    pub kind: String,
+    pub at: String,
+    pub commit: Option<String>,
+    /// The commit in HEAD's history that first added its line; None while only staged.
+    pub landed: Option<String>,
+}
+
+impl LastVerified {
+    pub fn to_json(&self) -> Value {
+        json!({"kind":self.kind,"at":self.at,"commit":self.commit,"landed":self.landed})
+    }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Commits on an entry's governed paths after its verification.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Since {
@@ -130,12 +162,25 @@ pub struct Since {
     pub paths: Vec<String>,
     /// The newest commits among them: (full sha, subject), at most [`MAX_RECENT`].
     pub recent: Vec<(String, String)>,
+    /// The look is older than the history read (`index.max_commits`): every commit read counts.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+    /// A shallow clone: history stops at the graft, so the count is a lower bound.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lower_bound: bool,
 }
 
 impl Since {
     pub fn to_json(&self) -> Value {
-        json!({"commits":self.commits,"head":self.head,"paths":self.paths,
-            "recent":self.recent.iter().map(|(sha,subject)| json!({"sha":sha,"subject":subject})).collect::<Vec<_>>()})
+        let mut v = json!({"commits":self.commits,"head":self.head,"paths":self.paths,
+            "recent":self.recent.iter().map(|(sha,subject)| json!({"sha":sha,"subject":subject})).collect::<Vec<_>>()});
+        if self.truncated {
+            v["truncated"] = json!(true);
+        }
+        if self.lower_bound {
+            v["lower_bound"] = json!(true);
+        }
+        v
     }
 }
 
@@ -198,11 +243,11 @@ pub fn premises(entry: &Entry, all: &[Entry]) -> Vec<Premise> {
 /// Where the count of an entry starts.
 #[derive(Debug, Clone)]
 enum Start {
-    /// A ledger line: after the commit it named, or after the commit that landed the line,
-    /// whichever is newer in HEAD's history; by time when neither is in it.
-    Ledger { at: i64, commit: Option<String>, key: (String, String) },
-    /// A `checked:` date only: as freshness counts — after its second (a day: from the next one),
-    /// and after the last commit that changed the entry's own file.
+    /// A ledger line: after the commits it named and landed in, by ancestry; by time when neither
+    /// is in HEAD's history.
+    Ledger { at: i64, anchors: Vec<String>, key: (String, String) },
+    /// A `checked:` date only: after its second (a day: from the next one), and after every commit
+    /// that changed the entry's own file, by ancestry.
     Checked { since: i64 },
 }
 
@@ -216,43 +261,33 @@ struct Look<'a> {
 impl Look<'_> {
     fn fingerprint(&self) -> String {
         let from = match &self.from {
-            Start::Ledger { at, commit, .. } => format!("l{at}{}", commit.as_deref().unwrap_or("-")),
+            Start::Ledger { at, anchors, .. } => format!("l{at}{}", anchors.join(",")),
             Start::Checked { since } => format!("c{since}"),
         };
         format!("{}|{}|{}|{from};", self.id, self.file, self.paths.join(","))
     }
-    fn time(&self) -> i64 {
-        match &self.from {
-            Start::Ledger { at, .. } => *at,
-            Start::Checked { since } => *since,
-        }
+}
+
+/// A look at an entry, from what [`of`] says of it.
+fn look_from<'a>(e: &'a Entry, v: &Verification) -> Option<Look<'a>> {
+    let paths: Vec<&str> = e.paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
+    if paths.is_empty() {
+        return None;
     }
-}
-
-#[derive(Debug, Clone)]
-struct Commit {
-    sha: String,
-    time: i64,
-    subject: String,
-    paths: Vec<String>,
-}
-
-/// `git log --format=%x00%H %ct %s` output.
-fn parse_commits(history: &str) -> Vec<Commit> {
-    crate::freshness::parse_log(history)
-        .into_iter()
-        .filter_map(|(header, paths)| {
-            let mut parts = header.splitn(3, ' ');
-            let sha = parts.next()?.to_string();
-            let time = parts.next()?.parse().ok()?;
-            let subject = parts.next().unwrap_or("").to_string();
-            Some(Commit { sha, time, subject, paths: paths.into_iter().map(String::from).collect() })
-        })
-        .collect()
+    let from = match v.source {
+        "ledger" => Start::Ledger { at: seconds(&v.at)?, anchors: v.commit.iter().cloned().collect(), key: (e.id.clone(), v.at.clone()) },
+        _ => Start::Checked {
+            since: match parse_checked(&v.at)? {
+                Checked::At(t) => t.timestamp() + 1,
+                Checked::Day(d) => d.succ_opt()?.and_hms_opt(0, 0, 0)?.and_utc().timestamp(),
+            },
+        },
+    };
+    Some(Look { id: &e.id, file: &e.rel_path, paths, from })
 }
 
 /// `git log -p --format=%x00%H -- <ledger>`: for each line, the commit that first added it.
-fn parse_landings(log: &str) -> HashMap<(String, String), String> {
+pub(crate) fn parse_landings(log: &str) -> HashMap<(String, String), String> {
     let mut out = HashMap::new();
     // newest first: an older commit that added the same line (a cherry-pick) overwrites
     for chunk in log.split('\0').filter(|c| !c.trim().is_empty()) {
@@ -270,49 +305,52 @@ fn parse_landings(log: &str) -> HashMap<(String, String), String> {
     out
 }
 
-/// The count for every look over `commits` (newest first, as git lists them).
+/// The count for one look over HEAD's history.
+fn count_one(look: &Look, history: &History, reach: &mut Reach, head: &str, is_store: &dyn Fn(&str) -> bool) -> Since {
+    let (sources, after, missing) = match &look.from {
+        Start::Ledger { at, anchors, .. } => {
+            let sources: Vec<usize> = anchors.iter().filter_map(|a| history.position(a)).collect();
+            match sources.is_empty() {
+                // older than the read: every commit read counts; elsewhere (another branch, rebased
+                // away): by time
+                true if history.truncated => (sources, i64::MIN, true),
+                true => (sources, *at + 1, false),
+                false => (sources, i64::MIN, false),
+            }
+        }
+        Start::Checked { since } => (history.touching(look.file).to_vec(), *since, false),
+    };
+    let looked = reach.of(sources);
+    let governed = |f: &str| !is_store(f) && look.paths.iter().any(|p| path_matches(p, f));
+    let c = history.count(looked.as_deref().map(Vec::as_slice), after, &governed, MAX_RECENT);
+    Since {
+        commits: c.commits,
+        head: head.to_string(),
+        paths: c.paths.into_iter().take(MAX_PATHS).collect(),
+        recent: c.recent,
+        truncated: missing,
+        lower_bound: history.shallow,
+    }
+}
+
+/// The count for every look; ledger looks also count from the commit that landed their line.
 fn count(
-    looks: &[Look],
-    commits: &[Commit],
+    looks: &mut [Look],
+    history: &History,
     landings: &HashMap<(String, String), String>,
     head: &str,
     is_store: &dyn Fn(&str) -> bool,
 ) -> BTreeMap<String, Since> {
-    let position = |sha: &str| commits.iter().position(|c| c.sha == sha);
+    let mut reach = Reach::new(history);
     looks
-        .iter()
+        .iter_mut()
         .map(|look| {
-            let (end, after) = match &look.from {
-                Start::Ledger { at, commit, key } => {
-                    let named = commit.as_deref().and_then(position);
-                    let landed = landings.get(key).and_then(|s| position(s));
-                    match named.into_iter().chain(landed).min() {
-                        Some(end) => (end, i64::MIN),
-                        None => (commits.len(), *at + 1),
-                    }
-                }
-                Start::Checked { since } => {
-                    (commits.iter().position(|c| c.paths.iter().any(|p| p == look.file)).unwrap_or(commits.len()), *since)
-                }
-            };
-            let governed = |f: &str| !is_store(f) && look.paths.iter().any(|p| path_matches(p, f));
-            let mut since = Since { head: head.to_string(), ..Default::default() };
-            let mut changed = BTreeSet::new();
-            for c in commits[..end].iter().filter(|c| c.time >= after) {
-                let mut hit = false;
-                for f in c.paths.iter().filter(|f| governed(f)) {
-                    hit = true;
-                    changed.insert(f.clone());
-                }
-                if hit {
-                    since.commits += 1;
-                    if since.recent.len() < MAX_RECENT {
-                        since.recent.push((c.sha.clone(), c.subject.clone()));
-                    }
-                }
+            if let Start::Ledger { anchors, key, .. } = &mut look.from
+                && let Some(sha) = landings.get(key)
+            {
+                anchors.push(sha.clone());
             }
-            since.paths = changed.into_iter().take(MAX_PATHS).collect();
-            (look.id.to_string(), since)
+            (look.id.to_string(), count_one(look, history, &mut reach, head, is_store))
         })
         .collect()
 }
@@ -321,41 +359,58 @@ fn count(
 struct Cache {
     key: String,
     since: BTreeMap<String, Since>,
+    #[serde(default)]
+    since_verified: BTreeMap<String, Since>,
 }
 
-/// The ledger and what changed since each entry's verification, read once for a set of entries.
+/// The ledger and what changed since each entry's look and verification, read once for a set of
+/// entries.
 pub struct Context {
     lines: Vec<Line>,
     since: BTreeMap<String, Since>,
+    since_verified: BTreeMap<String, Since>,
     /// By entry file: the commit that landed its verification (only with [`Context::load_landed`]).
     landed: BTreeMap<String, String>,
+    /// By entry file: the commit that landed its newest verifying line.
+    landed_verified: BTreeMap<String, String>,
+    /// Entry files whose body changed after the commit that landed their last verification.
+    amended: BTreeSet<String>,
 }
 
 impl Context {
-    /// Verifications of `entries` and, for the active ones with paths that `want` selects, the
-    /// commits since.
+    /// Verifications of `entries` and, for the active ones with paths, the commits since (counted
+    /// for all of them at once, so every caller shares one cache; nothing is read when `want`
+    /// selects none).
     pub fn load(app: &App, entries: &[Entry], want: &dyn Fn(&Entry) -> bool) -> Context {
         let lines = ledger::read(app);
         let head = app.repo.head();
-        let since = match &head {
+        let (since, since_verified) = match &head {
             Some(head) => since_all(app, entries, &lines, head, want),
-            None => BTreeMap::new(),
+            None => (BTreeMap::new(), BTreeMap::new()),
         };
-        Context { lines, since, landed: BTreeMap::new() }
+        Context { lines, since, since_verified, landed: BTreeMap::new(), landed_verified: BTreeMap::new(), amended: BTreeSet::new() }
     }
 
-    /// [`Context::load`], and where each selected entry's verification landed (what the machine
-    /// API reports; the brief does not need it).
+    /// [`Context::load`], and where each selected entry's verification landed and whether its body
+    /// changed since (what the machine API reports; the brief does not need it).
     pub fn load_landed(app: &App, entries: &[Entry], want: &dyn Fn(&Entry) -> bool) -> Context {
         let mut ctx = Context::load(app, entries, want);
         if let Some(head) = app.repo.head() {
-            ctx.landed = landed_all(app, entries, &ctx.lines, &head, want);
+            let l = landed_all(app, entries, &ctx.lines, &head, want);
+            ctx.landed = l.landed;
+            ctx.landed_verified = l.landed_verified;
+            ctx.amended = l.amended;
         }
         ctx
     }
 
     pub fn newest(&self) -> HashMap<&str, &Line> {
         ledger::latest(&self.lines, false)
+    }
+
+    /// Per entry id: newest line, newest look, newest verification, failing.
+    pub fn looks(&self) -> HashMap<&str, Looks<'_>> {
+        ledger::looks(&self.lines)
     }
 
     pub fn verification(&self, entry: &Entry) -> Option<Verification> {
@@ -366,8 +421,36 @@ impl Context {
         verification.map(|v| Verification { landed: self.landed.get(&entry.rel_path).cloned(), ..v })
     }
 
+    /// Commits on the entry's paths since its newest look (a failed verify is not one).
     pub fn since(&self, entry: &Entry) -> Option<&Since> {
         self.since.get(&entry.id)
+    }
+
+    /// Commits on the entry's paths since its last verification (a read or a passed verify).
+    pub fn since_verified(&self, entry: &Entry) -> Option<&Since> {
+        self.since_verified.get(&entry.id)
+    }
+
+    /// The entry's newest read or passed verify.
+    pub fn last_verified(&self, entry: &Entry) -> Option<LastVerified> {
+        let looks = self.looks();
+        let l = looks.get(entry.id.as_str())?.verified?;
+        Some(LastVerified {
+            kind: l.kind.clone(),
+            at: l.at.clone(),
+            commit: l.commit.clone(),
+            landed: self.landed_verified.get(&entry.rel_path).cloned(),
+        })
+    }
+
+    /// The entry's newest `verify` failed, and none passed since.
+    pub fn failing(&self, entry: &Entry) -> bool {
+        self.looks().get(entry.id.as_str()).is_some_and(|l| l.failing)
+    }
+
+    /// The entry's body changed after its last verification landed (only with [`Context::load_landed`]).
+    pub fn amended_since(&self, entry: &Entry) -> bool {
+        self.amended.contains(&entry.rel_path)
     }
 
     /// The additive fields of the machine API for one entry's JSON.
@@ -382,6 +465,10 @@ impl Context {
         let verification = self.with_landed(entry, of(entry, newest.get(entry.id.as_str()).copied()));
         value["verification"] = verification.as_ref().map(Verification::to_json).unwrap_or(Value::Null);
         value["since"] = self.since(entry).map(Since::to_json).unwrap_or(Value::Null);
+        value["last_verified"] = self.last_verified(entry).as_ref().map(LastVerified::to_json).unwrap_or(Value::Null);
+        value["since_verified"] = self.since_verified(entry).map(Since::to_json).unwrap_or(Value::Null);
+        value["failing"] = json!(self.failing(entry));
+        value["amended_since"] = json!(self.amended_since(entry));
         value["verify"] = json!(entry.verify);
         value["premises"] = json!(premises(entry, all).iter().map(Premise::to_json).collect::<Vec<_>>());
         if let Some(c) = checked(entry, confirmations.get(entry.id.as_str()).copied()) {
@@ -395,111 +482,178 @@ pub fn ledger_stamp(app: &App) -> String {
     std::fs::read(app.repo.abs(&ledger::rel_path(app))).map(|b| format!("{:016x}", util::fnv1a64(&b))).unwrap_or_default()
 }
 
-fn since_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &dyn Fn(&Entry) -> bool) -> BTreeMap<String, Since> {
-    let newest = ledger::latest(lines, false);
-    let looks: Vec<Look> = entries
+/// Commits since the newest look and since the last verification of every active entry with
+/// paths, by id.
+fn since_all(
+    app: &App,
+    entries: &[Entry],
+    lines: &[Line],
+    head: &str,
+    want: &dyn Fn(&Entry) -> bool,
+) -> (BTreeMap<String, Since>, BTreeMap<String, Since>) {
+    let looks = ledger::looks(lines);
+    let get = |e: &Entry| looks.get(e.id.as_str()).copied().unwrap_or_default();
+    let active: Vec<&Entry> = entries.iter().filter(|e| e.is_active()).collect();
+    let mut seen: Vec<Look> = active.iter().filter_map(|e| look_from(e, &of(e, get(e).look)?)).collect();
+    let mut verified: Vec<Look> = active
         .iter()
-        .filter(|e| e.is_active() && want(e))
         .filter_map(|e| {
-            let paths: Vec<&str> = e.paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
-            if paths.is_empty() {
-                return None;
-            }
-            let v = of(e, newest.get(e.id.as_str()).copied())?;
-            let from = match v.source {
-                "ledger" => Start::Ledger { at: seconds(&v.at)?, commit: v.commit.clone(), key: (e.id.clone(), v.at.clone()) },
-                _ => Start::Checked {
-                    since: match parse_checked(&v.at)? {
-                        Checked::At(t) => t.timestamp() + 1,
-                        Checked::Day(d) => d.succ_opt()?.and_hms_opt(0, 0, 0)?.and_utc().timestamp(),
-                    },
-                },
-            };
-            Some(Look { id: &e.id, file: &e.rel_path, paths, from })
+            let line = get(e).verified?;
+            look_from(e, &of(&Entry::default(), Some(line))?)
         })
         .collect();
-    if looks.is_empty() {
-        return BTreeMap::new();
+    let wanted = |l: &Look| entries.iter().any(|e| e.id == l.id && want(e));
+    if !seen.iter().chain(verified.iter()).any(wanted) {
+        return (BTreeMap::new(), BTreeMap::new());
     }
-    let fingerprint: String = looks.iter().map(Look::fingerprint).collect();
+    let fingerprint: String =
+        seen.iter().map(Look::fingerprint).chain(["|v|".to_string()]).chain(verified.iter().map(Look::fingerprint)).collect();
     let key = format!("{head}:{}:{}", app.cfg().index.max_commits, util::short_hash(&fingerprint));
     let path = app.repo.worktree_state_dir().join("verification.json");
     if let Some(c) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Cache>(&t).ok()).filter(|c| c.key == key) {
-        return c.since;
+        return (c.since, c.since_verified);
     }
-    let oldest = looks.iter().map(Look::time).min().unwrap_or_default();
-    let Some(history) = read_history(app, head, oldest) else { return BTreeMap::new() };
-    let commits = parse_commits(&history);
-    let landings = if looks.iter().any(|l| matches!(l.from, Start::Ledger { .. })) { read_landings(app, head) } else { HashMap::new() };
+    let Some(history) = crate::freshness::history(app, head) else { return (BTreeMap::new(), BTreeMap::new()) };
+    let ledger_looks = seen.iter().chain(verified.iter()).any(|l| matches!(l.from, Start::Ledger { .. }));
+    let landings = if ledger_looks { landings(app, head) } else { Arc::new(HashMap::new()) };
     let store = app.store();
-    let since = count(&looks, &commits, &landings, head, &|f| store.is_store_path(f));
-    if let Ok(text) = serde_json::to_string(&Cache { key, since: since.clone() }) {
+    let is_store = |f: &str| store.is_store_path(f);
+    let since = count(&mut seen, &history, &landings, head, &is_store);
+    let since_verified = count(&mut verified, &history, &landings, head, &is_store);
+    if let Ok(text) = serde_json::to_string(&Cache { key, since: since.clone(), since_verified: since_verified.clone() }) {
         let _ = std::fs::create_dir_all(app.repo.worktree_state_dir());
         let _ = util::write_atomic(&path, &text);
     }
-    since
+    (since, since_verified)
 }
 
-/// For every ledger line in HEAD's history, the commit that first added it.
-fn read_landings(app: &App, head: &str) -> HashMap<(String, String), String> {
+static LANDINGS: LazyLock<Mutex<HashMap<String, Arc<HashMap<(String, String), String>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// For every ledger line in HEAD's history (bounded by `index.max_commits` commits of the ledger),
+/// the commit that first added it: one `git log -p` per HEAD and process, shared by every reader.
+pub(crate) fn landings(app: &App, head: &str) -> Arc<HashMap<(String, String), String>> {
     let rel = ledger::rel_path(app);
-    app.repo
-        .git_opt(&["log", "-p", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", "--format=%x00%H", head, "--", &rel])
+    let max = app.cfg().index.max_commits.max(1);
+    let key = format!("{}\0{head}\0{rel}\0{max}", app.repo.root.display());
+    if let Some(l) = LANDINGS.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        return l;
+    }
+    let max = format!("--max-count={max}");
+    let map = app
+        .repo
+        .git_opt(&["log", "-p", "--unified=0", "--no-color", "--no-ext-diff", "--no-textconv", &max, "--format=%x00%H", head, "--", &rel])
         .map(|log| parse_landings(&log))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let map = Arc::new(map);
+    if let Ok(mut m) = LANDINGS.lock() {
+        if m.len() >= 8 {
+            m.clear();
+        }
+        m.insert(key, map.clone());
+    }
+    map
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct LandedCache {
     key: String,
     landed: BTreeMap<String, String>,
+    #[serde(default)]
+    landed_verified: BTreeMap<String, String>,
+    #[serde(default)]
+    amended: BTreeSet<String>,
 }
 
-/// By entry file, the commit in HEAD's history that landed each selected entry's verification: the
-/// commit that first added its newest ledger line, or for a `checked:` date alone the last commit
-/// that changed its file — unless the file has uncommitted changes, since the date may be one of them.
-/// Cached per HEAD and verifications; the working-tree check is not.
-fn landed_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &dyn Fn(&Entry) -> bool) -> BTreeMap<String, String> {
-    let newest = ledger::latest(lines, false);
-    let targets: Vec<(&Entry, Verification)> =
-        entries.iter().filter(|e| want(e)).filter_map(|e| Some((e, of(e, newest.get(e.id.as_str()).copied())?))).collect();
-    if targets.is_empty() {
-        return BTreeMap::new();
+struct Landed {
+    landed: BTreeMap<String, String>,
+    landed_verified: BTreeMap<String, String>,
+    amended: BTreeSet<String>,
+}
+
+/// The body of an entry's Markdown, for telling an amendment from a metadata edit.
+fn body_of(path: &str, text: &str, kind: &str) -> String {
+    Entry::parse(path, text, kind).body.trim().to_string()
+}
+
+/// By entry file, the commit in HEAD's history that landed each entry's verification: the commit
+/// that first added its newest ledger line, or for a `checked:` date alone the last commit that
+/// changed its file — unless the file has uncommitted changes, since the date may be one of them.
+/// Also where its last verifying line landed, and whether the body changed in a commit that line
+/// does not reach. Computed for every entry once per HEAD and verifications (cached); `want` only
+/// decides whether anything is read, and the working-tree check is not cached.
+fn landed_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &dyn Fn(&Entry) -> bool) -> Landed {
+    let empty = || Landed { landed: BTreeMap::new(), landed_verified: BTreeMap::new(), amended: BTreeSet::new() };
+    let looks = ledger::looks(lines);
+    let targets: Vec<(&Entry, Verification, Option<&Line>)> = entries
+        .iter()
+        .filter_map(|e| {
+            let l = looks.get(e.id.as_str()).copied().unwrap_or_default();
+            Some((e, of(e, l.newest)?, l.verified))
+        })
+        .collect();
+    if !targets.iter().any(|(e, _, _)| want(e)) {
+        return empty();
     }
-    let files: Vec<&str> = targets.iter().filter(|(_, v)| v.source == "frontmatter").map(|(e, _)| e.rel_path.as_str()).collect();
-    let fingerprint: String = targets.iter().map(|(e, v)| format!("{}|{}|{}|{};", e.id, e.rel_path, v.source, v.at)).collect();
-    let key = format!("{head}:{}", util::short_hash(&fingerprint));
+    let files: Vec<&str> = targets.iter().filter(|(_, v, _)| v.source == "frontmatter").map(|(e, _, _)| e.rel_path.as_str()).collect();
+    let fingerprint: String = targets
+        .iter()
+        .map(|(e, v, l)| format!("{}|{}|{}|{}|{};", e.id, e.rel_path, v.source, v.at, l.map(|l| l.at.as_str()).unwrap_or("-")))
+        .collect();
+    let key = format!("{head}:{}:{}", app.cfg().index.max_commits, util::short_hash(&fingerprint));
     let path = app.repo.worktree_state_dir().join("verification-landed.json");
     let cached = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<LandedCache>(&t).ok()).filter(|c| c.key == key);
-    let mut landed = match cached {
-        Some(c) => c.landed,
+    let mut out = match cached {
+        Some(c) => Landed { landed: c.landed, landed_verified: c.landed_verified, amended: c.amended },
         None => {
-            let mut landed = BTreeMap::new();
-            if targets.iter().any(|(_, v)| v.source == "ledger") {
-                let landings = read_landings(app, head);
-                for (e, v) in targets.iter().filter(|(_, v)| v.source == "ledger") {
-                    if let Some(sha) = landings.get(&(e.id.clone(), v.at.clone())) {
-                        landed.insert(e.rel_path.clone(), sha.clone());
+            let mut out = empty();
+            let landings = if targets.iter().any(|(_, v, l)| v.source == "ledger" || l.is_some()) {
+                landings(app, head)
+            } else {
+                Arc::new(HashMap::new())
+            };
+            for (e, v, l) in &targets {
+                if v.source == "ledger"
+                    && let Some(sha) = landings.get(&(e.id.clone(), v.at.clone()))
+                {
+                    out.landed.insert(e.rel_path.clone(), sha.clone());
+                }
+                if let Some(sha) = l.and_then(|l| landings.get(&(l.id.clone(), l.at.clone()))) {
+                    out.landed_verified.insert(e.rel_path.clone(), sha.clone());
+                }
+            }
+            let history = crate::freshness::history(app, head);
+            if let Some(history) = &history {
+                // newest first: the first commit that names a file is the last that changed it
+                for f in &files {
+                    if let Some(i) = history.touching(f).first() {
+                        out.landed.insert(f.to_string(), history.commits[*i].sha.clone());
+                    }
+                }
+                let mut reach = Reach::new(history);
+                for (e, _, _) in &targets {
+                    let Some(anchor) = out.landed_verified.get(&e.rel_path).and_then(|s| history.position(s)) else { continue };
+                    let Some(seen) = reach.of(vec![anchor]) else { continue };
+                    if history.touching(&e.rel_path).iter().all(|i| seen[*i]) {
+                        continue;
+                    }
+                    let sha = &history.commits[anchor].sha;
+                    let Some(then) = app.repo.git_opt(&["show", &format!("{sha}:{}", e.rel_path)]) else { continue };
+                    let Some(now) = app.repo.git_opt(&["show", &format!("{head}:{}", e.rel_path)]) else { continue };
+                    if body_of(&e.rel_path, &then, &e.kind) != body_of(&e.rel_path, &now, &e.kind) {
+                        out.amended.insert(e.rel_path.clone());
                     }
                 }
             }
-            if !files.is_empty() {
-                let mut args = vec!["log", "-z", "--no-renames", "--name-only", "--format=%x00%H", head, "--"];
-                args.extend(files.iter().copied());
-                if let Ok(log) = app.repo.git(&args) {
-                    // newest first: the first commit that names a file is the last that changed it
-                    for (sha, paths) in crate::freshness::parse_log(&log) {
-                        for p in paths.into_iter().filter(|p| files.contains(p)) {
-                            landed.entry(p.to_string()).or_insert_with(|| sha.trim().to_string());
-                        }
-                    }
-                }
-            }
-            if let Ok(text) = serde_json::to_string(&LandedCache { key, landed: landed.clone() }) {
+            if let Ok(text) = serde_json::to_string(&LandedCache {
+                key,
+                landed: out.landed.clone(),
+                landed_verified: out.landed_verified.clone(),
+                amended: out.amended.clone(),
+            }) {
                 let _ = std::fs::create_dir_all(app.repo.worktree_state_dir());
                 let _ = util::write_atomic(&path, &text);
             }
-            landed
+            out
         }
     };
     if !files.is_empty() {
@@ -507,34 +661,48 @@ fn landed_all(app: &App, entries: &[Entry], lines: &[Line], head: &str, want: &d
         args.extend(files.iter().copied());
         if let Ok(status) = app.repo.git(&args) {
             for dirty in status.split('\0').filter_map(|l| l.get(3..)) {
-                landed.remove(dirty);
+                out.landed.remove(dirty);
             }
         }
     }
-    landed
+    out
 }
 
-/// Non-merge commits of HEAD from two days before the oldest look (the count then compares exact
-/// positions or times), each with its sha, time, subject and files.
-fn read_history(app: &App, head: &str, oldest: i64) -> Option<String> {
-    let max = format!("--max-count={}", app.cfg().index.max_commits.max(1));
-    let from = chrono::DateTime::from_timestamp(oldest - 2 * 86_400, 0)?.format("--since=%Y-%m-%dT00:00:00").to_string();
-    app.repo
-        .git(&[
-            "log",
-            &max,
-            &from,
-            "--no-merges",
-            "--no-show-signature",
-            "--root",
-            "--no-renames",
-            "--name-only",
-            "-z",
-            "--format=%x00%H %ct %s",
-            head,
-            "--",
-        ])
-        .ok()
+/// `kontext confirm --migrate-legacy`: one `bulk` ledger line for every active entry whose only
+/// verification is a `checked:` date (a stamp from before the ledger, or a hand edit), dated as
+/// that date and naming the last commit that changed the entry's file, appended and staged. The
+/// dates stay; they now read as what they were: stamps. Returns the lines written.
+pub fn migrate_legacy(app: &App) -> anyhow::Result<Vec<Line>> {
+    let _local = app.write_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let (entries, _) = app.entries();
+    let lines = ledger::read(app);
+    let newest = ledger::latest(&lines, false);
+    let by = app.repo.user_name();
+    let mut out = Vec::new();
+    for e in entries.iter().filter(|e| e.is_active()) {
+        let Some(v) = of(e, newest.get(e.id.as_str()).copied()) else { continue };
+        if v.source != "frontmatter" {
+            continue;
+        }
+        let at = match parse_checked(&v.at) {
+            Some(Checked::At(t)) => t.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            Some(Checked::Day(d)) => format!("{}T00:00:00Z", d.format("%Y-%m-%d")),
+            None => continue,
+        };
+        let commit =
+            app.repo.git_opt(&["log", "-1", "--format=%H", "--", &e.rel_path]).filter(|s| !s.is_empty()).or_else(|| app.repo.head());
+        out.push(Line {
+            at,
+            id: e.id.clone(),
+            kind: "bulk".into(),
+            commit,
+            by: by.clone(),
+            passed: None,
+            because: "migrated: a checked date with no ledger line".into(),
+        });
+    }
+    ledger::append(app, &out)?;
+    Ok(out)
 }
 
 /// The JSON fields for every entry value in a machine API result (`entry`, `entries`,
@@ -692,7 +860,8 @@ mod tests {
         assert!(of(&e, None).is_none());
         e.checked = Some("2026-10-20".into());
         let fm = of(&e, None).unwrap();
-        assert_eq!((fm.kind.as_str(), fm.source, fm.commit.as_deref()), ("read", "frontmatter", None));
+        assert_eq!((fm.kind.as_str(), fm.source, fm.commit.as_deref()), ("cache", "frontmatter", None));
+        assert!(!fm.verified(), "a checked date nobody recorded is a cache, not a verification");
         let l = line("2026-10-20T09:00:00Z", "a", "agent", Some("abc"));
         assert_eq!(of(&e, Some(&l)).unwrap().source, "ledger", "the same day: the line says more");
         assert!(!of(&e, Some(&l)).unwrap().verified(), "an agent's confirmation is a stamp");
@@ -744,37 +913,91 @@ mod tests {
 
     #[test]
     fn counts_from_the_commit_a_look_named_or_landed_in() {
-        let c = |sha: &str, time: i64, paths: &[&str]| Commit {
-            sha: sha.into(),
-            time,
-            subject: format!("s {sha}"),
-            paths: paths.iter().map(|p| p.to_string()).collect(),
-        };
-        // newest first
-        let commits = vec![
-            c("e", 500, &["src/e.rs", ".ai/confirmations.log"]),
-            c("d", 400, &["docs/x.md"]),
-            c("c", 300, &["src/c.rs", "src/c2.rs"]),
-            c("b", 200, &["src/b.rs", ".ai/confirmations.log"]),
-            c("a", 100, &["src/a.rs"]),
+        // newest first, linear: e ← d ← c ← b ← a
+        let shas = ["e", "d", "c", "b", "a"];
+        let paths: [&[&str]; 5] = [
+            &["src/e.rs", ".ai/confirmations.log"],
+            &["docs/x.md"],
+            &["src/c.rs", "src/c2.rs"],
+            &["src/b.rs", ".ai/confirmations.log"],
+            &["src/a.rs"],
         ];
+        let raw = (0..5)
+            .map(|i| {
+                let parents = if i < 4 { vec![shas[i + 1].to_string()] } else { Vec::new() };
+                (
+                    shas[i].to_string(),
+                    500 - 100 * i as i64,
+                    format!("s {}", shas[i]),
+                    parents,
+                    paths[i].iter().map(|p| p.to_string()).collect(),
+                )
+            })
+            .collect();
+        let history = History::build(raw);
         let look = |id: &'static str, from: Start| Look { id, file: ".ai/decisions/x.md", paths: vec!["src/**", ".ai/**"], from };
         let mut landings = HashMap::new();
         landings.insert(("landed".to_string(), "t".to_string()), "b".to_string());
-        let looks = vec![
-            look("named", Start::Ledger { at: 150, commit: Some("a".into()), key: ("named".into(), "t".into()) }),
-            look("landed", Start::Ledger { at: 150, commit: Some("a".into()), key: ("landed".into(), "t".into()) }),
-            look("elsewhere", Start::Ledger { at: 350, commit: Some("zzz".into()), key: ("elsewhere".into(), "t".into()) }),
+        let ledger =
+            |id: &str, at: i64, commit: &str| Start::Ledger { at, anchors: vec![commit.to_string()], key: (id.into(), "t".into()) };
+        let mut looks = vec![
+            look("named", ledger("named", 150, "a")),
+            look("landed", ledger("landed", 150, "a")),
+            look("elsewhere", ledger("elsewhere", 350, "zzz")),
             look("cached", Start::Checked { since: 250 }),
         ];
-        let counts = count(&looks, &commits, &landings, "e", &|f: &str| f.starts_with(".ai/"));
+        let counts = count(&mut looks, &history, &landings, "e", &|f: &str| f.starts_with(".ai/"));
         assert_eq!(counts["named"].commits, 3, "b, c and e after a");
         assert_eq!(counts["named"].paths, vec!["src/b.rs", "src/c.rs", "src/c2.rs", "src/e.rs"], "the ledger itself is not code");
         assert_eq!(counts["named"].recent[0], ("e".to_string(), "s e".to_string()));
         assert_eq!(counts["landed"].commits, 2, "the commit that landed the line was reviewed with it");
         assert_eq!(counts["elsewhere"].commits, 1, "a commit outside HEAD's history: by time");
+        assert!(!counts["elsewhere"].truncated);
         assert_eq!(counts["cached"].commits, 2);
         assert_eq!(counts["cached"].head, "e");
+    }
+
+    #[test]
+    fn a_branch_merged_after_the_look_is_counted_and_a_merge_is_not() {
+        // main: s ← l (the look landed) ← m (merge of f); feature: s ← f (older than l)
+        let c = |sha: &str, time: i64, parents: &[&str], paths: &[&str]| {
+            (
+                sha.to_string(),
+                time,
+                format!("s {sha}"),
+                parents.iter().map(|p| p.to_string()).collect(),
+                paths.iter().map(|p| p.to_string()).collect(),
+            )
+        };
+        let mut history = History::build(vec![
+            c("m", 400, &["l", "f"], &[]),
+            c("l", 300, &["s"], &[".ai/confirmations.log"]),
+            c("f", 200, &["s"], &["src/f.rs"]),
+            c("s", 100, &[], &["src/s.rs"]),
+        ]);
+        let mut looks = vec![Look {
+            id: "x",
+            file: ".ai/decisions/x.md",
+            paths: vec!["src/**"],
+            from: Start::Ledger { at: 300, anchors: vec!["s".into()], key: ("x".into(), "t".into()) },
+        }];
+        let mut landings = HashMap::new();
+        landings.insert(("x".to_string(), "t".to_string()), "l".to_string());
+        let counts = count(&mut looks, &history, &landings, "m", &|f: &str| f.starts_with(".ai/"));
+        assert_eq!(counts["x"].commits, 1, "f was merged after the look");
+        assert_eq!(counts["x"].recent, vec![("f".to_string(), "s f".to_string())]);
+        // a look older than the history read: every commit read counts, and it says so
+        history.truncated = true;
+        history.shallow = true;
+        let mut old = vec![Look {
+            id: "y",
+            file: ".ai/decisions/y.md",
+            paths: vec!["src/**"],
+            from: Start::Ledger { at: 50, anchors: vec!["gone".into()], key: ("y".into(), "t".into()) },
+        }];
+        let counts = count(&mut old, &history, &HashMap::new(), "m", &|f: &str| f.starts_with(".ai/"));
+        assert_eq!((counts["y"].commits, counts["y"].truncated, counts["y"].lower_bound), (2, true, true));
+        assert_eq!(counts["y"].to_json()["truncated"], true);
     }
 
     #[test]

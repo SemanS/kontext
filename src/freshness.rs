@@ -1,8 +1,10 @@
 //! Knowledge freshness, the one place for both signals that an entry may need a look:
 //! * churn — active decisions, conventions and learnings whose governed `paths` saw many commits
-//!   since someone last looked at them: the entry's `date`, its `checked` confirmation or the last
-//!   commit that changed its own file, whichever is latest. One `git log` covers every entry, and the
-//!   counts are cached per HEAD: a brief pays one `rev-parse` while nothing is committed;
+//!   since someone last looked at them. A commit counts when it is not an ancestor of a look (a
+//!   commit that changed the entry's own file, or the commits its newest ledger look named and
+//!   landed in) and is not older than the entry's day (its `date`, or a `checked` date the ledger
+//!   does not record). One `git log` of HEAD covers every entry and is shared with the verification
+//!   view; the counts are cached per HEAD: a brief pays one `rev-parse` while nothing is committed;
 //! * review date — active entries whose `review_by` date has passed. A review date is not an
 //!   expiry: the entry stays where it is, marked, until someone confirms, supersedes or retires it.
 use crate::app::App;
@@ -11,7 +13,9 @@ use crate::store::Entry;
 use crate::util;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 /// The kinds churn watches. Incidents record what happened and stay true; module maps are
 /// refreshed by init.
@@ -32,13 +36,17 @@ struct Cache {
     counts: BTreeMap<String, usize>,
 }
 
-/// An entry under watch: from the first second (UTC) after its day (or its confirmation's), these
-/// path patterns — and only commits newer than the last one that changed `file`.
+/// An entry under watch: commits from `since` (UTC seconds) on, on these path patterns, that no
+/// look reaches — a commit that changed `file`, or one of `anchors`.
 struct Watched<'a> {
     id: &'a str,
     file: &'a str,
     since: i64,
     paths: Vec<&'a str>,
+    /// Commits a ledger look named or landed in.
+    anchors: Vec<String>,
+    /// The ledger line of that look, to find where it landed: (id, at).
+    key: Option<(String, String)>,
 }
 
 /// The start of the UTC day after an entry's date (or confirmation). The day itself is left out: that
@@ -60,9 +68,25 @@ fn confirmed_since(checked: &str) -> Option<i64> {
     }
 }
 
-/// An entry needs a day to count from: its date or its confirmation. An edit of its file only
-/// moves that day later, so an undated entry is never flagged for the age of its file.
-fn watched(entries: &[Entry]) -> Vec<Watched<'_>> {
+/// The second a `checked` value names (a day from its start).
+fn checked_seconds(checked: &str) -> Option<i64> {
+    match crate::store::parse_checked(checked)? {
+        crate::store::Checked::At(at) => Some(at.timestamp()),
+        crate::store::Checked::Day(d) => d.and_hms_opt(0, 0, 0).map(|t| t.and_utc().timestamp()),
+    }
+}
+
+/// A ledger look at an entry: its time, the commit it named, and its line's key.
+pub(crate) struct LedgerLook {
+    pub at: i64,
+    pub commit: Option<String>,
+    pub key: (String, String),
+}
+
+/// An entry needs a day to count from: its date or its confirmation. A confirmation the ledger
+/// recorded counts from the commits its line named and landed in, not from its time, so a branch
+/// merged after it still counts.
+fn watched<'a>(entries: &'a [Entry], look: &dyn Fn(&Entry) -> Option<LedgerLook>) -> Vec<Watched<'a>> {
     entries
         .iter()
         .filter(|e| WATCHED_KINDS.contains(&e.kind.as_str()) && e.is_active())
@@ -71,16 +95,20 @@ fn watched(entries: &[Entry]) -> Vec<Watched<'_>> {
             if paths.is_empty() {
                 return None;
             }
-            let confirmed = e.checked.as_deref().and_then(confirmed_since);
-            let since = e.date.as_deref().and_then(cutoff).into_iter().chain(confirmed).max()?;
-            Some(Watched { id: &e.id, file: &e.rel_path, since, paths })
+            let dated = e.date.as_deref().and_then(cutoff);
+            let checked = e.checked.as_deref().and_then(confirmed_since);
+            dated.or(checked)?;
+            let ledger = look(e);
+            let recorded = |c: &str| ledger.as_ref().is_some_and(|l| checked_seconds(c).is_some_and(|s| l.at >= s));
+            let checked = checked.filter(|_| !e.checked.as_deref().is_some_and(recorded));
+            let since = dated.into_iter().chain(checked).max().unwrap_or(i64::MIN);
+            let (anchors, key) = match ledger {
+                Some(l) => (l.commit.into_iter().collect(), Some(l.key)),
+                None => (Vec::new(), None),
+            };
+            Some(Watched { id: &e.id, file: &e.rel_path, since, paths, anchors, key })
         })
         .collect()
-}
-
-struct Commit<'a> {
-    time: i64,
-    paths: Vec<&'a str>,
 }
 
 /// `git log -z --name-only --format=%x00<header>`: a NUL-prefixed header starts a commit, and its
@@ -107,51 +135,218 @@ pub(crate) fn parse_log(history: &str) -> Vec<(&str, Vec<&str>)> {
     commits
 }
 
-/// The history read with `--format=%x00%ct`: commit times and paths.
-fn parse_history(history: &str) -> Vec<Commit<'_>> {
-    parse_log(history).into_iter().filter_map(|(header, paths)| Some(Commit { time: header.parse().ok()?, paths })).collect()
+// ------------------------------------------------------------------------------------ history
+
+/// The format every history read shares: sha, commit time, parents and subject.
+pub(crate) const FORMAT: &str = "--format=%x00%H%x1f%ct%x1f%P%x1f%s";
+
+/// One commit of a history read.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HCommit {
+    pub sha: String,
+    pub time: i64,
+    pub subject: String,
+    /// Parents within the read (an older one cut off by the bound or a shallow graft is left out).
+    pub parents: Vec<usize>,
+    /// A merge: kept in the graph, never counted as a change.
+    pub merge: bool,
+    pub paths: Vec<String>,
 }
 
-/// Matching commits per entry; a commit counts once, however many of its files match. `commits` are
-/// newest first, as `git log` lists them: a commit that changed the entry's own file (an edit, a
-/// confirmation) was a look at it, and only the commits listed before it count. Order rather than
-/// time decides, since commits made within one second share a timestamp.
-fn count(watched: &[Watched], commits: &[Commit]) -> BTreeMap<String, usize> {
-    watched
-        .iter()
-        .map(|w| {
-            let looked = commits.iter().position(|c| c.paths.contains(&w.file)).unwrap_or(commits.len());
-            let n = commits[..looked]
-                .iter()
-                .filter(|c| c.time >= w.since && c.paths.iter().any(|f| w.paths.iter().any(|p| path_matches(p, f))))
-                .count();
-            (w.id.to_string(), n)
-        })
-        .collect()
+/// HEAD's history as a graph, newest first as `git log` lists it, merges included. Counts go by
+/// ancestry: a commit is "since a look" when the look's commit does not reach it.
+#[derive(Debug, Default)]
+pub(crate) struct History {
+    pub commits: Vec<HCommit>,
+    index: HashMap<String, usize>,
+    /// Non-merge commits by the files they changed.
+    by_path: HashMap<String, Vec<usize>>,
+    /// The read stopped at `index.max_commits`: older commits are unknown.
+    pub truncated: bool,
+    /// A shallow clone: history stops at the graft, so counts are lower bounds.
+    pub shallow: bool,
 }
 
-/// One history read for every entry: non-merge commits of HEAD from a day before the oldest
-/// cutoff (the count then compares exact times), a rename as both of its ends (moving code out of
-/// governed paths changes them too), and no signature output, which would land among the paths.
-fn read_history(app: &App, head: &str, oldest: i64) -> Option<String> {
-    let max = format!("--max-count={}", app.cfg().index.max_commits.max(1));
-    let from = chrono::DateTime::from_timestamp(oldest - 2 * 86_400, 0)?.format("--since=%Y-%m-%dT00:00:00").to_string();
-    app.repo
+impl History {
+    /// A history from `(sha, time, subject, parent shas, paths)`, newest first.
+    pub(crate) fn build(raw: Vec<(String, i64, String, Vec<String>, Vec<String>)>) -> History {
+        let index: HashMap<String, usize> = raw.iter().enumerate().map(|(i, c)| (c.0.clone(), i)).collect();
+        let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();
+        let commits = raw
+            .into_iter()
+            .enumerate()
+            .map(|(i, (sha, time, subject, parents, paths))| {
+                let merge = parents.len() > 1;
+                if !merge {
+                    for p in &paths {
+                        by_path.entry(p.clone()).or_default().push(i);
+                    }
+                }
+                let parents = parents.iter().filter_map(|p| index.get(p).copied()).collect();
+                HCommit { sha, time, subject, parents, merge, paths }
+            })
+            .collect();
+        History { commits, index, by_path, truncated: false, shallow: false }
+    }
+
+    /// `git log -z --name-only` output in [`FORMAT`].
+    pub(crate) fn parse(text: &str) -> History {
+        let raw = parse_log(text)
+            .into_iter()
+            .filter_map(|(header, paths)| {
+                let mut p = header.splitn(4, '\x1f');
+                let sha = p.next()?.trim().to_string();
+                let time = p.next()?.trim().parse().ok()?;
+                let parents = p.next().unwrap_or("").split_whitespace().map(String::from).collect();
+                let subject = p.next().unwrap_or("").to_string();
+                Some((sha, time, subject, parents, paths.into_iter().map(String::from).collect()))
+            })
+            .collect();
+        History::build(raw)
+    }
+
+    pub(crate) fn position(&self, sha: &str) -> Option<usize> {
+        self.index.get(sha).copied()
+    }
+
+    /// Non-merge commits that changed `file`.
+    pub(crate) fn touching(&self, file: &str) -> &[usize] {
+        self.by_path.get(file).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// Whether each commit is reachable from any of `sources` (themselves included).
+    fn reach(&self, sources: &[usize]) -> Vec<bool> {
+        let mut seen = vec![false; self.commits.len()];
+        let mut stack: Vec<usize> = sources.to_vec();
+        while let Some(i) = stack.pop() {
+            if i >= seen.len() || seen[i] {
+                continue;
+            }
+            seen[i] = true;
+            stack.extend(self.commits[i].parents.iter().copied());
+        }
+        seen
+    }
+
+    /// Non-merge commits no look reaches (`looked`, none: every one), from `after` (UTC seconds)
+    /// on, that changed a file `governed` selects: how many, which files, and the newest `recent`.
+    pub(crate) fn count(&self, looked: Option<&[bool]>, after: i64, governed: &dyn Fn(&str) -> bool, recent: usize) -> Counted {
+        let mut out = Counted::default();
+        for (i, c) in self.commits.iter().enumerate() {
+            if c.merge || looked.is_some_and(|l| l.get(i).copied().unwrap_or(false)) || c.time < after {
+                continue;
+            }
+            let mut hit = false;
+            for f in c.paths.iter().filter(|f| governed(f)) {
+                hit = true;
+                out.paths.insert(f.clone());
+            }
+            if hit {
+                out.commits += 1;
+                if out.recent.len() < recent {
+                    out.recent.push((c.sha.clone(), c.subject.clone()));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// What [`History::count`] found.
+#[derive(Debug, Default)]
+pub(crate) struct Counted {
+    pub commits: usize,
+    pub paths: BTreeSet<String>,
+    pub recent: Vec<(String, String)>,
+}
+
+/// Ancestor sets of a history, each distinct set of looks computed once.
+pub(crate) struct Reach<'h> {
+    history: &'h History,
+    memo: HashMap<Vec<usize>, Rc<Vec<bool>>>,
+}
+
+impl<'h> Reach<'h> {
+    pub(crate) fn new(history: &'h History) -> Reach<'h> {
+        Reach { history, memo: HashMap::new() }
+    }
+
+    /// What `sources` reach, or None without any.
+    pub(crate) fn of(&mut self, mut sources: Vec<usize>) -> Option<Rc<Vec<bool>>> {
+        sources.sort_unstable();
+        sources.dedup();
+        if sources.is_empty() {
+            return None;
+        }
+        if let Some(r) = self.memo.get(&sources) {
+            return Some(r.clone());
+        }
+        let r = Rc::new(self.history.reach(&sources));
+        self.memo.insert(sources, r.clone());
+        Some(r)
+    }
+}
+
+static HISTORIES: LazyLock<Mutex<HashMap<String, Arc<History>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Whether this clone is shallow (its history stops at a graft).
+pub(crate) fn is_shallow(app: &App) -> bool {
+    app.repo.common_dir.join("shallow").is_file()
+}
+
+/// HEAD's history, read once per HEAD and process: up to `index.max_commits` commits, merges
+/// included, a rename as both of its ends (moving code out of governed paths changes them too), and
+/// no signature output, which would land among the paths.
+pub(crate) fn history(app: &App, head: &str) -> Option<Arc<History>> {
+    let max = app.cfg().index.max_commits.max(1);
+    let key = format!("{}\0{head}\0{max}", app.repo.root.display());
+    if let Some(h) = HISTORIES.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        return Some(h);
+    }
+    let text = app
+        .repo
         .git(&[
             "log",
-            &max,
-            &from,
-            "--no-merges",
+            &format!("--max-count={max}"),
             "--no-show-signature",
             "--root",
             "--no-renames",
             "--name-only",
             "-z",
-            "--format=%x00%ct",
+            FORMAT,
             head,
             "--",
         ])
-        .ok()
+        .ok()?;
+    let mut h = History::parse(&text);
+    h.truncated = h.commits.len() >= max;
+    h.shallow = is_shallow(app);
+    let h = Arc::new(h);
+    if let Ok(mut m) = HISTORIES.lock() {
+        if m.len() >= 8 {
+            m.clear();
+        }
+        m.insert(key, h.clone());
+    }
+    Some(h)
+}
+
+/// Matching commits per entry; a commit counts once, however many of its files match, and only
+/// when no look at the entry reaches it: a commit that changed its file (an edit, a confirmation),
+/// or the commits its newest ledger look named and landed in.
+fn count(watched: &[Watched], history: &History) -> BTreeMap<String, usize> {
+    let mut reach = Reach::new(history);
+    watched
+        .iter()
+        .map(|w| {
+            let mut sources: Vec<usize> = history.touching(w.file).to_vec();
+            sources.extend(w.anchors.iter().filter_map(|s| history.position(s)));
+            let looked = reach.of(sources);
+            let governed = |f: &str| w.paths.iter().any(|p| path_matches(p, f));
+            let n = history.count(looked.as_deref().map(Vec::as_slice), w.since, &governed, 0).commits;
+            (w.id.to_string(), n)
+        })
+        .collect()
 }
 
 /// Active entries that may need a refresh, the most changed first. Empty when the threshold is 0,
@@ -161,13 +356,26 @@ pub fn stale_entries(app: &App, entries: &[Entry]) -> Vec<Stale> {
     if threshold == 0 {
         return Vec::new();
     }
-    let watched = watched(entries);
+    let lines = crate::ledger::read(app);
+    let looks = crate::ledger::looks(&lines);
+    let look = |e: &Entry| {
+        let l = looks.get(e.id.as_str())?.look?;
+        let at = checked_seconds(&l.at)?;
+        Some(LedgerLook { at, commit: l.commit.clone(), key: (l.id.clone(), l.at.clone()) })
+    };
+    let mut watched = watched(entries, &look);
     if watched.is_empty() {
         return Vec::new();
     }
     let Some(head) = app.repo.head() else { return Vec::new() };
-    // the counts change with HEAD, the history read and the entries' days, files and paths
-    let fingerprint: String = watched.iter().map(|w| format!("{}|{}|{}|{};", w.id, w.file, w.since, w.paths.join(","))).collect();
+    // the counts change with HEAD, the history read and the entries' days, files, paths and looks
+    let fingerprint: String = watched
+        .iter()
+        .map(|w| {
+            let key = w.key.as_ref().map(|k| k.1.as_str()).unwrap_or("-");
+            format!("{}|{}|{}|{}|{}|{key};", w.id, w.file, w.since, w.paths.join(","), w.anchors.join(","))
+        })
+        .collect();
     let key = format!("{head}:{}:{}", app.cfg().index.max_commits, util::short_hash(&fingerprint));
     let path = app.repo.worktree_state_dir().join("freshness.json");
     let cached: Option<Cache> =
@@ -175,9 +383,16 @@ pub fn stale_entries(app: &App, entries: &[Entry]) -> Vec<Stale> {
     let counts = match cached {
         Some(c) => c.counts,
         None => {
-            let oldest = watched.iter().map(|w| w.since).min().unwrap_or_default();
-            let Some(history) = read_history(app, &head, oldest) else { return Vec::new() };
-            let counts = count(&watched, &parse_history(&history));
+            let Some(history) = history(app, &head) else { return Vec::new() };
+            if watched.iter().any(|w| w.key.is_some()) {
+                let landings = crate::verification::landings(app, &head);
+                for w in watched.iter_mut() {
+                    if let Some(sha) = w.key.as_ref().and_then(|k| landings.get(k)) {
+                        w.anchors.push(sha.clone());
+                    }
+                }
+            }
+            let counts = count(&watched, &history);
             if let Ok(text) = serde_json::to_string(&Cache { key, counts: counts.clone() }) {
                 let _ = std::fs::create_dir_all(app.repo.worktree_state_dir());
                 let _ = util::write_atomic(&path, &text);
@@ -259,6 +474,25 @@ mod tests {
         }
     }
 
+    fn no_ledger(_: &Entry) -> Option<LedgerLook> {
+        None
+    }
+
+    /// A linear history, newest first: `c0` is HEAD, each commit's parent the next.
+    fn linear(commits: &[(i64, &[&str])]) -> History {
+        let n = commits.len();
+        History::build(
+            commits
+                .iter()
+                .enumerate()
+                .map(|(i, (time, paths))| {
+                    let parents = if i + 1 < n { vec![format!("c{}", i + 1)] } else { Vec::new() };
+                    (format!("c{i}"), *time, format!("s{i}"), parents, paths.iter().map(|p| p.to_string()).collect())
+                })
+                .collect(),
+        )
+    }
+
     #[test]
     fn watches_active_decisions_conventions_and_learnings_with_a_day_and_paths() {
         let of = |kind: &str, id: &str| Entry { kind: kind.into(), ..decision(id, Some("2026-01-05"), &["src/**"], None) };
@@ -275,7 +509,7 @@ mod tests {
             of("incident", "inc"),
             of("architecture", "map"),
         ];
-        let ids: Vec<&str> = watched(&entries).iter().map(|w| w.id).collect();
+        let ids: Vec<&str> = watched(&entries, &no_ledger).iter().map(|w| w.id).collect();
         assert_eq!(ids, vec!["a", "confirmed-only", "conv", "learn"]);
     }
 
@@ -295,21 +529,52 @@ mod tests {
             rule("confirmed-day", Some("2026-02-10")),
             rule("confirmed-at", Some("2026-02-10T08:00:00Z")),
         ];
-        let commits = vec![
-            Commit { time: day("2026-03-01", 9), paths: vec!["src/a.rs"] },
-            Commit { time: day("2026-02-20", 9), paths: vec!["src/b.rs"] },
-            // the same second as the next one: the order in the log decides, not the time
-            Commit { time: day("2026-02-10", 9), paths: vec!["src/c.rs"] },
-            Commit { time: day("2026-02-10", 9), paths: vec![".ai/decisions/edited.md", "src/d.rs"] },
-            Commit { time: day("2026-01-20", 9), paths: vec!["src/e.rs"] },
-        ];
-        let counts = count(&watched(&entries), &commits);
+        let history = linear(&[
+            (day("2026-03-01", 9), &["src/a.rs"]),
+            (day("2026-02-20", 9), &["src/b.rs"]),
+            (day("2026-02-10", 9), &["src/c.rs"]),
+            (day("2026-02-10", 9), &[".ai/decisions/edited.md", "src/d.rs"]),
+            (day("2026-01-20", 9), &["src/e.rs"]),
+        ]);
+        let counts = count(&watched(&entries, &no_ledger), &history);
         assert_eq!(counts["plain"], 5);
         assert_eq!(counts["confirmed"], 4, "counted from the day after the confirmation");
         assert_eq!(counts["stale-check"], 5, "a confirmation older than the date does not move it back");
         assert_eq!(counts["confirmed-day"], 2, "a day counts from the start of the next one");
         assert_eq!(counts["confirmed-at"], 4, "a time counts after its second, the rest of its day included");
-        assert_eq!(counts["edited"], 3, "the commit that edited the entry and the older ones do not count");
+        assert_eq!(counts["edited"], 3, "the commit that edited the entry and its ancestors do not count");
+    }
+
+    #[test]
+    fn a_branch_merged_after_an_edit_or_a_recorded_confirmation_still_counts() {
+        // main: seed ← edit (E, touches the entry) ← merge M; feature: seed ← F (older than E)
+        let day = |d: &str| NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc().timestamp();
+        let raw = vec![
+            ("m".to_string(), day("2026-10-07"), "merge".to_string(), vec!["e".to_string(), "f".to_string()], Vec::new()),
+            ("e".to_string(), day("2026-10-06"), "edit".to_string(), vec!["s".to_string()], vec![".ai/decisions/rule.md".to_string()]),
+            ("f".to_string(), day("2026-10-05"), "feature".to_string(), vec!["s".to_string()], vec!["src/a.rs".to_string()]),
+            (
+                "s".to_string(),
+                day("2026-10-01"),
+                "seed".to_string(),
+                Vec::new(),
+                vec![".ai/decisions/rule.md".to_string(), "src/a.rs".to_string()],
+            ),
+        ];
+        let history = History::build(raw);
+        assert!(history.commits[0].merge && history.touching(".ai/decisions/rule.md") == [1, 3]);
+        let entry = Entry { rel_path: ".ai/decisions/rule.md".into(), ..decision("rule", Some("2026-10-01"), &["src/**"], None) };
+        let counts = count(&watched(std::slice::from_ref(&entry), &no_ledger), &history);
+        assert_eq!(counts["rule"], 1, "F was not seen by the edit, the merge itself never counts");
+
+        // a confirmation recorded in the ledger at E counts from its commits, not from its time
+        let confirmed = Entry { checked: Some("2026-10-06T12:00:00Z".into()), ..entry.clone() };
+        let look = |_: &Entry| Some(LedgerLook { at: day("2026-10-06"), commit: Some("e".into()), key: ("rule".into(), "t".into()) });
+        let w = watched(std::slice::from_ref(&confirmed), &look);
+        assert_eq!(w[0].anchors, vec!["e".to_string()]);
+        assert_eq!(count(&w, &history)["rule"], 1);
+        // a `checked` with no ledger line is a date: the older branch commit falls before it
+        assert_eq!(count(&watched(std::slice::from_ref(&confirmed), &no_ledger), &history)["rule"], 0);
     }
 
     #[test]
@@ -322,20 +587,23 @@ mod tests {
     }
 
     #[test]
-    fn history_preserves_unusual_paths_and_empty_commits() {
-        let commits = parse_history(concat!(
+    fn history_preserves_unusual_paths_merges_and_empty_commits() {
+        let h = History::parse(concat!(
             "\0",
-            "1735819200\0\n123\0src/tab\tname.rs\0src/line\nname.rs\0",
+            "aaa\x1f1735819200\x1fbbb\x1fsubject a\0\n123\0src/tab\tname.rs\0src/line\nname.rs\0",
             "\0",
-            "1735905600\0",
+            "bbb\x1f1735905600\x1fccc ddd\x1fmerge b\0",
             "\0",
-            "1735992000\0\n\nleading.rs\0",
+            "ccc\x1f1735992000\x1f\x1froot c\0\n\nleading.rs\0",
         ));
-        assert_eq!(commits.len(), 3);
-        assert_eq!(commits[0].time, 1735819200);
-        assert_eq!(commits[0].paths, vec!["123", "src/tab\tname.rs", "src/line\nname.rs"]);
-        assert!(commits[1].paths.is_empty());
-        assert_eq!(commits[2].paths, vec!["\nleading.rs"]);
+        assert_eq!(h.commits.len(), 3);
+        assert_eq!((h.commits[0].sha.as_str(), h.commits[0].time, h.commits[0].subject.as_str()), ("aaa", 1735819200, "subject a"));
+        assert_eq!(h.commits[0].paths, vec!["123", "src/tab\tname.rs", "src/line\nname.rs"]);
+        assert_eq!(h.commits[0].parents, vec![1]);
+        assert!(h.commits[1].merge && h.commits[1].paths.is_empty());
+        assert_eq!(h.commits[1].parents, vec![2], "a parent outside the read is left out");
+        assert_eq!(h.commits[2].paths, vec!["\nleading.rs"]);
+        assert_eq!(h.touching("123"), &[0]);
     }
 
     #[test]
@@ -345,14 +613,14 @@ mod tests {
             decision("api", Some("2026-02-01"), &["src/api", "docs/api.md"], None),
         ];
         let day = |d: &str, h: u32| NaiveDate::parse_from_str(d, "%Y-%m-%d").unwrap().and_hms_opt(h, 0, 0).unwrap().and_utc().timestamp();
-        let commits = vec![
-            Commit { time: day("2026-03-01", 9), paths: vec!["src/billing/invoice.rs", "src/billing/tax.rs", "src/api/routes.rs"] },
-            Commit { time: day("2026-02-01", 18), paths: vec!["src/api/routes.rs"] }, // the api decision's own day
-            Commit { time: day("2026-01-20", 9), paths: vec!["src/billing/tax.rs"] }, // before the api decision
-            Commit { time: day("2026-01-10", 9), paths: vec!["README.md"] },
-            Commit { time: day("2026-01-05", 23), paths: vec!["src/billing/tax.rs"] }, // the billing decision's own day
-        ];
-        let counts = count(&watched(&entries), &commits);
+        let history = linear(&[
+            (day("2026-03-01", 9), &["src/billing/invoice.rs", "src/billing/tax.rs", "src/api/routes.rs"]),
+            (day("2026-02-01", 18), &["src/api/routes.rs"]), // the api decision's own day
+            (day("2026-01-20", 9), &["src/billing/tax.rs"]), // before the api decision
+            (day("2026-01-10", 9), &["README.md"]),
+            (day("2026-01-05", 23), &["src/billing/tax.rs"]), // the billing decision's own day
+        ]);
+        let counts = count(&watched(&entries, &no_ledger), &history);
         assert_eq!(counts.get("billing"), Some(&2), "two files of one commit count once");
         assert_eq!(counts.get("api"), Some(&1));
     }

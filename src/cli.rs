@@ -132,6 +132,9 @@ enum Cmd {
         /// Print what would be captured instead of capturing it
         #[arg(long)]
         dry_run: bool,
+        /// Distill a --claude or --codex thread that ran in another repository
+        #[arg(long)]
+        force: bool,
     },
     /// Decision timeline (or another kind)
     Log {
@@ -192,7 +195,7 @@ enum Cmd {
         /// Print the result as JSON (the entries.drift result)
         #[arg(long)]
         json: bool,
-        /// Exit with status 2 when an entry is listed
+        /// Exit with status 2 when an entry is listed, 3 when no base resolved
         #[arg(long)]
         fail: bool,
     },
@@ -204,21 +207,27 @@ enum Cmd {
         /// text | markdown (for a job summary or a pull request comment)
         #[arg(long, default_value = "text")]
         format: String,
-        /// Also fail (exit 2) when drift lists an entry; otherwise drift is a warning
+        /// Also fail when drift lists an entry (exit 2) or no base resolved (exit 3); otherwise drift is a warning
         #[arg(long)]
         strict: bool,
     },
     /// Confirm that entries still hold: sets `checked` to now (UTC) in each entry's file, appends a line to the verification ledger and stages both
     Confirm {
         /// The entries: kx:<id>, ids or unique prefixes (more than five in one call are recorded as a bulk stamp)
-        #[arg(required_unless_present = "repair")]
+        #[arg(required_unless_present_any = ["repair", "migrate_legacy"])]
         ids: Vec<String>,
         /// Why it still holds, in one line (kept in the ledger)
         #[arg(long, value_name = "TEXT")]
         because: Option<String>,
+        /// read | agent (default: read at an interactive terminal, agent otherwise)
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
         /// Rewrite the `checked` date of entries whose file is behind their ledger (a merge took the older side) and stage them
-        #[arg(long, conflicts_with_all = ["ids", "because"])]
+        #[arg(long, conflicts_with_all = ["ids", "because", "kind", "migrate_legacy"])]
         repair: bool,
+        /// Record every `checked` date with no ledger line as a bulk stamp in the ledger (once, staged)
+        #[arg(long, conflicts_with_all = ["ids", "because", "kind"])]
+        migrate_legacy: bool,
     },
     /// Run entries' `verify` commands from the repository root and record pass or fail in the verification ledger
     Verify {
@@ -472,6 +481,8 @@ enum OutboxCmd {
         #[arg(long)]
         quiet: bool,
     },
+    /// Queue the events that ran out of attempts again, and deliver them
+    Retry,
 }
 
 pub(crate) fn main() {
@@ -484,6 +495,37 @@ pub(crate) fn main() {
         }
     };
     std::process::exit(code);
+}
+
+/// The ledger kind of a CLI confirmation: `read` only at an interactive terminal (stdin and stderr),
+/// `agent` otherwise. A terminal is not proof of a person; it keeps agents driving the CLI through a
+/// shell from recording reads by default. `--kind read` without one is recorded, with a warning.
+fn confirm_kind(asked: Option<&str>, tty: bool) -> Result<&'static str> {
+    match asked {
+        Some("read") => {
+            if !tty {
+                eprintln!("kontext: warning: --kind read without an interactive terminal; recorded as a person's read");
+            }
+            Ok("read")
+        }
+        Some("agent") => Ok("agent"),
+        Some(other) => bail!("--kind must be read or agent, not '{other}'"),
+        None => Ok(if tty { "read" } else { "agent" }),
+    }
+}
+
+/// What a flush did, for `kontext outbox flush` and `retry`.
+fn print_flush(rep: &events::FlushReport) {
+    for d in &rep.delivered {
+        println!("delivered {d}");
+    }
+    for f in &rep.failed {
+        println!("failed {f}");
+    }
+    for d in &rep.dead {
+        println!("dead {d} (ran out of attempts; kontext outbox retry)");
+    }
+    println!("{} delivered, {} failed, {} remaining", rep.delivered.len(), rep.failed.len(), rep.remaining);
 }
 
 fn run_distill(
@@ -820,8 +862,15 @@ fn run(cli: Cli) -> Result<i32> {
                 print!("{}", ops::render_log(&rows));
             }
         }
-        Cmd::Distill { files, claude, codex, superset, list, llm, max, max_parts, jobs, dry_run } => {
+        Cmd::Distill { files, claude, codex, superset, list, llm, max, max_parts, jobs, dry_run, force } => {
             let app = open(&dir)?;
+            // a thread named by id may come from another repository: its knowledge belongs there
+            let roots = app.repo.worktree_roots();
+            for (agent, ids) in [(threads::Agent::Claude, &claude), (threads::Agent::Codex, &codex)] {
+                for id in ids.iter().filter(|id| id.trim() != "last") {
+                    threads::check_belongs(&threads::resolve(Some(agent), id, &roots)?, &roots, force)?;
+                }
+            }
             run_distill(
                 &app,
                 files,
@@ -860,6 +909,10 @@ fn run(cli: Cli) -> Result<i32> {
             if fail && !report.entries.is_empty() {
                 return Ok(2);
             }
+            if fail && report.without_base() {
+                eprintln!("kontext: drift --fail needs a base: {}", crate::drift::NO_BASE);
+                return Ok(3);
+            }
         }
         Cmd::Ci { base, format, strict } => {
             let markdown = match format.as_str() {
@@ -878,9 +931,24 @@ fn run(cli: Cli) -> Result<i32> {
             if strict && !report.entries.is_empty() {
                 return Ok(2);
             }
+            if strict && report.without_base() {
+                eprintln!("kontext: ci --strict needs a base: {}", crate::drift::NO_BASE);
+                return Ok(3);
+            }
         }
-        Cmd::Confirm { ids, because, repair } => {
+        Cmd::Confirm { ids, because, kind, repair, migrate_legacy } => {
             let app = open(&dir)?;
+            if migrate_legacy {
+                let lines = crate::verification::migrate_legacy(&app)?;
+                for l in &lines {
+                    println!("migrated {} — bulk stamp dated {} in {} (staged)", l.id, l.at, crate::ledger::rel_path(&app));
+                }
+                if lines.is_empty() {
+                    println!("nothing to migrate: every checked date has a ledger line");
+                }
+                return Ok(0);
+            }
+            let kind = confirm_kind(kind.as_deref(), std::io::stdin().is_terminal() && std::io::stderr().is_terminal())?;
             if repair {
                 let out = crate::api_write::confirm(&app, &json!({"repair": true}))?;
                 let repaired = out["repaired"].as_array().cloned().unwrap_or_default();
@@ -904,7 +972,7 @@ fn run(cli: Cli) -> Result<i32> {
             }
             let mut failed = 0;
             let mut ledger: Option<Value> = None;
-            for (id, r) in ids.iter().zip(crate::api_write::confirm_ids(&app, &ids, "read", because.as_deref())) {
+            for (id, r) in ids.iter().zip(crate::api_write::confirm_ids(&app, &ids, kind, because.as_deref())) {
                 match r {
                     Ok(out) => {
                         println!(
@@ -1095,17 +1163,32 @@ fn run(cli: Cli) -> Result<i32> {
                             e.last_error.unwrap_or_default()
                         );
                     }
+                    let dead = ob.dead();
+                    if !dead.is_empty() {
+                        println!("\n{} event(s) ran out of attempts (kontext outbox retry queues them again):", dead.len());
+                    }
+                    for e in dead {
+                        println!(
+                            "dead {} {} {} attempts={} {}",
+                            e.dead_at.as_deref().unwrap_or(&e.at),
+                            e.event,
+                            e.payload.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                            e.attempts,
+                            e.last_error.unwrap_or_default()
+                        );
+                    }
                 }
                 OutboxCmd::Flush { quiet } => {
-                    let rep = ob.flush(app.registry())?;
+                    let rep = ob.flush_with(app.registry(), Some(app.cfg()))?;
                     if !quiet {
-                        for d in &rep.delivered {
-                            println!("delivered {d}");
-                        }
-                        for f in &rep.failed {
-                            println!("failed {f}");
-                        }
-                        println!("{} delivered, {} failed, {} remaining", rep.delivered.len(), rep.failed.len(), rep.remaining);
+                        print_flush(&rep);
+                    }
+                }
+                OutboxCmd::Retry => {
+                    let n = ob.retry()?;
+                    println!("queued {n} dead event(s) again");
+                    if n > 0 {
+                        print_flush(&ob.flush_with(app.registry(), Some(app.cfg()))?);
                     }
                 }
             }
@@ -1115,7 +1198,7 @@ fn run(cli: Cli) -> Result<i32> {
             let n = hooks::sync_events(&app, all)?;
             println!("queued {n} sync event(s)");
             if n > 0 {
-                let rep = events::Outbox::open(&app.repo).flush(app.registry())?;
+                let rep = events::Outbox::open(&app.repo).flush_with(app.registry(), Some(app.cfg()))?;
                 println!("{} delivered, {} failed, {} remaining", rep.delivered.len(), rep.failed.len(), rep.remaining);
             }
         }
@@ -1349,7 +1432,13 @@ fn status(app: &App) -> Result<()> {
         println!("nested    {} (submodules with their own team knowledge; tools take `dir`)", nested.join(", "));
     }
     print!("hooks     {}", hooks::status(app).unwrap_or_default().replace('\n', "\n          "));
-    println!("\noutbox    {} queued", events::Outbox::open(&app.repo).list().len());
+    let outbox = events::Outbox::open(&app.repo);
+    let dead = outbox.dead().len();
+    println!(
+        "\noutbox    {} queued{}",
+        outbox.list().len(),
+        if dead > 0 { format!(", {dead} ran out of attempts (`kontext outbox`, `kontext outbox retry`)") } else { String::new() }
+    );
     for w in app.warnings() {
         println!("warning   {w}");
     }
