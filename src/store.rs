@@ -3,7 +3,13 @@
 //!
 //! Two on-disk styles are understood:
 //! * `frontmatter` — YAML-ish front matter (flat keys, inline or dashed lists) + Markdown body;
-//! * `fields` — classic ADR files: `# 0002 — Title` followed by `**Status:** accepted` style lines.
+//! * `fields` — classic ADR files: `# 0002 — Title` followed by `**Status:** accepted` style lines,
+//!   or (adr-tools, Nygard) a `## Status` section whose first paragraph is the status.
+//!
+//! Status edits (supersede, retire) change the status and `superseded_by` lines in place, in the
+//! file's own style; every other byte stays. Load derives supersession from successors: an entry an
+//! active entry names in `supersedes` is superseded whatever its own file says (`kontext repair`
+//! writes the missing side).
 use crate::config::{Config, Numbering, Style};
 use crate::repo::Repo;
 use crate::util;
@@ -68,6 +74,16 @@ pub struct Entry {
     pub body: String,
     pub rel_path: String,
     pub style: Style,
+    /// The status the file itself states (normalized). `status` is the effective one: load marks an
+    /// entry superseded when an active entry names it in `supersedes`, whatever its file says.
+    pub file_status: Option<String>,
+    /// Load derived `superseded` from a successor's `supersedes` while the file says otherwise: a
+    /// one-sided supersession that `kontext repair` writes into the file.
+    pub derived_superseded: bool,
+    /// Successor ids load added to `superseded_by` that the file does not list.
+    pub derived_by: Vec<String>,
+    /// What the parser could not read, or read as something other than it says.
+    pub parse_issues: Vec<(Level, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -116,6 +132,21 @@ impl Entry {
 
     pub fn is_active(&self) -> bool {
         !matches!(self.status.as_deref(), Some("superseded" | "deprecated" | "rejected"))
+    }
+
+    /// Active by what the file itself says, before load derived anything from successors.
+    pub fn file_active(&self) -> bool {
+        let own = if self.derived_superseded { self.file_status.as_deref() } else { self.status.as_deref() };
+        !matches!(own, Some("superseded" | "deprecated" | "rejected"))
+    }
+
+    /// The status the canonical writer puts in the file: what the file said, never a derived one.
+    fn written_status(&self) -> Option<String> {
+        if self.derived_superseded { self.file_status.clone() } else { self.status.clone() }
+    }
+
+    fn written_superseded_by(&self) -> Vec<String> {
+        self.superseded_by.iter().filter(|s| !self.derived_by.contains(s)).cloned().collect()
     }
 
     /// `0002` for sequentially numbered ADRs, otherwise the full id.
@@ -184,7 +215,7 @@ impl Entry {
         s("id", &Some(self.id.clone()));
         s("kind", &Some(self.kind.clone()));
         s("title", &Some(self.title.clone()));
-        s("status", &self.status);
+        s("status", &self.written_status());
         s("date", &self.date);
         s("review_by", &self.review_by);
         s("checked", &self.checked);
@@ -198,7 +229,7 @@ impl Entry {
         l("tags", &self.tags);
         l("paths", &self.paths);
         l("supersedes", &self.supersedes);
-        l("superseded_by", &self.superseded_by);
+        l("superseded_by", &self.written_superseded_by());
         l("commits", &self.commits);
         let mut s2 = |k: &str, val: &Option<String>| {
             if let Some(x) = val.as_ref().filter(|x| !x.is_empty()) {
@@ -237,7 +268,7 @@ impl Entry {
                 out.push_str(&format!("**{k}:** {}\n", v.replace(['\r', '\n'], " ")));
             }
         };
-        field("Status", self.status.clone().unwrap_or_default());
+        field("Status", self.written_status().unwrap_or_default());
         field("Date", self.date.clone().unwrap_or_default());
         field("Review by", self.review_by.clone().unwrap_or_default());
         field("Checked", self.checked.clone().unwrap_or_default());
@@ -246,7 +277,7 @@ impl Entry {
         field("Tags", self.tags.join(", "));
         field("Paths", self.paths.join(", "));
         field("Supersedes", self.supersedes.join(", "));
-        field("Superseded by", self.superseded_by.join(", "));
+        field("Superseded by", self.written_superseded_by().join(", "));
         field("Commits", self.commits.join(", "));
         field("Author", self.author.clone().unwrap_or_default());
         let mut metadata = serde_json::Map::new();
@@ -294,25 +325,135 @@ pub fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
     None
 }
 
+#[allow(dead_code)]
 pub fn parse_fm(fm: &str) -> Vec<(String, FmValue)> {
+    parse_fm_checked(fm).0
+}
+
+/// Keys kontext reads itself: a value of one of them the parser cannot read is an error, of any other
+/// key a warning (foreign front matter may hold YAML this subset does not model).
+const FM_KEYS: &[&str] = &[
+    "id",
+    "kind",
+    "type",
+    "title",
+    "status",
+    "date",
+    "summary",
+    "description",
+    "review_by",
+    "review-by",
+    "checked",
+    "verify",
+    "tags",
+    "paths",
+    "supersedes",
+    "superseded_by",
+    "superseded-by",
+    "commits",
+    "extends",
+    "author",
+    "visibility",
+    "origin",
+];
+
+fn fm_level(key: &str) -> Level {
+    if FM_KEYS.contains(&key.to_lowercase().as_str()) { Level::Error } else { Level::Warn }
+}
+
+/// Cut a trailing ` # comment` that is outside quotes.
+fn strip_comment(s: &str) -> &str {
+    let mut quote: Option<char> = None;
+    let mut prev_space = true;
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '#') if prev_space => return s[..i].trim_end(),
+            _ => {}
+        }
+        prev_space = c.is_whitespace();
+    }
+    s
+}
+
+/// `[` and `]` outside quotes balance (or close more than they open).
+fn brackets_balanced(s: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    for c in s.chars() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '[') => depth += 1,
+            (None, ']') => depth -= 1,
+            _ => {}
+        }
+    }
+    depth <= 0
+}
+
+/// A flow list (`[a, b]`), possibly gathered from several lines; None when it is not one.
+fn flow_list(acc: &str) -> Option<Vec<String>> {
+    let inner = acc.trim().strip_prefix('[')?.strip_suffix(']')?;
+    Some(split_inline_list(inner))
+}
+
+/// Front matter read into keys and values, together with what could not be read: a line that is
+/// no `key: value`, a flow list that never closes, a nested value under a list.
+pub fn parse_fm_checked(fm: &str) -> (Vec<(String, FmValue)>, Vec<(Level, String)>) {
     let mut out: Vec<(String, FmValue)> = Vec::new();
+    let mut problems: Vec<(Level, String)> = Vec::new();
     let mut open: Option<usize> = None; // last key with an empty inline value (list or block scalar)
     let mut block = false;
-    for raw in fm.lines() {
-        let t = raw.trim();
-        if t.is_empty() || t.starts_with('#') {
+    let mut flow: Option<(usize, String)> = None; // a flow list wrapped over several lines
+    for (n, raw) in fm.lines().enumerate() {
+        if let Some((i, acc)) = flow.as_mut() {
+            let t = strip_comment(raw.trim());
+            if !t.is_empty() {
+                acc.push(' ');
+                acc.push_str(t);
+            }
+            if brackets_balanced(acc) {
+                let (i, acc) = (*i, std::mem::take(acc));
+                flow = None;
+                match flow_list(&acc) {
+                    Some(l) => out[i].1 = FmValue::List(l),
+                    None => problems.push((fm_level(&out[i].0), format!("front matter '{}' is not a readable list: {acc}", out[i].0))),
+                }
+            }
             continue;
         }
+        let t = raw.trim();
         let indented = raw.starts_with(' ') || raw.starts_with('\t');
+        if t.is_empty() || (t.starts_with('#') && !(block && indented)) {
+            continue;
+        }
         if let Some(i) = open {
-            if t.starts_with("- ") || t == "-" {
-                let item = unquote(t.trim_start_matches('-').trim());
+            if !block && (t.starts_with("- ") || t == "-") {
+                let item = unquote(strip_comment(t.trim_start_matches('-').trim()));
                 if let FmValue::List(l) = &mut out[i].1 {
                     l.push(item);
                     continue;
                 }
             }
             if indented {
+                // prettier wraps a long list as `key:` and an indented `[`
+                if !block && t.starts_with('[') && matches!(&out[i].1, FmValue::List(l) if l.is_empty()) {
+                    let t = strip_comment(t).to_string();
+                    open = None;
+                    if brackets_balanced(&t) {
+                        match flow_list(&t) {
+                            Some(l) => out[i].1 = FmValue::List(l),
+                            None => {
+                                problems.push((fm_level(&out[i].0), format!("front matter '{}' is not a readable list: {t}", out[i].0)))
+                            }
+                        }
+                    } else {
+                        flow = Some((i, t));
+                    }
+                    continue;
+                }
                 match &mut out[i].1 {
                     FmValue::Str(s) => {
                         if !s.is_empty() {
@@ -321,12 +462,17 @@ pub fn parse_fm(fm: &str) -> Vec<(String, FmValue)> {
                         s.push_str(t);
                     }
                     FmValue::List(l) if l.is_empty() => out[i].1 = FmValue::Str(t.to_string()),
-                    FmValue::List(_) => {}
+                    FmValue::List(_) => {
+                        problems.push((fm_level(&out[i].0), format!("front matter line {} under '{}' is not read: {t}", n + 1, out[i].0)))
+                    }
                 }
                 continue;
             }
         }
-        let Some((k, v)) = t.split_once(':') else { continue };
+        let Some((k, v)) = t.split_once(':') else {
+            problems.push((Level::Error, format!("front matter line {} is not `key: value`: {t}", n + 1)));
+            continue;
+        };
         let key = k.trim().to_string();
         let v = v.trim();
         open = None;
@@ -334,17 +480,29 @@ pub fn parse_fm(fm: &str) -> Vec<(String, FmValue)> {
         if v.is_empty() {
             out.push((key, FmValue::List(Vec::new())));
             open = Some(out.len() - 1);
-        } else if v.starts_with('[') && v.ends_with(']') {
-            out.push((key, FmValue::List(split_inline_list(&v[1..v.len() - 1]))));
-        } else if matches!(v, "|" | "|-" | ">" | ">-") {
+        } else if matches!(v, "|" | "|-" | "|+" | ">" | ">-" | ">+") {
             out.push((key, FmValue::Str(String::new())));
             open = Some(out.len() - 1);
             block = v.starts_with('|');
+        } else if strip_comment(v).starts_with('[') {
+            let v = strip_comment(v);
+            out.push((key.clone(), FmValue::List(Vec::new())));
+            if brackets_balanced(v) {
+                match flow_list(v) {
+                    Some(l) => out.last_mut().expect("pushed").1 = FmValue::List(l),
+                    None => problems.push((fm_level(&key), format!("front matter '{key}' is not a readable list: {v}"))),
+                }
+            } else {
+                flow = Some((out.len() - 1, v.to_string()));
+            }
         } else {
-            out.push((key, FmValue::Str(unquote(v))));
+            out.push((key, FmValue::Str(unquote(strip_comment(v)))));
         }
     }
-    out
+    if let Some((i, acc)) = flow {
+        problems.push((fm_level(&out[i].0), format!("front matter '{}' opens a list that never closes: {acc}", out[i].0)));
+    }
+    (out, problems)
 }
 
 pub fn split_inline_list(s: &str) -> Vec<String> {
@@ -444,21 +602,48 @@ const FIELD_KEYS: &[&str] = &[
     "id",
 ];
 
-pub fn normalize_status(raw: &str) -> String {
-    let word: String = raw
-        .trim()
-        .trim_start_matches(['*', '_', '`'])
+/// Words that mean an entry no longer holds without naming a replacement: read as `deprecated`.
+const RETIRED_WORDS: &[&str] = &["retired", "archived", "withdrawn", "obsolete", "inactive", "deprecate"];
+
+/// The status word of `raw` before mapping, leading symbols (emoji, `*`, `_`, backticks) skipped.
+fn status_word(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
         .chars()
         .take_while(|c| c.is_alphabetic() || *c == '-')
         .collect::<String>()
-        .to_lowercase();
+        .to_lowercase()
+}
+
+pub fn normalize_status(raw: &str) -> String {
+    let word = status_word(raw);
     match word.as_str() {
-        "approved" | "done" | "adopted" | "active" | "implemented" => "accepted".into(),
+        "approved" | "done" | "adopted" | "active" | "implemented" | "amended" => "accepted".into(),
         "draft" | "proposal" | "open" | "pending" => "proposed".into(),
-        "replaced" | "obsolete" => "superseded".into(),
+        "replaced" => "superseded".into(),
         "declined" | "abandoned" => "rejected".into(),
+        w if RETIRED_WORDS.contains(&w) => "deprecated".into(),
         _ => word,
     }
+}
+
+static WIKI_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\[\]|#\n]+)(?:[|#][^\[\]\n]*)?\]\]").unwrap());
+static MD_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\[\]]*)\]\(([^()\s]*)\)").unwrap());
+
+/// The ids a `Superseded by …` value names, in their own case: a Markdown link gives the stem of its
+/// target (`[ADR-0009](0009-x.md)` → `0009-x`), else its text; a list splits on commas and `and`.
+pub fn parse_ref_list(s: &str) -> Vec<String> {
+    let replaced = MD_LINK.replace_all(s, |c: &regex::Captures| {
+        let target = c[2].split(['#', '?']).next().unwrap_or("");
+        let stem = Path::new(target).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+        if stem.is_empty() || target.contains("://") { c[1].to_string() } else { stem }
+    });
+    let replaced = replaced.replace(" and ", ", ").replace(['`', '*'], "");
+    split_inline_list(&replaced)
+        .into_iter()
+        .map(|x| x.trim().trim_end_matches(['.', ';']).trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 fn humanize(stem: &str) -> String {
@@ -491,10 +676,14 @@ impl Entry {
     pub fn parse(rel_path: &str, text: &str, default_kind: &str) -> Entry {
         let stem = Path::new(rel_path).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let mut e = Entry { rel_path: rel_path.to_string(), kind: default_kind.to_string(), ..Default::default() };
+        // a BOM some Windows editors write is not part of the first line
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         if let Some((fm, body)) = split_frontmatter(text) {
             e.style = Style::Frontmatter;
             e.body = body.trim_start_matches(['\n', '\r']).to_string();
-            for (k, v) in parse_fm(fm) {
+            let (pairs, problems) = parse_fm_checked(fm);
+            e.parse_issues.extend(problems);
+            for (k, v) in pairs {
                 e.apply_field(&k.to_lowercase(), v);
             }
         } else {
@@ -508,9 +697,33 @@ impl Entry {
             e.title = first_h1(&e.body).map(|(_, t)| t).unwrap_or_else(|| humanize(&stem));
         }
         if let Some(s) = &e.status {
-            e.status = Some(normalize_status(s));
+            let word = status_word(s);
+            let status = normalize_status(s);
+            if RETIRED_WORDS.contains(&word.as_str()) {
+                e.parse_issues.push((Level::Warn, format!("status '{word}' is read as deprecated; write `deprecated`")));
+            } else if word.is_empty() && !s.trim().is_empty() {
+                e.parse_issues.push((Level::Warn, format!("status '{}' has no status word", s.trim())));
+            }
+            e.status = Some(status);
         }
+        e.file_status = e.status.clone();
+        let paths = std::mem::take(&mut e.paths);
+        e.paths = paths.iter().map(|p| e.anchor_path(p)).collect();
         e
+    }
+
+    /// A literal path without a `/` (`Dockerfile`) matches at any depth, as a slash-less glob and git's
+    /// own patterns do: read as `**/Dockerfile` (`**/name/**` when it may be a directory). `/name`
+    /// keeps a path at the root.
+    fn anchor_path(&mut self, p: &str) -> String {
+        let t = p.trim();
+        if t.is_empty() || t.contains('/') || t.contains(['*', '?', '[', '{']) || t == "." || t == ".." {
+            return p.to_string();
+        }
+        let floated = if t.contains('.') { format!("**/{t}") } else { format!("**/{t}/**") };
+        self.parse_issues
+            .push((Level::Info, format!("path '{t}' has no '/': it matches at any depth as '{floated}' (write '/{t}' for the root only)")));
+        floated
     }
 
     fn apply_field(&mut self, key: &str, v: FmValue) {
@@ -520,10 +733,14 @@ impl Entry {
             "title" => self.title = v.as_str(),
             "status" => {
                 let raw = v.as_str();
-                let lower = raw.to_lowercase();
-                if let Some(rest) = lower.strip_prefix("superseded by") {
-                    let ids = split_inline_list(rest.trim_start_matches([':', ' ']));
-                    self.superseded_by.extend(ids);
+                let word_at = raw.trim().trim_start_matches(|c: char| !c.is_alphanumeric());
+                let prefix = "superseded by";
+                if word_at.get(..prefix.len()).is_some_and(|p| p.eq_ignore_ascii_case(prefix)) {
+                    for id in parse_ref_list(word_at[prefix.len()..].trim_start_matches([':', ' '])) {
+                        if !self.superseded_by.contains(&id) {
+                            self.superseded_by.push(id);
+                        }
+                    }
                 }
                 self.status = Some(raw);
             }
@@ -539,7 +756,17 @@ impl Entry {
             "tags" => self.tags = v.as_list(),
             "paths" | "scope" if matches!(v, FmValue::List(_)) || key == "paths" => self.paths = v.as_list(),
             "supersedes" => self.supersedes = v.as_list(),
-            "superseded_by" | "superseded by" | "superseded-by" => self.superseded_by = v.as_list(),
+            "superseded_by" | "superseded by" | "superseded-by" => {
+                let ids = match &v {
+                    FmValue::List(l) => l.iter().flat_map(|x| parse_ref_list(x)).collect::<Vec<_>>(),
+                    FmValue::Str(s) => parse_ref_list(s),
+                };
+                for id in ids {
+                    if !self.superseded_by.contains(&id) {
+                        self.superseded_by.push(id);
+                    }
+                }
+            }
             "commits" => self.commits = v.as_list(),
             "author" | "authors" | "deciders" | "owner" => {
                 if self.author.is_none() {
@@ -597,7 +824,7 @@ impl Entry {
                         consumed += line.len();
                         continue;
                     }
-                    let v = if matches!(key.as_str(), "tags" | "paths" | "supersedes" | "superseded by" | "superseded-by" | "commits") {
+                    let v = if matches!(key.as_str(), "tags" | "paths" | "supersedes" | "commits") {
                         FmValue::List(split_inline_list(&val.replace('`', "")))
                     } else {
                         FmValue::Str(val)
@@ -608,6 +835,12 @@ impl Entry {
                 }
                 _ => break,
             }
+        }
+        // adr-tools and Nygard ADRs keep the status in a `## Status` section
+        if self.status.is_none()
+            && let Some((_, para)) = status_section(text)
+        {
+            self.apply_field("status", FmValue::Str(para));
         }
         let preamble = &text[..h1_off];
         let rest = &after_title[consumed..];
@@ -685,29 +918,48 @@ impl<'a> Store<'a> {
                 }
             }
         }
+        derive_supersession(&mut entries);
         (entries, errors)
     }
 
+    /// The entry `key` names: an exact id first (the first of entries sharing it), else what
+    /// [`Store::find_strict`] resolves to one entry. None when nothing, or several, match.
     pub fn find<'e>(entries: &'e [Entry], key: &str) -> Option<&'e Entry> {
-        let key = key.trim().trim_start_matches("kx:");
-        entries
-            .iter()
-            .find(|e| e.id == key)
-            .or_else(|| entries.iter().find(|e| e.short_id() == key))
-            .or_else(|| entries.iter().find(|e| e.rel_path == key))
-            .or_else(|| {
-                let m: Vec<_> = entries.iter().filter(|e| e.id.starts_with(key)).collect();
-                if m.len() == 1 { Some(m[0]) } else { None }
-            })
+        let k = key.trim().trim_start_matches("kx:");
+        entries.iter().find(|e| e.id == k).or_else(|| Self::find_strict(entries, key).ok())
     }
 
-    /// Choose an id and file path for a new entry of `kind`.
+    /// The one entry `key` names (an id, a path, the stem of a path or a Markdown link to it, an ADR
+    /// number, a unique id prefix), or why not: several entries match (an ADR number two branches both
+    /// took, a prefix of two ids, an id two kinds share) or none does.
+    pub fn find_strict<'e>(entries: &'e [Entry], key: &str) -> std::result::Result<&'e Entry, RefError> {
+        let pairs: Vec<(&str, &str)> = entries.iter().map(|e| (e.id.as_str(), e.rel_path.as_str())).collect();
+        resolve_in(&pairs, key, true).map(|i| &entries[i])
+    }
+
+    /// Whether `reference` names the entry `id` (see [`ref_matches`]).
+    pub fn ref_matches(id: &str, reference: &str) -> bool {
+        ref_matches(id, reference)
+    }
+
+    /// The full id `reference` names in the store as it is on disk (see [`canonical_ref`]).
+    #[allow(dead_code)] // for the write paths (capture, drafts, promote)
+    pub fn canonical(&self, reference: &str) -> std::result::Result<String, RefError> {
+        canonical_ref(&self.load_all().0, reference)
+    }
+
+    /// Choose an id and file path for a new entry of `kind`. The id is unique across every kind, not
+    /// only in its own directory: the ledger, freshness and references key on the id alone.
     pub fn allocate(&self, kind: &str, title: &str, date: &str) -> (String, String) {
         let dir = self.cfg.kind_path(kind);
         let slug = {
             let s = util::slugify(title, 60);
-            if s.is_empty() { "entry".to_string() } else { s }
+            // a Cyrillic, Greek or CJK title slugs to nothing: a short hash of it, not `entry-2`
+            if s.is_empty() { format!("entry-{}", &util::short_hash(title.trim())[..8]) } else { s }
         };
+        let taken: HashSet<String> = self.load_all().0.into_iter().map(|e| e.id).collect();
+        let kind_dirs: Vec<String> = self.kind_paths().into_iter().map(|(p, _)| p).collect();
+        let exists = |id: &str| taken.contains(id) || kind_dirs.iter().any(|d| self.repo.abs(&format!("{d}/{id}.md")).exists());
         let base = match self.cfg.kind_numbering(kind) {
             Numbering::Sequential => {
                 let (next, width) = self.next_number(&dir);
@@ -718,7 +970,7 @@ impl<'a> Store<'a> {
         };
         let mut id = base.clone();
         let mut n = 2;
-        while self.repo.abs(&format!("{dir}/{id}.md")).exists() {
+        while exists(&id) || self.repo.abs(&format!("{dir}/{id}.md")).exists() {
             id = format!("{base}-{n}");
             n += 1;
         }
@@ -797,66 +1049,108 @@ impl<'a> Store<'a> {
         Ok(())
     }
 
-    /// Mark `old` as superseded by `new_id`, editing the file in place.
+    /// Mark `old` as superseded by `new_id`, editing the file in place. Refuses a file with unstaged
+    /// edits (they would ride into the supersede commit unreviewed) and a file it cannot put a status in.
     pub fn mark_superseded(&self, old: &Entry, new_id: &str) -> Result<()> {
+        self.ready_to_edit(old)?;
         let abs = self.repo.abs(&old.rel_path);
         let text = std::fs::read_to_string(&abs)?;
-        let updated = Self::superseded_text(old, new_id, &text);
+        let updated = Self::try_superseded_text(old, new_id, &text)?;
         if updated != text {
             util::write_atomic(&abs, &updated)?;
         }
         Ok(())
     }
 
-    pub(crate) fn superseded_text(old: &Entry, new_id: &str, text: &str) -> String {
-        match old.style {
-            Style::Frontmatter => {
-                let mut e = old.clone();
-                e.status = Some("superseded".into());
-                if !e.superseded_by.iter().any(|x| x == new_id) {
-                    e.superseded_by.push(new_id.to_string());
-                }
-                e.markdown()
-            }
-            Style::Fields => {
-                static STATUS_LINE: LazyLock<Regex> = LazyLock::new(|| {
-                    Regex::new(r"(?mi)^(\s*(?:[-*+]\s+)?(?:\*\*|__)?status(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*).*$").unwrap()
-                });
-                if STATUS_LINE.is_match(text) {
-                    STATUS_LINE.replace(text, format!("${{1}}superseded by {new_id}")).into_owned()
-                } else {
-                    text.to_string()
-                }
-            }
+    /// Refuse to edit an entry whose file has unstaged changes: kontext stages what it edits, and a
+    /// person's unrelated edits would be staged with it. An untracked file is the caller's to judge.
+    pub fn ready_to_edit(&self, e: &Entry) -> Result<()> {
+        let state = self.repo.git(&["status", "--porcelain=v1", "--", &e.rel_path]).unwrap_or_default();
+        if state.as_bytes().get(1).is_some_and(|b| *b != b' ' && *b != b'?') {
+            bail!("{} has unstaged changes: stage or revert them first", e.rel_path);
         }
+        Ok(())
     }
 
-    /// The text of `old` retired without a replacement: status `deprecated` and a `## Retired` note
-    /// with the date and the reason, appended so the history of the claim stays readable.
-    pub(crate) fn retired_text(old: &Entry, reason: &str, date: &str, text: &str) -> String {
-        let note = format!("\n## Retired\n\n{date}: {}\n", reason.trim());
-        match old.style {
-            Style::Frontmatter => {
-                let mut e = old.clone();
-                e.status = Some("deprecated".into());
-                e.body = format!("{}\n{note}", e.body.trim_end());
-                e.markdown()
-            }
-            Style::Fields => {
-                static STATUS_LINE: LazyLock<Regex> = LazyLock::new(|| {
-                    Regex::new(r"(?mi)^(\s*(?:[-*+]\s+)?(?:\*\*|__)?status(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*).*$").unwrap()
-                });
-                let with_status = if STATUS_LINE.is_match(text) {
-                    STATUS_LINE.replace(text, "${1}deprecated").into_owned()
-                } else {
-                    match text.split_once('\n') {
-                        Some((h1, rest)) => format!("{h1}\n\n**Status:** deprecated\n{rest}"),
-                        None => format!("{text}\n\n**Status:** deprecated\n"),
-                    }
-                };
-                format!("{}\n{note}", with_status.trim_end())
-            }
+    /// [`Store::try_superseded_text`], or the text unchanged when no status can be placed. Callers that
+    /// can report an error should use `try_superseded_text`.
+    pub(crate) fn superseded_text(old: &Entry, new_id: &str, text: &str) -> String {
+        Self::try_superseded_text(old, new_id, text).unwrap_or_else(|_| text.to_string())
+    }
+
+    /// The text of `old` marked superseded by `new_id`. Only the status and `superseded_by` lines
+    /// change (front matter keys, a `**Status:**` field, or the paragraph of an adr-tools `## Status`
+    /// section); nested YAML, comments, key order and line endings stay. A classic ADR without a status
+    /// gets a `**Status:**` line under its title. An error when there is no place for a status.
+    pub fn try_superseded_text(old: &Entry, new_id: &str, text: &str) -> Result<String> {
+        let (bom, text) = split_bom(text);
+        let mut by = old.written_superseded_by();
+        if !by.iter().any(|x| ref_matches(new_id, x)) {
+            by.push(new_id.to_string());
         }
+        let out = match old.style {
+            Style::Frontmatter => match split_frontmatter(text) {
+                Some(_) => {
+                    let t = fm_set(text, &["status"], "status", "superseded", &["title", "kind", "id"])
+                        .ok_or_else(|| anyhow::anyhow!("{}: front matter not closed", old.rel_path))?;
+                    let list = format!("[{}]", by.iter().map(|x| fm_list_item(x)).collect::<Vec<_>>().join(", "));
+                    fm_set(&t, &["superseded_by", "superseded-by"], "superseded_by", &list, &["status"])
+                        .ok_or_else(|| anyhow::anyhow!("{}: front matter not closed", old.rel_path))?
+                }
+                None => {
+                    let mut e = old.clone();
+                    e.derived_superseded = false;
+                    e.derived_by.clear();
+                    e.status = Some("superseded".into());
+                    e.superseded_by = by;
+                    e.markdown()
+                }
+            },
+            Style::Fields => {
+                let list = by.join(", ");
+                let separate = fields_set(text, &["superseded by", "superseded-by"], "Superseded by", &list, false);
+                let placed = match separate {
+                    Some(t) => fields_status(&t, "superseded", "Superseded"),
+                    None => fields_status(text, &format!("superseded by {list}"), &format!("Superseded by {list}")),
+                };
+                placed.ok_or_else(|| anyhow::anyhow!("{}: no title heading or `## Status` section to put the status in", old.rel_path))?
+            }
+        };
+        Ok(format!("{bom}{out}"))
+    }
+
+    /// [`Store::try_retired_text`], or the text with only the note appended when no status can be placed.
+    pub(crate) fn retired_text(old: &Entry, reason: &str, date: &str, text: &str) -> String {
+        Self::try_retired_text(old, reason, date, text).unwrap_or_else(|_| {
+            let eol = line_ending(text);
+            let note = format!("\n## Retired\n\n{date}: {}\n", reason.trim()).replace('\n', eol);
+            format!("{}{eol}{note}", text.trim_end())
+        })
+    }
+
+    /// The text of `old` retired without a replacement: status `deprecated` (edited in place like a
+    /// supersession) and a `## Retired` note with the date and the reason appended to the file, so the
+    /// history of the claim stays readable. An error when there is no place for a status.
+    pub fn try_retired_text(old: &Entry, reason: &str, date: &str, text: &str) -> Result<String> {
+        let (bom, text) = split_bom(text);
+        let eol = line_ending(text);
+        let note = format!("\n## Retired\n\n{date}: {}\n", reason.trim()).replace('\n', eol);
+        let with_status = match old.style {
+            Style::Frontmatter => match split_frontmatter(text) {
+                Some(_) => fm_set(text, &["status"], "status", "deprecated", &["title", "kind", "id"])
+                    .ok_or_else(|| anyhow::anyhow!("{}: front matter not closed", old.rel_path))?,
+                None => {
+                    let mut e = old.clone();
+                    e.derived_superseded = false;
+                    e.status = Some("deprecated".into());
+                    e.body = format!("{}\n{}", e.body.trim_end(), note.replace("\r\n", "\n"));
+                    return Ok(format!("{bom}{}", e.markdown()));
+                }
+            },
+            Style::Fields => fields_status(text, "deprecated", "Deprecated")
+                .ok_or_else(|| anyhow::anyhow!("{}: no title heading or `## Status` section to put the status in", old.rel_path))?,
+        };
+        Ok(format!("{bom}{}{eol}{note}", with_status.trim_end()))
     }
 
     /// The text of `old` with its body replaced by `body` and every byte before the body (front
@@ -892,7 +1186,10 @@ impl<'a> Store<'a> {
                 e.checked = Some(date.to_string());
                 e.markdown()
             })),
-            Style::Fields => checked_fields(date, text),
+            Style::Fields => {
+                let (bom, text) = split_bom(text);
+                checked_fields(date, text).map(|t| format!("{bom}{t}"))
+            }
         }
     }
 
@@ -959,9 +1256,36 @@ impl<'a> Store<'a> {
         if max > 0 && lines > max && e.get_extra("generated").is_none() {
             push(Level::Warn, format!("long entry ({lines} lines > {max}) — keep entries brief and link to docs for detail"));
         }
-        for s in &e.supersedes {
-            if !known_ids.contains(s) && !known_ids.iter().any(|k| k.starts_with(&format!("{s}-"))) {
-                push(Level::Warn, format!("supersedes unknown entry '{s}'"));
+        for (level, msg) in &e.parse_issues {
+            push(*level, msg.clone());
+        }
+        // references resolve to one entry: an ambiguous one is an error, an unknown one a warning
+        let mut ids: Vec<&str> = known_ids.iter().map(String::as_str).collect();
+        ids.sort_unstable();
+        let pairs: Vec<(&str, &str)> = ids.iter().map(|i| (*i, "")).collect();
+        let extends: Vec<String> = e.extra.iter().filter(|(k, _)| k == "extends").flat_map(|(_, v)| v.as_list()).collect();
+        let links: Vec<String> = WIKI_LINK.captures_iter(&e.body).map(|c| c[1].trim().to_string()).collect();
+        let named = e
+            .supersedes
+            .iter()
+            .map(|s| ("supersedes", s))
+            .chain(extends.iter().map(|s| ("extends", s)))
+            .chain(links.iter().map(|s| ("links to", s)));
+        for (what, s) in named {
+            let resolved = match resolve_in(&pairs, s, false) {
+                Ok(_) => Ok(None),
+                Err(RefError::Unknown(_)) => resolve_in(&pairs, s, true).map(Some),
+                Err(other) => Err(other),
+            };
+            match resolved {
+                Ok(None) => {}
+                // a unique prefix resolves today and may name another entry tomorrow
+                Ok(Some(i)) => push(Level::Warn, format!("{what} '{s}' is a prefix of {}, not an id: write the full id", pairs[i].0)),
+                Err(RefError::Ambiguous(c)) => {
+                    push(Level::Error, format!("{what} '{s}' is ambiguous: it matches {}; write the full id", c.join(", ")))
+                }
+                Err(RefError::Unknown(_)) if what != "links to" => push(Level::Warn, format!("{what} unknown entry '{s}'")),
+                Err(RefError::Unknown(_)) => {}
             }
         }
         if let Some(files) = tracked {
@@ -972,6 +1296,73 @@ impl<'a> Store<'a> {
             }
         }
         issues
+    }
+
+    // -------------------------------------------------------------------------------- repair
+
+    /// The edits that write the missing side of every one-sided supersession: the old file says
+    /// `superseded` and names its successor, in its own style (front matter, field, `## Status`). The
+    /// second list says which files could not be planned and why.
+    pub fn repair_plan(&self, entries: &[Entry]) -> (Vec<RepairEdit>, Vec<String>) {
+        let mut edits = Vec::new();
+        let mut problems = Vec::new();
+        for e in entries.iter().filter(|e| e.derived_superseded || !e.derived_by.is_empty()) {
+            let before = match std::fs::read_to_string(self.repo.abs(&e.rel_path)) {
+                Ok(t) => t,
+                Err(err) => {
+                    problems.push(format!("{}: {err}", e.rel_path));
+                    continue;
+                }
+            };
+            let successors = if e.derived_by.is_empty() { e.superseded_by.clone() } else { e.derived_by.clone() };
+            let mut text = before.clone();
+            let mut failed = None;
+            for s in &successors {
+                let current = Entry::parse(&e.rel_path, &text, &e.kind);
+                match Self::try_superseded_text(&current, s, &text) {
+                    Ok(t) => text = t,
+                    Err(err) => {
+                        failed = Some(err);
+                        break;
+                    }
+                }
+            }
+            if let Some(err) = failed {
+                problems.push(format!("{err:#}"));
+                continue;
+            }
+            if text != before {
+                let what = if e.derived_superseded {
+                    format!("status {} → superseded by {}", e.file_status.as_deref().unwrap_or("(none)"), successors.join(", "))
+                } else {
+                    format!("superseded_by + {}", successors.join(", "))
+                };
+                edits.push(RepairEdit { id: e.id.clone(), path: e.rel_path.clone(), what, before, after: text });
+            }
+        }
+        (edits, problems)
+    }
+
+    /// `kontext repair`: plan the edits and, unless `dry_run`, write and stage them for review. A file
+    /// with unstaged edits is skipped (reported in the second list), never staged with them.
+    pub fn repair(&self, dry_run: bool) -> Result<(Vec<RepairEdit>, Vec<String>)> {
+        let (entries, _) = self.load_all();
+        let (edits, mut problems) = self.repair_plan(&entries);
+        if dry_run {
+            return Ok((edits, problems));
+        }
+        let mut done = Vec::new();
+        for edit in edits {
+            let probe = Entry { rel_path: edit.path.clone(), ..Default::default() };
+            if let Err(err) = self.ready_to_edit(&probe) {
+                problems.push(format!("{err:#}"));
+                continue;
+            }
+            util::write_atomic(&self.repo.abs(&edit.path), &edit.after)?;
+            self.repo.git(&["add", "--", &edit.path])?;
+            done.push(edit);
+        }
+        Ok((done, problems))
     }
 
     // -------------------------------------------------------------------------------- index file
@@ -1190,6 +1581,428 @@ fn checked_fields(date: &str, text: &str) -> Option<String> {
         }
         None => format!("{}\n**Checked:** {date}\n{}", &text[..title_end], &text[title_end..]),
     })
+}
+
+/// A leading UTF-8 BOM and the text after it: rewriting helpers edit the text and put the BOM back.
+fn split_bom(text: &str) -> (&'static str, &str) {
+    match text.strip_prefix('\u{feff}') {
+        Some(rest) => ("\u{feff}", rest),
+        None => ("", text),
+    }
+}
+
+/// The file's own line ending: the first line's.
+fn line_ending(text: &str) -> &'static str {
+    match text.find('\n') {
+        Some(i) if i > 0 && text.as_bytes()[i - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
+}
+
+/// Set a top-level front matter key in place: the value of the first line with one of `keys` (and any
+/// indented or dashed continuation lines of it) gives way to `value`; else a new `write_key: value` line
+/// after the last of the `after` keys, or before the closing `---`. Every other byte stays, comments
+/// and nested values included, in the file's own line endings. None without front matter.
+fn fm_set(text: &str, keys: &[&str], write_key: &str, value: &str, after: &[&str]) -> Option<String> {
+    let (bom, body) = split_bom(text);
+    let open = ["---\n", "---\r\n"].into_iter().find(|o| body.starts_with(o))?.len();
+    let base = bom.len();
+    let mut at = base + open;
+    let mut anchor: Option<usize> = None;
+    let mut eol = if open == 5 { "\r\n" } else { "\n" };
+    let mut lines = text[at..].split_inclusive('\n').peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_end();
+        let end = at + line.len();
+        if trimmed == "---" || trimmed == "..." {
+            let at = anchor.unwrap_or(at);
+            return Some(format!("{}{write_key}: {value}{eol}{}", &text[..at], &text[at..]));
+        }
+        if line.ends_with('\n') {
+            eol = if line.ends_with("\r\n") { "\r\n" } else { "\n" };
+        }
+        let continued = |next: Option<&&str>| next.is_some_and(|n| n.starts_with([' ', '\t']) || n.starts_with("- "));
+        if !line.starts_with([' ', '\t', '#'])
+            && let Some((key, _)) = trimmed.split_once(':')
+        {
+            let key = key.trim().to_lowercase();
+            if keys.contains(&key.as_str()) {
+                let mut end = end;
+                while continued(lines.peek()) {
+                    end += lines.next().map_or(0, str::len);
+                }
+                // a trailing comment on the line stays
+                let colon = at + line.find(':')?;
+                let rest = &trimmed[line.find(':')? + 1..];
+                let comment = match strip_comment(rest.trim_start()).len() {
+                    n if n < rest.trim_start().len() => format!(" {}", rest.trim_start()[n..].trim_start()),
+                    _ => String::new(),
+                };
+                let ending = if line.ends_with('\n') { eol } else { "" };
+                return Some(format!("{}: {value}{comment}{ending}{}", &text[..colon], &text[end..]));
+            }
+            if after.contains(&key.as_str()) {
+                let mut end = end;
+                let mut ok = line.ends_with('\n');
+                while continued(lines.peek()) {
+                    let l = lines.next().unwrap_or("");
+                    end += l.len();
+                    ok = l.ends_with('\n');
+                }
+                anchor = ok.then_some(end);
+                at = end;
+                continue;
+            }
+        }
+        at = end;
+    }
+    None
+}
+
+/// The field block of a classic ADR: `(start, end)` of each field line's value, with the field key.
+struct FieldLine {
+    key: String,
+    /// byte offsets in the text of the value
+    value: (usize, usize),
+    /// the line rewritten for another key and value, in the same shape
+    shape: (String, String),
+    end: usize,
+}
+
+/// The field lines after the H1 (`**Status:** accepted`, `* Date: x`), and where the title line ends.
+fn field_block(text: &str) -> Option<(usize, Vec<FieldLine>)> {
+    let (h1_off, _) = first_h1(text)?;
+    let mut at = text[h1_off..].find('\n').map_or(text.len(), |i| h1_off + i + 1);
+    let title_end = at;
+    let mut out = Vec::new();
+    for line in text[at..].split_inclusive('\n') {
+        let start = at;
+        at += line.len();
+        let t = line.trim();
+        if t.starts_with("## ") || t.starts_with("# ") {
+            break;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        let Some(c) = FIELD.captures(t) else { break };
+        let key = c[1].trim().to_lowercase();
+        if !FIELD_KEYS.contains(&key.as_str()) {
+            break;
+        }
+        let lead = start + (line.len() - line.trim_start().len());
+        let (k, v) = (c.get(1)?, c.get(2)?);
+        let mut v_end = v.end();
+        let vs = &t[v.start()..v.end()];
+        if (vs.ends_with("**") || vs.ends_with("__")) && vs.len() > 2 {
+            v_end -= 2;
+        }
+        let indent = &line[..line.len() - line.trim_start().len()];
+        let ending = &line[line.trim_end().len()..];
+        out.push(FieldLine {
+            key,
+            value: (lead + v.start(), lead + v_end),
+            shape: (format!("{indent}{}", &t[..k.start()]), format!("{}\u{0}{}{ending}", &t[k.end()..v.start()], &t[v_end..])),
+            end: at,
+        });
+    }
+    Some((title_end, out))
+}
+
+/// Set a field of a classic ADR in place: the value of the first field line with one of `keys`; else,
+/// when `insert`, a new line after the last field in the same shape (`**Display:** value`), or under
+/// the title. Each line keeps its own ending. None without an H1, or when the key is missing and
+/// `insert` is false.
+fn fields_set(text: &str, keys: &[&str], display: &str, value: &str, insert: bool) -> Option<String> {
+    let (title_end, fields) = field_block(text)?;
+    if let Some(f) = fields.iter().find(|f| keys.contains(&f.key.as_str())) {
+        return Some(format!("{}{value}{}", &text[..f.value.0], &text[f.value.1..]));
+    }
+    if !insert {
+        return None;
+    }
+    Some(match fields.last() {
+        Some(last) => {
+            let (pre, post) = &last.shape;
+            let line = format!("{pre}{display}{}", post.replace('\u{0}', value));
+            let sep = if text[..last.end].ends_with('\n') { "" } else { line_ending(text) };
+            let line =
+                if line.ends_with('\n') || !text[..last.end].ends_with('\n') { line } else { format!("{line}{}", line_ending(text)) };
+            format!("{}{sep}{line}{}", &text[..last.end], &text[last.end..])
+        }
+        None => {
+            let eol = line_ending(text);
+            format!("{}{eol}**{display}:** {value}{eol}{}", &text[..title_end], &text[title_end..])
+        }
+    })
+}
+
+/// The `## Status` section of an ADR (adr-tools, Nygard): the byte range of its first paragraph and
+/// that paragraph as one line. The range is empty, right after the heading, when the section has none.
+pub(crate) fn status_section(text: &str) -> Option<(std::ops::Range<usize>, String)> {
+    let mut in_code = false;
+    let mut at = 0;
+    let mut heading_end = None;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim();
+        at += line.len();
+        if t.starts_with("```") {
+            in_code = !in_code;
+        }
+        if !in_code && t.trim_end_matches(':').eq_ignore_ascii_case("## status") {
+            heading_end = Some(at);
+            break;
+        }
+    }
+    let after = heading_end?;
+    let mut at = after;
+    let mut range: Option<std::ops::Range<usize>> = None;
+    let mut parts: Vec<&str> = Vec::new();
+    for line in text[after..].split_inclusive('\n') {
+        let t = line.trim();
+        if t.starts_with('#') {
+            break;
+        }
+        if t.is_empty() {
+            if range.is_some() {
+                break;
+            }
+            at += line.len();
+            continue;
+        }
+        let start = at + (line.len() - line.trim_start().len());
+        let end = at + line.trim_end().len();
+        range = Some(range.map_or(start..end, |r| r.start..end));
+        parts.push(t);
+        at += line.len();
+    }
+    Some((range.unwrap_or(after..after), parts.join(" ")))
+}
+
+/// Put a status into a classic ADR in its own style: the `Status` field line, else the paragraph of a
+/// `## Status` section (adr-tools writes `Superseded by …` there), else a new `**Status:**` line under
+/// the title. None when there is neither a title nor a section.
+fn fields_status(text: &str, field_value: &str, section_value: &str) -> Option<String> {
+    if let Some(t) = fields_set(text, &["status"], "Status", field_value, false) {
+        return Some(t);
+    }
+    if let Some((range, _)) = status_section(text) {
+        if range.is_empty() {
+            let eol = line_ending(text);
+            return Some(format!("{}{eol}{section_value}{eol}{}", &text[..range.start], &text[range.start..]));
+        }
+        return Some(format!("{}{section_value}{}", &text[..range.start], &text[range.end..]));
+    }
+    fields_set(text, &["status"], "Status", field_value, true)
+}
+
+/// How the status of a file is written: front matter, a `Status` field line, an adr-tools `## Status`
+/// section, or nowhere yet.
+#[allow(dead_code)] // for init's style detection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusStyle {
+    Frontmatter,
+    Field,
+    Section,
+    Missing,
+}
+
+#[allow(dead_code)] // for init's style detection
+pub fn status_style(text: &str) -> StatusStyle {
+    let (_, text) = split_bom(text);
+    if split_frontmatter(text).is_some() {
+        return StatusStyle::Frontmatter;
+    }
+    if field_block(text).is_some_and(|(_, f)| f.iter().any(|f| f.key == "status")) {
+        return StatusStyle::Field;
+    }
+    if status_section(text).is_some() {
+        return StatusStyle::Section;
+    }
+    StatusStyle::Missing
+}
+
+// ---------------------------------------------------------------------------------------------
+// References
+
+/// Why a reference does not name one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefError {
+    /// Several entries match: their ids (or paths, when they share an id).
+    Ambiguous(Vec<String>),
+    /// No entry matches this reference.
+    Unknown(String),
+}
+
+impl std::fmt::Display for RefError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefError::Ambiguous(c) => write!(f, "ambiguous reference: it matches {}; use the full id", c.join(", ")),
+            RefError::Unknown(r) => write!(f, "no entry '{r}'"),
+        }
+    }
+}
+
+impl std::error::Error for RefError {}
+
+/// The number of a sequential ADR id (`0007-use-x` → 7), None for any other id.
+fn adr_number(id: &str) -> Option<u64> {
+    let digits: String = id.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let dated = id.get(..10).is_some_and(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok());
+    if !dated && (3..=5).contains(&digits.len()) && id[digits.len()..].starts_with('-') { digits.parse().ok() } else { None }
+}
+
+/// A reference as written, reduced to what is compared: `kx:` and anchors dropped, a Markdown link
+/// to its target, and the number when it is an ADR number (`0007`, `ADR-7`, `adr 0007`).
+fn ref_key(reference: &str) -> (String, Option<u64>) {
+    let mut s = reference.trim().trim_start_matches("kx:").trim().to_string();
+    if let Some(c) = MD_LINK.captures(&s) {
+        let target = c[2].split(['#', '?']).next().unwrap_or("").to_string();
+        s = if target.is_empty() || target.contains("://") { c[1].to_string() } else { target };
+    }
+    let s = s.trim().trim_matches(['[', ']', '`']).to_string();
+    let lower = s.to_lowercase();
+    let num = lower.strip_prefix("adr").map(|r| r.trim_start_matches(['-', ' ', '_'])).unwrap_or(&lower);
+    let number = (!num.is_empty() && num.chars().all(|c| c.is_ascii_digit())).then(|| num.parse().ok()).flatten();
+    (s, number)
+}
+
+/// The stem of a reference that is a path (`docs/adr/0007-x.md` → `0007-x`).
+fn ref_stem(key: &str) -> Option<String> {
+    (key.contains('/') || key.ends_with(".md")).then(|| Path::new(key).file_stem().map(|x| x.to_string_lossy().to_string())).flatten()
+}
+
+/// Does `reference` (as written in `supersedes`, `superseded_by`, `extends` or a `[[link]]`) name the
+/// entry `id`? The full id, the stem of its path, or its ADR number; a prefix never does, so
+/// `use-cents` does not name `use-cents-2`.
+pub fn ref_matches(id: &str, reference: &str) -> bool {
+    let (key, number) = ref_key(reference);
+    if key == id || ref_stem(&key).is_some_and(|s| s == id) {
+        return true;
+    }
+    number.is_some() && number == adr_number(id)
+}
+
+/// Resolve `key` among `(id, path)` pairs: an exact id, an exact path, the stem of a path, an ADR
+/// number, then (with `prefix`) a unique id prefix. Several matches of one rule are an ambiguity,
+/// never a guess. A stored reference is resolved without prefixes: `use-cents` must not come to
+/// name `use-cents-2` once `use-cents` is gone.
+fn resolve_in(items: &[(&str, &str)], key: &str, prefix: bool) -> std::result::Result<usize, RefError> {
+    let (k, number) = ref_key(key);
+    let ambiguous = |idx: &[usize]| {
+        let mut c: Vec<String> = idx.iter().map(|&i| items[i].0.to_string()).collect();
+        c.dedup();
+        if c.len() < idx.len() {
+            c = idx.iter().map(|&i| if items[i].1.is_empty() { items[i].0.to_string() } else { items[i].1.to_string() }).collect();
+        }
+        RefError::Ambiguous(c)
+    };
+    let pick = |idx: Vec<usize>| -> Option<std::result::Result<usize, RefError>> {
+        match idx.len() {
+            0 => None,
+            1 => Some(Ok(idx[0])),
+            _ => Some(Err(ambiguous(&idx))),
+        }
+    };
+    let all = |f: &dyn Fn(&(&str, &str)) -> bool| items.iter().enumerate().filter(|(_, x)| f(x)).map(|(i, _)| i).collect::<Vec<_>>();
+    if k.is_empty() {
+        return Err(RefError::Unknown(key.to_string()));
+    }
+    if let Some(r) = pick(all(&|(id, _)| *id == k)) {
+        return r;
+    }
+    if let Some(r) = pick(all(&|(_, p)| !p.is_empty() && *p == k)) {
+        return r;
+    }
+    if let Some(stem) = ref_stem(&k)
+        && let Some(r) = pick(all(&|(id, _)| *id == stem))
+    {
+        return r;
+    }
+    if let Some(n) = number
+        && let Some(r) = pick(all(&|(id, _)| adr_number(id) == Some(n)))
+    {
+        return r;
+    }
+    if !prefix {
+        return Err(RefError::Unknown(key.to_string()));
+    }
+    pick(all(&|(id, _)| id.starts_with(k.as_str()))).unwrap_or_else(|| Err(RefError::Unknown(key.to_string())))
+}
+
+/// The full id `reference` names among `entries`, for writing it down: a brief's short prefix, an ADR
+/// number or a link becomes the id it resolves to today, so it cannot become ambiguous later.
+#[allow(dead_code)] // for the write paths (capture, drafts, promote)
+pub fn canonical_ref(entries: &[Entry], reference: &str) -> std::result::Result<String, RefError> {
+    Store::find_strict(entries, reference).map(|e| e.id.clone())
+}
+
+/// Every `[[link]]` in `body` that names one entry rewritten to its full id; a link that names no
+/// entry stays as written, an ambiguous one is an error.
+#[allow(dead_code)] // for the write paths (capture, drafts, promote)
+pub fn canonical_links(entries: &[Entry], body: &str) -> std::result::Result<String, RefError> {
+    static WIKI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\[\]|#\n]+)((?:[|#][^\[\]\n]*)?)\]\]").unwrap());
+    let mut err = None;
+    let out = WIKI.replace_all(body, |c: &regex::Captures| {
+        let raw = &c[1];
+        let prefix = if raw.trim_start().starts_with("kx:") { "kx:" } else { "" };
+        match canonical_ref(entries, raw) {
+            Ok(id) => format!("[[{prefix}{id}{}]]", &c[2]),
+            Err(RefError::Unknown(_)) => c[0].to_string(),
+            Err(e) => {
+                err.get_or_insert(e);
+                c[0].to_string()
+            }
+        }
+    });
+    match err {
+        Some(e) => Err(e),
+        None => Ok(out.into_owned()),
+    }
+}
+
+/// Mark entries named in an active successor's `supersedes` as superseded, whatever their own file
+/// says, and fill in `superseded_by`: a supersession is one fact even when only one side was written.
+/// A proposed successor supersedes nothing yet. What load derived is flagged (`derived_superseded`,
+/// `derived_by`) so check can report it and the canonical writer never writes it.
+pub fn derive_supersession(entries: &mut [Entry]) {
+    let items: Vec<(String, String)> = entries.iter().map(|e| (e.id.clone(), e.rel_path.clone())).collect();
+    let pairs: Vec<(&str, &str)> = items.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let mut links: Vec<(usize, String)> = Vec::new();
+    for e in entries.iter() {
+        if !e.file_active() || e.status.as_deref() == Some("proposed") {
+            continue;
+        }
+        for s in &e.supersedes {
+            if let Ok(i) = resolve_in(&pairs, s, false)
+                && items[i].1 != e.rel_path
+            {
+                links.push((i, e.id.clone()));
+            }
+        }
+    }
+    for (i, successor) in links {
+        let old = &mut entries[i];
+        if old.file_active() {
+            old.derived_superseded = true;
+            old.status = Some("superseded".into());
+        }
+        if !old.superseded_by.iter().any(|r| ref_matches(&successor, r)) {
+            old.superseded_by.push(successor.clone());
+            old.derived_by.push(successor);
+        }
+    }
+}
+
+/// One edit `kontext repair` makes: the missing side of a supersession written into the old file.
+#[derive(Debug, Clone)]
+pub struct RepairEdit {
+    pub id: String,
+    pub path: String,
+    /// What changes, in a few words.
+    pub what: String,
+    pub before: String,
+    pub after: String,
 }
 
 pub fn is_non_entry_name(name: &str) -> bool {
@@ -1420,5 +2233,339 @@ mod tests {
         assert_eq!(e.status.as_deref(), Some("superseded"));
         assert_eq!(e.superseded_by, vec!["0007"]);
         assert_eq!(e.title, "X");
+    }
+
+    // ------------------------------------------------------------------ supersession, references, parsing
+
+    fn fm_entry(id: &str, status: &str, extra: &str) -> Entry {
+        let text = format!("---\nid: {id}\nkind: decision\ntitle: {id}\nstatus: {status}\ndate: 2026-01-05\n{extra}---\n\nBody.\n");
+        Entry::parse(&format!(".ai/decisions/{id}.md"), &text, "decision")
+    }
+
+    /// A git repository in a temporary directory with the default store layout.
+    struct Fixture(std::path::PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path =
+                std::env::temp_dir().join(format!("kontext-store-unit-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            let out = std::process::Command::new("git").arg("-C").arg(&path).args(["init", "-q", "-b", "main"]).output().unwrap();
+            assert!(out.status.success());
+            Self(path)
+        }
+        fn write(&self, rel: &str, text: &str) {
+            let p = self.0.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn successor_alone_supersedes() {
+        let old = fm_entry("2026-01-05-floats-for-prices", "accepted", "");
+        let new = fm_entry("2026-02-01-integer-cents", "accepted", "supersedes: [2026-01-05-floats-for-prices]\n");
+        let proposal = fm_entry("2026-03-01-decimal-type", "proposed", "supersedes: [2026-02-01-integer-cents]\n");
+        let mut entries = vec![old, new, proposal];
+        derive_supersession(&mut entries);
+        let old = &entries[0];
+        assert_eq!(old.status.as_deref(), Some("superseded"), "the successor's supersedes is enough");
+        assert!(!old.is_active());
+        assert!(old.derived_superseded);
+        assert_eq!(old.file_status.as_deref(), Some("accepted"), "what the file says stays visible");
+        assert_eq!(old.superseded_by, vec!["2026-02-01-integer-cents"]);
+        assert_eq!(old.derived_by, vec!["2026-02-01-integer-cents"]);
+        // the canonical writer never writes what load derived
+        let md = old.markdown();
+        assert!(md.contains("status: accepted\n") && !md.contains("superseded_by"), "{md}");
+        // a proposal replaces nothing yet
+        assert!(entries[1].is_active() && !entries[1].derived_superseded);
+        // an old file that already says so is left alone
+        let marked = fm_entry("a", "superseded", "superseded_by: [b]\n");
+        let mut entries = vec![marked, fm_entry("b", "accepted", "supersedes: [a]\n")];
+        derive_supersession(&mut entries);
+        assert!(!entries[0].derived_superseded && entries[0].derived_by.is_empty());
+        // repair writes the missing side and nothing else
+        let text = "---\nid: c\nkind: decision\ntitle: C\nstatus: accepted\n---\n\nBody.\n";
+        let c = Entry::parse(".ai/decisions/c.md", text, "decision");
+        let fixed = Store::try_superseded_text(&c, "d", text).unwrap();
+        assert_eq!(fixed, "---\nid: c\nkind: decision\ntitle: C\nstatus: superseded\nsuperseded_by: [d]\n---\n\nBody.\n");
+    }
+
+    #[test]
+    fn repair_plans_the_missing_side() {
+        let f = Fixture::new();
+        f.write(".ai/decisions/2026-01-05-old.md", "---\nid: 2026-01-05-old\nkind: decision\ntitle: Old\nstatus: accepted\n---\n\nOld.\n");
+        f.write(
+            ".ai/decisions/2026-02-01-new.md",
+            "---\nid: 2026-02-01-new\nkind: decision\ntitle: New\nstatus: accepted\nsupersedes: [2026-01-05-old]\n---\n\nNew.\n",
+        );
+        let cfg: Config = toml::from_str(crate::config::DEFAULTS).unwrap();
+        let repo = crate::repo::Repo::discover(&f.0).unwrap();
+        let store = Store::new(&repo, &cfg);
+        let (entries, _) = store.load_all();
+        let (edits, problems) = store.repair_plan(&entries);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].path, ".ai/decisions/2026-01-05-old.md");
+        assert!(edits[0].after.contains("status: superseded\nsuperseded_by: [2026-02-01-new]\n"), "{}", edits[0].after);
+    }
+
+    #[test]
+    fn adr_tools_status_section_superseded() {
+        let superseded = "# 3. Use MySQL\n\nDate: 2026-01-02\n\n## Status\n\nSuperseded by [4. Use Postgres](0004-use-postgres.md)\n\n## Context\n\nWe need a database.\n";
+        let e = Entry::parse("doc/adr/0003-use-mysql.md", superseded, "decision");
+        assert_eq!(e.title, "Use MySQL");
+        assert_eq!(e.status.as_deref(), Some("superseded"));
+        assert_eq!(e.superseded_by, vec!["0004-use-postgres"], "the link target, in its own case");
+        assert!(!e.is_active());
+        assert_eq!(status_style(superseded), StatusStyle::Section);
+
+        let accepted = "# 5. Use Redis\n\nDate: 2026-01-03\n\n## Status\n\nAccepted\n\n## Context\n\nCache.\n";
+        let e = Entry::parse("doc/adr/0005-use-redis.md", accepted, "decision");
+        assert_eq!(e.status.as_deref(), Some("accepted"));
+        let out = Store::try_superseded_text(&e, "0006-use-memcached", accepted).unwrap();
+        assert_eq!(out, accepted.replace("\nAccepted\n", "\nSuperseded by 0006-use-memcached\n"), "the section, in place");
+        let again = Entry::parse("doc/adr/0005-use-redis.md", &out, "decision");
+        assert_eq!(again.status.as_deref(), Some("superseded"));
+        assert_eq!(again.superseded_by, vec!["0006-use-memcached"]);
+        let retired = Store::try_retired_text(&e, "Gone.", "2026-10-29", accepted).unwrap();
+        assert!(retired.contains("## Status\n\nDeprecated\n"), "{retired}");
+        assert_eq!(Entry::parse("doc/adr/0005-use-redis.md", &retired, "decision").status.as_deref(), Some("deprecated"));
+        // "Amended by" keeps an ADR in force
+        assert_eq!(normalize_status("Amended by [7](0007-x.md)"), "accepted");
+        // a classic ADR with no status anywhere gets a field line; one with no title is an error
+        let bare = "# 0002 — Orders\n\nOne database.\n";
+        let e = Entry::parse("docs/adr/0002-orders.md", bare, "decision");
+        assert_eq!(
+            Store::try_superseded_text(&e, "0003-x", bare).unwrap(),
+            "# 0002 — Orders\n\n**Status:** superseded by 0003-x\n\nOne database.\n"
+        );
+        let none = "Just text.\n";
+        let e = Entry { style: Style::Fields, ..Entry::parse("docs/adr/0009-x.md", none, "decision") };
+        assert!(Store::try_superseded_text(&e, "0010-y", none).is_err());
+        assert!(Store::try_retired_text(&e, "Gone.", "2026-10-29", none).is_err());
+    }
+
+    #[test]
+    fn markdown_link_successor_keeps_case() {
+        let e =
+            Entry::parse("docs/adr/0003-x.md", "# 0003 — X\n\n**Status:** Superseded by [ADR-0009](0009-Use-Y.md)\n\nBody.\n", "decision");
+        assert_eq!(e.superseded_by, vec!["0009-Use-Y"]);
+        assert!(ref_matches("0009-Use-Y", "[ADR-0009](0009-Use-Y.md)"));
+        assert!(ref_matches("0009-use-y", "ADR-0009"));
+    }
+
+    #[test]
+    fn supersedes_ref_does_not_match_dash_2_sibling() {
+        assert!(!ref_matches("2026-09-28-use-cents-2", "2026-09-28-use-cents"));
+        assert!(ref_matches("2026-09-28-use-cents", "2026-09-28-use-cents"));
+        assert!(ref_matches("2026-09-28-use-cents", "kx:2026-09-28-use-cents"));
+        assert!(ref_matches("0007-use-x", "0007"));
+        assert!(ref_matches("0007-use-x", "ADR-7"));
+        assert!(ref_matches("0007-use-x", "docs/adr/0007-use-x.md"));
+        assert!(!ref_matches("2026-09-28-use-x", "2026"), "a date is no ADR number");
+
+        let cfg: Config = toml::from_str(crate::config::DEFAULTS).unwrap();
+        let repo = crate::repo::Repo::discover(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let store = Store::new(&repo, &cfg);
+        let e = fm_entry("2026-10-01-new", "accepted", "supersedes: [2026-09-28-use-cents]\n");
+        let only_sibling: HashSet<String> = ["2026-09-28-use-cents-2".to_string(), e.id.clone()].into();
+        let issues = store.validate(&e, &only_sibling, None);
+        assert!(issues.iter().all(|i| i.level != Level::Error), "{issues:?}");
+        assert!(issues.iter().any(|i| i.msg.contains("is a prefix of 2026-09-28-use-cents-2")), "{issues:?}");
+        // and load never derives a supersession through a prefix
+        let mut entries = vec![fm_entry("2026-09-28-use-cents-2", "accepted", ""), e.clone()];
+        derive_supersession(&mut entries);
+        assert!(entries[0].is_active());
+        let e = fm_entry("2026-10-01-new", "accepted", "supersedes: [2026-09-28-use]\n");
+        let two: HashSet<String> = ["2026-09-28-use-cents".to_string(), "2026-09-28-use-floats".to_string(), e.id.clone()].into();
+        let errors: Vec<String> = store.validate(&e, &two, None).into_iter().filter(|i| i.level == Level::Error).map(|i| i.msg).collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("is ambiguous"), "{errors:?}");
+    }
+
+    #[test]
+    fn find_strict_reports_ambiguity() {
+        let entry = |id: &str| Entry { id: id.into(), rel_path: format!(".ai/decisions/{id}.md"), ..Default::default() };
+        let entries = vec![
+            entry("0007-use-alpha"),
+            entry("0007-use-beta"),
+            entry("2026-01-01-knowledge-a"),
+            entry("2026-01-01-knowledge-b"),
+            entry("0008-use-gamma"),
+        ];
+        assert_eq!(
+            Store::find_strict(&entries, "0007").unwrap_err(),
+            RefError::Ambiguous(vec!["0007-use-alpha".into(), "0007-use-beta".into()])
+        );
+        assert!(Store::find(&entries, "0007").is_none(), "never the first that sorts");
+        assert!(matches!(Store::find_strict(&entries, "2026-01-01-knowledge"), Err(RefError::Ambiguous(c)) if c.len() == 2));
+        assert_eq!(Store::find_strict(&entries, "nope").unwrap_err(), RefError::Unknown("nope".into()));
+        assert_eq!(Store::find_strict(&entries, "0008").unwrap().id, "0008-use-gamma");
+        assert_eq!(Store::find_strict(&entries, "2026-01-01-knowledge-a").unwrap().id, "2026-01-01-knowledge-a");
+        assert_eq!(Store::find_strict(&entries, ".ai/decisions/0007-use-beta.md").unwrap().id, "0007-use-beta");
+        assert_eq!(canonical_ref(&entries, "2026-01-01-knowledge-b").unwrap(), "2026-01-01-knowledge-b");
+        assert_eq!(canonical_ref(&entries, "0008").unwrap(), "0008-use-gamma");
+        assert_eq!(canonical_links(&entries, "See [[0008]] and [[unknown]].").unwrap(), "See [[0008-use-gamma]] and [[unknown]].");
+        assert!(canonical_links(&entries, "See [[0007]].").is_err());
+        // an id two kinds share: find keeps the first, find_strict names both files
+        let twice = vec![entry("use-cents"), Entry { rel_path: ".ai/learnings/use-cents.md".into(), ..entry("use-cents") }];
+        assert!(matches!(Store::find_strict(&twice, "use-cents"), Err(RefError::Ambiguous(c)) if c[1] == ".ai/learnings/use-cents.md"));
+        assert_eq!(Store::find(&twice, "use-cents").unwrap().rel_path, ".ai/decisions/use-cents.md");
+    }
+
+    #[test]
+    fn supersede_preserves_nested_front_matter() {
+        let text = "---\nid: old\nkind: decision\ntitle: Old\n# reviewed by the payments guild\nstatus: accepted # for now\nconsulted:\n  team: payments\n  people: [a, b]\nsummary: |\n  First line.\n  Second line.\n---\n\nBody.\n";
+        let e = Entry::parse(".ai/decisions/old.md", text, "decision");
+        let out = Store::try_superseded_text(&e, "new", text).unwrap();
+        assert_eq!(out, text.replace("status: accepted # for now\n", "status: superseded # for now\nsuperseded_by: [new]\n"));
+        let again = Entry::parse(".ai/decisions/old.md", &out, "decision");
+        assert_eq!(again.status.as_deref(), Some("superseded"));
+        assert_eq!(again.superseded_by, vec!["new"]);
+        // retiring edits the status line and appends the note to the bytes
+        let retired = Store::try_retired_text(&e, "Gone.", "2026-10-29", text).unwrap();
+        assert_eq!(
+            retired,
+            format!("{}\n\n## Retired\n\n2026-10-29: Gone.\n", text.replace("status: accepted", "status: deprecated").trim_end())
+        );
+        // a CRLF file keeps its endings
+        let crlf = "---\r\nid: old\r\nstatus: accepted\r\n---\r\n\r\nBody.\r\n";
+        let e = Entry::parse(".ai/decisions/old.md", crlf, "decision");
+        assert_eq!(
+            Store::try_superseded_text(&e, "new", crlf).unwrap(),
+            "---\r\nid: old\r\nstatus: superseded\r\nsuperseded_by: [new]\r\n---\r\n\r\nBody.\r\n"
+        );
+        // an existing superseded_by list gains the new id
+        let listed = "---\nid: old\nstatus: superseded\nsuperseded_by:\n  - first\n---\nBody.\n";
+        let e = Entry::parse(".ai/decisions/old.md", listed, "decision");
+        assert_eq!(
+            Store::try_superseded_text(&e, "second", listed).unwrap(),
+            "---\nid: old\nstatus: superseded\nsuperseded_by: [first, second]\n---\nBody.\n"
+        );
+    }
+
+    #[test]
+    fn multiline_flow_list_paths_parse() {
+        let text = "---\nid: w\nkind: decision\ntitle: W\npaths: [src/glob.rs,\n  src/route.rs]\ntags:\n  [a,\n   b,\n  ]\n---\nBody.\n";
+        let e = Entry::parse(".ai/decisions/w.md", text, "decision");
+        assert_eq!(e.paths, vec!["src/glob.rs", "src/route.rs"]);
+        assert_eq!(e.tags, vec!["a", "b"]);
+        assert!(e.parse_issues.is_empty(), "{:?}", e.parse_issues);
+        let open = "---\nid: w\ntitle: W\npaths: [src/glob.rs,\n  src/route.rs\n---\nBody.\n";
+        let e = Entry::parse(".ai/decisions/w.md", open, "decision");
+        assert!(e.parse_issues.iter().any(|(l, m)| *l == Level::Error && m.contains("never closes")), "{:?}", e.parse_issues);
+        let junk = "---\nid: w\ntitle: W\nthis is no key\n---\nBody.\n";
+        let e = Entry::parse(".ai/decisions/w.md", junk, "decision");
+        assert!(e.parse_issues.iter().any(|(l, m)| *l == Level::Error && m.contains("not `key: value`")), "{:?}", e.parse_issues);
+    }
+
+    #[test]
+    fn trailing_comment_in_list() {
+        let text =
+            "---\nid: c\ntitle: C\ntags: [a, b] # the two\npaths:\n  - src/**   # all of it\n  - \"docs/a b.md\" # quoted\n---\nBody.\n";
+        let e = Entry::parse(".ai/conventions/c.md", text, "convention");
+        assert_eq!(e.tags, vec!["a", "b"]);
+        assert_eq!(e.paths, vec!["src/**", "docs/a b.md"]);
+        assert!(e.parse_issues.is_empty(), "{:?}", e.parse_issues);
+    }
+
+    #[test]
+    fn bom_fields_style_parses() {
+        let text = "\u{feff}# 0003 — X\n\n**Status:** superseded by 0007\n**Date:** 2026-01-05\n\nBody.\n";
+        let e = Entry::parse("docs/adr/0003-x.md", text, "decision");
+        assert_eq!(e.title, "X");
+        assert_eq!(e.status.as_deref(), Some("superseded"));
+        assert_eq!(e.superseded_by, vec!["0007"]);
+        assert_eq!(e.body, "Body.\n");
+        let accepted = text.replace("superseded by 0007", "accepted");
+        let a = Entry::parse("docs/adr/0003-x.md", &accepted, "decision");
+        let out = Store::try_superseded_text(&a, "0008-y", &accepted).unwrap();
+        assert!(out.starts_with("\u{feff}# 0003 — X\n\n**Status:** superseded by 0008-y\n"), "{out:?}");
+        let checked = Store::checked_text(&a, "2026-10-29", &accepted).unwrap();
+        assert!(checked.starts_with('\u{feff}') && checked.contains("**Date:** 2026-01-05\n**Checked:** 2026-10-29\n"), "{checked:?}");
+    }
+
+    #[test]
+    fn status_edit_stays_in_header_block() {
+        let text = "# 0002 — Orders\r\n\r\n**Date:** 2026-01-05\r\n\r\n## Notes\r\n\r\n- Status: 200 OK\r\n";
+        let e = Entry::parse("docs/adr/0002-orders.md", text, "decision");
+        assert_eq!(e.status, None);
+        let out = Store::try_superseded_text(&e, "0009-x", text).unwrap();
+        assert_eq!(
+            out,
+            "# 0002 — Orders\r\n\r\n**Date:** 2026-01-05\r\n**Status:** superseded by 0009-x\r\n\r\n## Notes\r\n\r\n- Status: 200 OK\r\n"
+        );
+        let with = "# 0002 — Orders\r\n\r\n* Status: accepted\r\n* Date: 2026-01-05\r\n\r\n- Status: 200 OK\r\n";
+        let e = Entry::parse("docs/adr/0002-orders.md", with, "decision");
+        let out = Store::try_retired_text(&e, "Moved.", "2026-10-29", with).unwrap();
+        assert_eq!(
+            out,
+            "# 0002 — Orders\r\n\r\n* Status: deprecated\r\n* Date: 2026-01-05\r\n\r\n- Status: 200 OK\r\n\r\n## Retired\r\n\r\n2026-10-29: Moved.\r\n"
+        );
+    }
+
+    #[test]
+    fn retired_word_maps_to_deprecated() {
+        for word in ["retired", "Archived", "withdrawn", "obsolete", "🗄️ Archived", "inactive"] {
+            assert_eq!(normalize_status(word), "deprecated", "{word}");
+        }
+        assert_eq!(normalize_status("❌ Superseded"), "superseded");
+        assert_eq!(normalize_status("✅ Accepted"), "accepted");
+        let e = Entry::parse(".ai/conventions/x.md", "---\nid: x\ntitle: X\nstatus: retired\n---\nBody.\n", "convention");
+        assert_eq!(e.status.as_deref(), Some("deprecated"));
+        assert!(!e.is_active());
+        assert!(e.parse_issues.iter().any(|(l, m)| *l == Level::Warn && m.contains("read as deprecated")), "{:?}", e.parse_issues);
+    }
+
+    #[test]
+    fn bare_file_name_matches_at_any_depth() {
+        let e = Entry::parse(
+            ".ai/conventions/x.md",
+            "---\nid: x\ntitle: X\npaths: [Dockerfile, Cargo.toml, /Makefile, src/a.rs]\n---\nBody.\n",
+            "convention",
+        );
+        assert_eq!(e.paths, vec!["**/Dockerfile/**", "**/Cargo.toml", "/Makefile", "src/a.rs"]);
+        assert!(crate::glob::path_matches(&e.paths[0], "deploy/Dockerfile"));
+        assert!(crate::glob::path_matches(&e.paths[0], "Dockerfile"));
+        assert!(crate::glob::path_matches(&e.paths[1], "crates/a/Cargo.toml"));
+        assert_eq!(e.parse_issues.iter().filter(|(l, _)| *l == Level::Info).count(), 2);
+    }
+
+    #[test]
+    fn cross_kind_duplicate_id_refused() {
+        let f = Fixture::new();
+        f.write(".ai/conventions/use-cents.md", "---\nid: use-cents\nkind: convention\ntitle: Use cents\n---\n\nCents.\n");
+        let cfg: Config = toml::from_str(crate::config::DEFAULTS).unwrap();
+        let repo = crate::repo::Repo::discover(&f.0).unwrap();
+        let store = Store::new(&repo, &cfg);
+        let (id, path) = store.allocate("learning", "Use cents", "2026-10-29");
+        assert_eq!(id, "use-cents-2", "the convention already has the id");
+        assert_eq!(path, ".ai/learnings/use-cents-2.md");
+        // an id taken in front matter under another file name counts too
+        f.write(".ai/incidents/outage.md", "---\nid: pay-outage\nkind: incident\ntitle: Pay outage\n---\n\nDown.\n");
+        assert_eq!(store.allocate("learning", "Pay outage", "2026-10-29").0, "pay-outage-2");
+    }
+
+    #[test]
+    fn nonlatin_title_gets_hash_id() {
+        let f = Fixture::new();
+        let cfg: Config = toml::from_str(crate::config::DEFAULTS).unwrap();
+        let repo = crate::repo::Repo::discover(&f.0).unwrap();
+        let store = Store::new(&repo, &cfg);
+        let (a, _) = store.allocate("learning", "Кэш читается первым", "2026-10-29");
+        let (b, _) = store.allocate("learning", "缓存优先", "2026-10-29");
+        assert!(a.starts_with("entry-") && a.len() == "entry-".len() + 8, "{a}");
+        assert!(a["entry-".len()..].chars().all(|c| c.is_ascii_hexdigit()), "{a}");
+        assert_ne!(a, b);
+        assert_eq!(store.allocate("learning", "Кэш читается первым", "2026-10-29").0, a, "stable for a title");
     }
 }

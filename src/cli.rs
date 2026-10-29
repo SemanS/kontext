@@ -248,6 +248,13 @@ enum Cmd {
         staged: bool,
     },
     /// Hook entry point: git hooks by name, agent-host hooks with --host (JSON on stdin)
+    /// Write the missing side of one-sided supersessions (status and superseded_by), staged for review
+    Repair {
+        /// List the edits without writing them
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Git hook entry point (called by the installed hooks)
     Hook {
         /// Agent-host hook: claude, codex or cursor (reads the host's hook JSON on stdin, prints its answer, exits 0)
         #[arg(long)]
@@ -1074,6 +1081,37 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(crate::hook::main(dir.clone(), &host));
             }
             let Some(name) = name else { bail!("give a git hook name, or --host claude|codex|cursor") };
+        Cmd::Repair { dry_run } => {
+            let app = open(&dir)?;
+            let (edits, problems) = app.store().repair(dry_run)?;
+            for e in &edits {
+                println!("{} {} — {} in {}", if dry_run { "would repair" } else { "repaired" }, e.id, e.what, e.path);
+                if dry_run {
+                    // the changed lines: what lies between the common head and the common tail
+                    let (b, a): (Vec<&str>, Vec<&str>) = (e.before.lines().collect(), e.after.lines().collect());
+                    let head = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
+                    let tail = b[head..].iter().rev().zip(a[head..].iter().rev()).take_while(|(x, y)| x == y).count();
+                    for old in &b[head..b.len() - tail] {
+                        println!("  - {old}");
+                    }
+                    for new in &a[head..a.len() - tail] {
+                        println!("  + {new}");
+                    }
+                }
+            }
+            for p in &problems {
+                eprintln!("kontext: {p}");
+            }
+            if edits.is_empty() && problems.is_empty() {
+                println!("nothing to repair: every supersession is written on both sides");
+            } else if !dry_run && !edits.is_empty() {
+                println!("{} file(s) repaired (staged)", edits.len());
+            }
+            if !problems.is_empty() {
+                return Ok(1);
+            }
+        }
+        Cmd::Hook { name, args } => {
             let app = match open(&dir) {
                 Ok(a) => a,
                 Err(e) => {
