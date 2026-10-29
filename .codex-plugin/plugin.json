@@ -17,5 +17,5 @@
   "name": "kontext",
   "repository": "https://github.com/SemanS/kontext",
   "skills": "./skills/",
-  "version": "0.10.0"
+  "version": "0.10.1"
 }

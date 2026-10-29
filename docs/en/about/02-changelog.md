@@ -2,6 +2,10 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.10.1 (2026-10-29)
+
+**Fix: a person's unstaged edit of an entry is a conflict, not a stale revision.** `drafts.extend`, `drafts.stage` with `amends`, `drafts.retire` and `drafts.revise` checked the revision first, so an entry file with uncommitted edits in the checkout answered `stale_entry` ("read it again") instead of `operation_conflict` ("stage or revert your edits"), which 0.9.0 said. Now an unstaged or untracked change to the entry's file is reported first, as `operation_conflict` with "unstaged" in the message; a revision that moved in a commit or in what kontext itself staged is still `stale_entry`. Nothing else changes.
+
 ## 0.10.0 (2026-10-29)
 
 **Promises hold again: trust-pinned verify commands, honest verification, a brief that keeps every governing entry, a fresh index, additive amendments, and a 2026 MCP surface.**

@@ -74,6 +74,14 @@ pub(crate) fn entry_revision_matches(app: &App, entry: &Entry, revision: &str) -
         ));
     }
     let r = r.to_ascii_lowercase();
+    // A person's own unstaged edit of the file comes first: it would also move the blob, and
+    // "stale" would send them to compare again instead of to their edit (0.10.1). What kontext
+    // itself staged is checked after the revision, so a moved entry still reads as stale.
+    let status = app.repo.git(&["status", "--porcelain=v1", "--untracked-files=all", "--", &entry.rel_path])?;
+    let unstaged = status.lines().any(|l| l.starts_with("??") || l.as_bytes().get(1).is_some_and(|b| *b != b' '));
+    if unstaged {
+        return Err(error("operation_conflict", format!("entry has unstaged or uncommitted changes: {}", entry.rel_path)));
+    }
     // what the entry reads now: the blob of its file as the working tree holds it
     let now = app.repo.git_opt(&["hash-object", "--", &entry.rel_path]).filter(|b| !b.is_empty());
     let holds = if r.len() == 12 {
@@ -92,8 +100,7 @@ pub(crate) fn entry_revision_matches(app: &App, entry: &Entry, revision: &str) -
             format!("{} changed since revision {r}; read it again", entry.id),
         ));
     }
-    let changed = app.repo.git(&["status", "--porcelain=v1", "--untracked-files=all", "--", &entry.rel_path])?;
-    if !changed.trim().is_empty() {
+    if !status.trim().is_empty() {
         return Err(error("operation_conflict", format!("entry has local, staged or uncommitted changes: {}", entry.rel_path)));
     }
     Ok(())
@@ -2103,6 +2110,22 @@ mod tests {
         // the next amendment needs the new revision
         let stale = json!({"operation_id":"amend-2","amends":{"id":learning,"revision":revision},"entry":{"body":"Another body."}});
         assert_eq!(code(&app, "drafts.stage", &stale), "stale_entry");
+    }
+
+    #[test]
+    fn an_unstaged_edit_of_the_entry_is_a_conflict_before_it_is_stale() {
+        let repo = TestRepo::new();
+        let (learning, _) = committed_entries(&repo);
+        let app = repo.app();
+        let revision = revision_of(&app, &learning);
+        let file = app.entries().0.iter().find(|e| e.id == learning).unwrap().rel_path.clone();
+        let path = repo.0.join(&file);
+        std::fs::write(&path, format!("{}\nA local note.\n", std::fs::read_to_string(&path).unwrap())).unwrap();
+        // the person's edit moved the blob too, but it is their edit, not a stale revision
+        let input = json!({"entry_id":learning,"entry_revision":revision,"text":"More."});
+        assert_eq!(code(&app, "drafts.extend", &input), "operation_conflict");
+        let err = call(&app, "drafts.extend", &input).unwrap_err();
+        assert!(err.to_string().contains("unstaged"), "{err:#}");
     }
 
     #[test]
