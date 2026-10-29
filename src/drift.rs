@@ -111,7 +111,7 @@ fn commits(app: &App, base: &str, head: &str) -> Result<Vec<(String, String, Vec
 }
 
 /// The entries as committed at `rev`, under the current configuration's kind directories.
-fn entries_at(app: &App, rev: &str) -> Result<Vec<Entry>> {
+pub(crate) fn entries_at(app: &App, rev: &str) -> Result<Vec<Entry>> {
     let store = app.store();
     let mut dirs: Vec<String> = app.cfg().kind_names().iter().map(|k| app.cfg().kind_path(k)).collect();
     dirs.sort();

@@ -22,6 +22,7 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         "entries.export" => export(app, input),
         "entries.related" => related(app, input),
         "entries.drift" => drift(app, input),
+        "entries.changed" => changed(app, input),
         _ => Err(crate::api::error("unsupported_operation", format!("unknown read operation '{operation}'"))),
     }?;
     let mut result = result;
@@ -32,7 +33,11 @@ pub fn call(app: &App, operation: &str, input: &Value) -> Result<Value> {
         crate::verification::annotate_result(app, &all, &mut result);
     }
     // drift entries describe a range, not the working view of one entry
-    if matches!(operation, "status" | "entries.export" | "entries.drift") { Ok(result) } else { working_result(app, result) }
+    if matches!(operation, "status" | "entries.export" | "entries.drift" | "entries.changed") {
+        Ok(result)
+    } else {
+        working_result(app, result)
+    }
 }
 
 pub fn entry_json(entry: &Entry) -> Value {
@@ -382,6 +387,64 @@ fn drift(app: &App, input: &Value) -> Result<Value> {
     };
     let report = crate::drift::drift(app, revision("base")?, revision("head")?, &strings(input, "kinds")?)?;
     Ok(report.to_json())
+}
+
+/// The committed entries that changed between `base` and `head` (`entries.changed`), by id, without a
+/// model: `added`, `revised` (same id, different content), `superseded` (with the head entries that
+/// supersede it) or `deprecated` (deprecated, rejected, retired or removed). A change of `checked`
+/// alone is a look, not a revision, and is left out. Uncommitted entries are never read.
+fn changed(app: &App, input: &Value) -> Result<Value> {
+    let base = crate::drift::resolve(app, string(input, "base")?)?;
+    let head = crate::drift::resolve(app, string(input, "head")?)?;
+    let kinds = strings(input, "kinds")?;
+    let wanted = |e: &Entry| {
+        if kinds.is_empty() { crate::drift::DEFAULT_KINDS.contains(&e.kind.as_str()) } else { kinds.contains(&e.kind) }
+    };
+    let before: Vec<Entry> = crate::drift::entries_at(app, &base)?.into_iter().filter(|e| wanted(e)).collect();
+    let after: Vec<Entry> = crate::drift::entries_at(app, &head)?.into_iter().filter(|e| wanted(e)).collect();
+    let content = |e: &Entry| {
+        let mut e = e.clone();
+        e.checked = None;
+        e.markdown()
+    };
+    let gone = |e: &Entry| matches!(e.status.as_deref(), Some("superseded" | "deprecated" | "rejected" | "retired"));
+    let row = |e: &Entry, change: &str| {
+        json!({"id":e.id,"kind":e.kind,"title":e.title,"file":e.rel_path,"paths":e.paths,
+            "revision":crate::util::short_hash(&e.markdown()),"change":change})
+    };
+    let mut changes: Vec<Value> = Vec::new();
+    for e in &after {
+        let Some(old) = before.iter().find(|o| o.id == e.id) else {
+            changes.push(row(e, "added"));
+            continue;
+        };
+        if content(old) == content(e) {
+            continue;
+        }
+        match (gone(old), e.status.as_deref()) {
+            (false, Some("superseded")) => {
+                let mut by: Vec<String> = after.iter().filter(|n| n.supersedes.contains(&e.id)).map(|n| n.id.clone()).collect();
+                for id in &e.superseded_by {
+                    if let Some(n) = Store::find(&after, id).filter(|n| !by.contains(&n.id)) {
+                        by.push(n.id.clone());
+                    }
+                }
+                let mut v = row(e, "superseded");
+                v["superseded_by"] = json!(by);
+                changes.push(v);
+            }
+            (false, _) if gone(e) => changes.push(row(e, "deprecated")),
+            (true, _) if gone(e) => {}
+            _ => changes.push(row(e, "revised")),
+        }
+    }
+    for old in before.iter().filter(|o| !gone(o) && !after.iter().any(|e| e.id == o.id)) {
+        let mut v = row(old, "deprecated");
+        v["removed"] = json!(true);
+        changes.push(v);
+    }
+    changes.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    Ok(json!({"base":base,"head":head,"changes":changes}))
 }
 
 fn validate_path(path: &str) -> Result<String> {
@@ -853,5 +916,60 @@ mod tests {
         let status = call(&app, "status", &json!({})).unwrap();
         assert_eq!(status["llm"]["available"], false);
         assert!(status["llm"]["adapters"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn entries_changed_names_added_revised_superseded_and_deprecated_from_commits_only() {
+        let f = Fixture::new();
+        let fm = |id: &str, kind: &str, status: &str, extra: &str, body: &str| {
+            format!(
+                "---\nid: {id}\nkind: {kind}\ntitle: {id} title\nstatus: {status}\ndate: 2026-10-01\npaths: [src/{id}/**]\n{extra}---\n\n{body}\n"
+            )
+        };
+        f.write(".ai/kontext.toml", "[init]\nllm = 'test-no-model'\n");
+        f.write(".ai/learnings/kept.md", &fm("kept", "learning", "accepted", "", "Unchanged."));
+        f.write(".ai/learnings/grows.md", &fm("grows", "learning", "accepted", "", "First body."));
+        f.write(".ai/decisions/old.md", &fm("old", "decision", "accepted", "", "Use cron."));
+        f.write(".ai/conventions/retire-me.md", &fm("retire-me", "convention", "accepted", "", "Old rule."));
+        f.write(".ai/learnings/looked-at.md", &fm("looked-at", "learning", "accepted", "", "Same text."));
+        f.write(".ai/learnings/gone.md", &fm("gone", "learning", "accepted", "", "Removed later."));
+        let base = f.commit();
+        f.write(".ai/learnings/grows.md", &fm("grows", "learning", "accepted", "", "First body.\n\n## Added 2026-10-29\n\nMore."));
+        f.write(".ai/decisions/old.md", &fm("old", "decision", "superseded", "superseded_by: [new]\n", "Use cron."));
+        f.write(".ai/decisions/new.md", &fm("new", "decision", "accepted", "supersedes: [old]\n", "Use the queue."));
+        f.write(".ai/conventions/retire-me.md", &fm("retire-me", "convention", "deprecated", "", "Old rule.\n\n## Retired\n\nNo longer."));
+        f.write(".ai/learnings/looked-at.md", &fm("looked-at", "learning", "accepted", "checked: 2026-10-29T10:00:00Z\n", "Same text."));
+        std::fs::remove_file(f.0.join(".ai/learnings/gone.md")).unwrap();
+        let head = f.commit();
+        // uncommitted work is never read
+        f.write(".ai/learnings/kept.md", &fm("kept", "learning", "accepted", "", "Edited, not committed."));
+        f.write(".ai/learnings/draft.md", &fm("draft", "learning", "accepted", "", "Not committed."));
+        let app = f.app();
+        let out = call(&app, "entries.changed", &json!({"base":base,"head":head})).unwrap();
+        assert_eq!((out["base"].as_str(), out["head"].as_str()), (Some(base.as_str()), Some(head.as_str())));
+        let changes = out["changes"].as_array().unwrap();
+        let by: std::collections::BTreeMap<&str, &Value> = changes.iter().map(|c| (c["id"].as_str().unwrap(), c)).collect();
+        assert_eq!(by.keys().copied().collect::<Vec<_>>(), vec!["gone", "grows", "new", "old", "retire-me"], "{out:#}");
+        assert_eq!(by["grows"]["change"], "revised");
+        assert_eq!(by["grows"]["kind"], "learning");
+        assert_eq!(by["grows"]["file"], ".ai/learnings/grows.md");
+        assert_eq!(by["grows"]["paths"], json!(["src/grows/**"]));
+        let grows = crate::drift::entries_at(&app, &head).unwrap().into_iter().find(|e| e.id == "grows").unwrap();
+        assert_eq!(by["grows"]["revision"], crate::util::short_hash(&grows.markdown()));
+        assert_eq!(by["new"]["change"], "added");
+        assert_eq!(by["old"]["change"], "superseded");
+        assert_eq!(by["old"]["superseded_by"], json!(["new"]));
+        assert_eq!(by["retire-me"]["change"], "deprecated");
+        assert_eq!(by["gone"]["change"], "deprecated");
+        assert_eq!(by["gone"]["removed"], true);
+        assert!(by["grows"].get("superseded_by").is_none());
+        let same = call(&app, "entries.changed", &json!({"base":head,"head":head})).unwrap();
+        assert_eq!(same["changes"], json!([]));
+        assert_eq!(crate::api::execute(&app, "entries.changed", &json!({"base":base}))["error"]["code"], "invalid_input");
+        assert_eq!(crate::api::execute(&app, "entries.changed", &json!({"base":"nope","head":head}))["error"]["code"], "invalid_input");
+        let status = call(&app, "status", &json!({})).unwrap();
+        for name in ["entries.changed", "drafts.extend", "drafts.stage.amends", "drafts.stage.extends"] {
+            assert!(status["capabilities"].as_array().unwrap().iter().any(|c| c == name), "{name}");
+        }
     }
 }
