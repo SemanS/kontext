@@ -7,8 +7,12 @@ use crate::util;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 
-pub const INSTRUCTIONS: &str = "kontext is this repository's shared, reviewed team context — decisions, conventions, learnings, incidents and the module map — plus any connected memory, history and code systems. \
-Start each task with ctx_brief (pass `focus` with the paths or topic you will work on). Use ctx_search / ctx_read for detail and ctx_why to learn why code is the way it is. \
+/// The server's instructions. Clients may show only the start (and load the tools lazily, behind a
+/// tool search): the first 512 characters stand alone — what kontext holds, that its tools are
+/// `ctx_*`, that ctx_brief comes first and when to look for the others. The whole stays under 4,096.
+pub const INSTRUCTIONS: &str = "kontext holds this repository's reviewed team knowledge: decisions, conventions, learnings, incidents and the module map, plus connected memory and history. \
+Its tools are named ctx_* (if they are not loaded, search your tools for \"ctx_\"). Call ctx_brief first in every task, with `focus` set to the paths or topic you will work on. \
+Look for ctx_search, ctx_read and ctx_why whenever a task touches a past decision, a convention or a pitfall. \
 When you and the user settle something durable (a decision, a convention, a non-obvious pitfall), record it with ctx_capture — short: what, why, consequences, and the paths it governs; a learning or decision you proved with a command carries that command as `verify`. \
 Before committing, run ctx_prepare_commit and promote the candidates that belong to the change so they are reviewed together with it. \
 Shared knowledge changes only through commits and review; supersede a decision instead of rewriting it. \
@@ -16,10 +20,16 @@ Another worktree, submodule or repository? Pass `dir` (a path inside it).";
 
 /// Instructions for a repository without a knowledge store (kontext registered for every
 /// repository of a user, but set up only in some). In every session's prompt: keep it short.
-pub const NOT_SET_UP_INSTRUCTIONS: &str = "kontext is not set up in this repository (no team knowledge store). \
-ctx_brief with focus, ctx_search and ctx_why still answer from its docs, history and private notes. \
+pub const NOT_SET_UP_INSTRUCTIONS: &str = "kontext is installed, but this repository has no team knowledge store yet. \
+Its tools are named ctx_* (if they are not loaded, search your tools for \"ctx_\"). ctx_brief with `focus`, ctx_search and ctx_why still answer from the repository's docs, history and private notes: call ctx_brief first. \
 Capture team knowledge or bootstrap it (ctx_capture, ctx_init) only when the user asks; private notes (visibility private) are fine. \
 Another worktree, submodule or repository? Pass `dir` (a path inside it).";
+
+/// Instructions when the server started outside any git repository (a client launched from the
+/// home directory): every call needs `dir`, and nothing promises answers it cannot give.
+pub const NO_REPO_INSTRUCTIONS: &str = "kontext found no git repository where this server started, so its ctx_* tools answer only with `dir`: \
+pass a path inside the project (call ctx_brief with `dir` first). \
+Starting the server from the project directory (or with -C <dir>) makes `dir` unnecessary.";
 
 /// The server's instructions for `app`: what it has, and the submodules that keep team knowledge
 /// of their own (an agent in camp-bot works in `extractor/` and its decisions live there).
@@ -46,6 +56,10 @@ fn s(desc: &str) -> Value {
 fn arr(desc: &str) -> Value {
     json!({"type": "array", "items": {"type": "string"}, "description": desc})
 }
+/// A list of strings, or one comma-separated string.
+fn strs() -> Value {
+    json!({"type": ["array", "string"], "items": {"type": "string"}})
+}
 
 /// MCP tool annotations. Clients use them to decide what needs approval: Codex, for one, runs
 /// read-only tools without asking and asks (or, with `approval_policy = "never"`, refuses) the rest.
@@ -66,15 +80,16 @@ fn annotations(name: &str) -> Value {
         "ctx_challenge" => ("Challenge a knowledge entry", false, false),
         // sets one line of the entry's own file and stages it for review
         "ctx_confirm" => ("Confirm a knowledge entry still holds", false, false),
-        // runs a command the entry names, then appends one ledger line and stages it
-        "ctx_verify" => ("Run a knowledge entry's verify command", false, false),
+        // runs a shell command from the repository (pinned commands only): it can change anything
+        // the user can and reach the network, so clients ask first (decided: destructive, open-world)
+        "ctx_verify" => ("Run a knowledge entry's verify command", false, true),
         "ctx_drift" => ("Knowledge a change left behind", true, false),
         "ctx_prepare_commit" => ("Prepare the commit", false, false),
         "ctx_init" => ("Knowledge bootstrap: next tasks", false, false),
         "ctx_init_submit" => ("Knowledge bootstrap: submit a task", false, false),
         _ => ("", false, false),
     };
-    let mut a = json!({"readOnlyHint": read_only, "openWorldHint": name == "ctx_api"});
+    let mut a = json!({"readOnlyHint": read_only, "openWorldHint": matches!(name, "ctx_api" | "ctx_verify")});
     if !title.is_empty() {
         a["title"] = json!(title);
     }
@@ -98,7 +113,14 @@ const TAKES_DIR: &[&str] = &[
     "ctx_verify",
     "ctx_inbox",
     "ctx_prepare_commit",
+    "ctx_drift",
+    "ctx_threads",
+    "ctx_init",
 ];
+
+/// Tools whose `dir` stays inside this repository, its worktrees and its submodules: they run
+/// commands or change the local inbox and index, so another checkout on disk is not theirs to touch.
+const CONFINED_DIR: &[&str] = &["ctx_verify", "ctx_inbox", "ctx_prepare_commit"];
 
 pub fn definitions() -> Vec<Value> {
     let mut defs = tool_list();
@@ -106,10 +128,28 @@ pub fn definitions() -> Vec<Value> {
         let name = d["name"].as_str().unwrap_or("").to_string();
         d["annotations"] = annotations(&name);
         if TAKES_DIR.contains(&name.as_str()) {
-            d["inputSchema"]["properties"]["dir"] = s("Path inside another worktree, submodule or repo to act on");
+            d["inputSchema"]["properties"]["dir"] = if CONFINED_DIR.contains(&name.as_str()) {
+                s("Path in a worktree or submodule of this repo")
+            } else {
+                s("Path in another worktree, submodule or repo")
+            };
+        }
+        if let Some(schema) = output_schema(&name) {
+            d["outputSchema"] = schema;
+        }
+        match name.as_str() {
+            // the brief is what every session needs first: never defer it behind a tool search
+            "ctx_brief" => d["_meta"] = json!({"anthropic/alwaysLoad": true}),
+            "ctx_read" | "ctx_api" => d["_meta"] = json!({"anthropic/maxResultSizeChars": 200_000}),
+            _ => {}
         }
     }
     defs
+}
+
+/// Whether `name` is one of kontext's own tools.
+pub fn is_tool(name: &str) -> bool {
+    tool_list().iter().any(|t| t["name"] == name)
 }
 
 fn tool_list() -> Vec<Value> {
@@ -204,7 +244,7 @@ fn tool_list() -> Vec<Value> {
         }),
         json!({
             "name": "ctx_verify",
-            "description": "Run a recorded entry's `verify` command (one shell command from the repository root, with a timeout) and record pass or fail with HEAD in the verification ledger, staged with your change. Returns the outcome and the end of the output. An entry without a `verify` command cannot be verified this way: read it and ctx_confirm it.",
+            "description": "Run an entry's `verify` command (one shell command from the repository root, with a timeout); pass or fail is recorded with HEAD in the verification ledger and staged. Only commands the user pinned run; an unpinned one is returned to you, not run. Returns the outcome and the output's end. No `verify` command: read the entry and ctx_confirm it.",
             "inputSchema": {"type": "object", "properties": {
                 "id": s("The entry: kx:<id>, an id or its unique prefix"),
                 "because": s("One line: why you ran it")
@@ -233,7 +273,8 @@ fn tool_list() -> Vec<Value> {
             "inputSchema": {"type": "object", "properties": {
                 "thread": s("claude:<id>, codex:<id>, superset:<workspace id or worktree name> (every thread of that workspace), a transcript file, or `last`"),
                 "part": {"type": "integer", "description": "Part of a long transcript to return (1-based, default 1)"},
-                "budget_chars": {"type": "integer", "description": "Characters per part (default 20000, at most 80000)"}
+                "budget_chars": {"type": "integer", "description": "Characters per part (default 20000, at most 80000)"},
+                "budget_tokens": {"type": "integer", "description": "Or tokens per part (about 4 characters each)"}
             }}
         }),
         json!({
@@ -271,11 +312,12 @@ fn tool_list() -> Vec<Value> {
                 "overview": s("Markdown, 5-15 lines"),
                 "decisions": {"type": "array", "description": "For dec:* tasks (at most 3)", "items": {"type": "object", "properties": {
                     "title": {"type": "string"}, "summary": {"type": "string"}, "context": {"type": "string"}, "decision": {"type": "string"},
-                    "alternatives": {"type": "string"}, "consequences": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}},
-                    "commits": {"type": "array", "items": {"type": "string"}}, "date": {"type": "string"}
+                    "alternatives": {"type": "string"}, "consequences": {"type": "string"}, "paths": strs(),
+                    "commits": strs(), "date": {"type": "string"}, "status": {"type": "string", "description": "proposed | accepted (default)"},
+                    "tags": strs()
                 }, "required": ["title", "decision"]}},
                 "learnings": {"type": "array", "description": "Optional non-obvious gotchas", "items": {"type": "object", "properties": {
-                    "title": {"type": "string"}, "body": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}
+                    "title": {"type": "string"}, "body": {"type": "string"}, "paths": strs(), "tags": strs()
                 }, "required": ["title", "body"]}},
                 "skip": {"type": "boolean", "description": "Skip this task"},
                 "reason": s("Why it was skipped")
@@ -304,8 +346,14 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
     if name == "ctx_api" {
         return Ok(api_call(app, args).to_string());
     }
+    // parameter aliases (`reason` for `why`, `max` for `limit`, …): never a rename, both work
+    let normalized = normalize_args(name, args);
+    let args = &normalized;
     // `dir`: the tool runs in another worktree, submodule or repository
     if let Some(dir) = str_arg(args, "dir") {
+        if CONFINED_DIR.contains(&name) {
+            confine_dir(app, name, &dir)?;
+        }
         let target = crate::route::open_dir(app, &dir)?;
         let mut rest = args.clone();
         if let Some(o) = rest.as_object_mut() {
@@ -324,24 +372,10 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
             let with_adapters = args.get("adapters").and_then(|v| v.as_bool()).unwrap_or(true);
             Ok(ops::brief(app, &focus, budget, with_adapters))
         }
-        "ctx_search" => {
-            let query = str_arg(args, "query").ok_or_else(|| anyhow!("query is required"))?;
-            let req = SearchReq {
-                query,
-                kinds: list_arg(args, "kinds"),
-                sources: list_arg(args, "sources"),
-                limit: int_arg(args, "limit").unwrap_or(10),
-                adapters: args.get("adapters").and_then(Value::as_bool),
-            };
-            let (hits, notes) = ops::search(app, &req)?;
-            let mut out = model::render(&hits, int_arg(args, "budget_tokens").unwrap_or(1200));
-            if !notes.is_empty() {
-                out.push_str(&format!("\n(notes: {})\n", notes.join("; ")));
-            }
-            Ok(out)
-        }
+        "ctx_search" => search_full(app, args).map(|o| o.text),
         "ctx_read" => {
             let uri = str_arg(args, "uri").ok_or_else(|| anyhow!("uri is required"))?;
+            deny_private_paths(app, &uri)?;
             let level = int_arg(args, "level").unwrap_or(1).min(2) as u8;
             ops::read(app, &uri, level)
         }
@@ -460,6 +494,9 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 out.push_str("\nRead one with ctx_threads thread=\"<label>\".");
                 return Ok(out);
             };
+            if origin == "agent" {
+                threads_spec_allowed(&spec, &roots)?;
+            }
             let found: Vec<threads::Found> = match spec.strip_prefix("superset:") {
                 Some(ws) => {
                     let w = threads::superset_workspace(Some(ws).filter(|w| !w.is_empty()))?;
@@ -552,11 +589,7 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
                 other => bail!("unknown action '{other}'"),
             }
         }
-        "ctx_drift" => {
-            let report =
-                crate::drift::drift(app, str_arg(args, "base").as_deref(), str_arg(args, "head").as_deref(), &list_arg(args, "kinds"))?;
-            Ok(crate::drift::render_text(&report, true))
-        }
+        "ctx_drift" => drift_full(app, args).map(|o| o.text),
         "ctx_confirm" => {
             let mut ids = list_arg(args, "ids");
             if let Some(id) = str_arg(args, "id") {
@@ -591,6 +624,8 @@ pub fn call(app: &App, name: &str, args: &Value, origin: &str) -> Result<String>
         }
         "ctx_verify" => {
             let id = str_arg(args, "id").ok_or_else(|| anyhow!("id is required"))?;
+            // TODO(agent B): call `crate::api_write::verify_with_transport(app, &req, Transport::Mcp)`
+            // when origin == "agent" (an unpinned command is returned, not run), once it lands.
             let out = crate::api_write::verify(app, &json!({"id": id, "because": str_arg(args, "because")}))?;
             let passed = out["passed"] == json!(true);
             let how = match (out["timed_out"].as_bool(), out["exit_code"].as_i64()) {
@@ -760,4 +795,378 @@ For each, call ctx_capture with a short title, a body of a few lines (what, why,
 
 pub fn clip(s: String) -> String {
     if s.len() > 90_000 { util::truncate_chars(&s, 90_000) } else { s }
+}
+
+// ------------------------------------------------------------------- structured tool results
+
+/// A tool's answer as MCP returns it: the text block (unchanged), and for the read tools a
+/// `structuredContent` object matching the tool's `outputSchema` plus `resource_link` blocks.
+#[derive(Debug, Default)]
+pub struct ToolOutput {
+    pub text: String,
+    pub structured: Option<Value>,
+    pub links: Vec<Value>,
+}
+
+impl ToolOutput {
+    fn text(text: String) -> ToolOutput {
+        ToolOutput { text, ..ToolOutput::default() }
+    }
+}
+
+/// `outputSchema` of the tools that return `structuredContent` (JSON Schema 2020-12, the MCP
+/// default dialect). Kept to the required fields (tools/list is in every session's context);
+/// results carry more, and the schemas allow it:
+/// - ctx_brief `{text, entries: [full id], focus, budget_tokens}`
+/// - ctx_search `{query, hits: [{uri, title, source, snippet, kind?, score, date?, status?}], notes}`
+/// - ctx_read `{uri, text, level, entry?}`; ctx_why `{target, text, entries}`
+/// - ctx_inbox `{action, text, items?: [{id, kind, title, visibility, source}]}` (items for list)
+/// - ctx_drift `{base, head, entries: [{id, kind, title, path, changed, commits, date?, checked?}], text}`
+pub fn output_schema(name: &str) -> Option<Value> {
+    let st = || json!({"type": "string"});
+    let ids = || json!({"type": "array", "items": {"type": "string"}});
+    let objs = || json!({"type": "array", "items": {"type": "object"}});
+    let obj = |props: Value, required: &[&str]| json!({"type": "object", "properties": props, "required": required});
+    Some(match name {
+        "ctx_brief" => obj(json!({"text": st(), "entries": ids()}), &["text", "entries"]),
+        "ctx_search" => obj(json!({"hits": objs(), "notes": ids()}), &["hits"]),
+        "ctx_read" => obj(json!({"uri": st(), "text": st()}), &["uri", "text"]),
+        "ctx_why" => obj(json!({"text": st(), "entries": ids()}), &["text", "entries"]),
+        "ctx_inbox" => obj(json!({"action": st(), "text": st()}), &["action", "text"]),
+        "ctx_drift" => obj(json!({"entries": objs(), "text": st()}), &["entries", "text"]),
+        _ => return None,
+    })
+}
+
+/// Run a tool for MCP: like [`call`], plus structured content for the tools that declare an
+/// `outputSchema`. `origin` is "agent" over MCP.
+pub fn call_full(app: &App, name: &str, args: &Value, origin: &str) -> Result<ToolOutput> {
+    if output_schema(name).is_none() {
+        return call(app, name, args, origin).map(ToolOutput::text);
+    }
+    let args = &normalize_args(name, args);
+    if let Some(dir) = str_arg(args, "dir") {
+        if CONFINED_DIR.contains(&name) {
+            confine_dir(app, name, &dir)?;
+        }
+        let target = crate::route::open_dir(app, &dir)?;
+        let mut rest = args.clone();
+        if let Some(o) = rest.as_object_mut() {
+            o.remove("dir");
+        }
+        if target.repo.root == app.repo.root {
+            return call_full(app, name, &rest, origin);
+        }
+        let mut out = call_full(&target, name, &rest, origin)?;
+        out.text = format!("{}\n{}", crate::route::banner(app, &target), out.text);
+        return Ok(out);
+    }
+    match name {
+        "ctx_search" => search_full(app, args),
+        "ctx_drift" => drift_full(app, args),
+        _ => {
+            let text = call(app, name, args, origin)?;
+            Ok(structure(app, name, args, text))
+        }
+    }
+}
+
+fn search_full(app: &App, args: &Value) -> Result<ToolOutput> {
+    let query = str_arg(args, "query").ok_or_else(|| anyhow!("query is required"))?;
+    let req = SearchReq {
+        query: query.clone(),
+        kinds: list_arg(args, "kinds"),
+        sources: list_arg(args, "sources"),
+        limit: int_arg(args, "limit").unwrap_or(10),
+        adapters: args.get("adapters").and_then(Value::as_bool),
+    };
+    let (hits, notes) = ops::search(app, &req)?;
+    let mut out = model::render(&hits, int_arg(args, "budget_tokens").unwrap_or(1200));
+    if !notes.is_empty() {
+        out.push_str(&format!("\n(notes: {})\n", notes.join("; ")));
+    }
+    let links = hits
+        .iter()
+        .filter_map(|h| {
+            let id = h.uri.strip_prefix("kx:").filter(|id| !id.contains('/'))?;
+            Some(entry_link(id, &h.title))
+        })
+        .collect();
+    let structured = json!({"query": query, "hits": hits, "notes": notes});
+    Ok(ToolOutput { text: out, structured: Some(structured), links })
+}
+
+fn drift_full(app: &App, args: &Value) -> Result<ToolOutput> {
+    let report = crate::drift::drift(app, str_arg(args, "base").as_deref(), str_arg(args, "head").as_deref(), &list_arg(args, "kinds"))?;
+    let text = crate::drift::render_text(&report, true);
+    let mut structured = report.to_json();
+    structured["text"] = json!(text);
+    Ok(ToolOutput { text, structured: Some(structured), links: Vec::new() })
+}
+
+fn entry_link(id: &str, title: &str) -> Value {
+    json!({"type": "resource_link", "uri": format!("kontext://entry/{id}"), "name": id, "title": title, "mimeType": "text/markdown"})
+}
+
+/// The local entries a text names as `[id]` or `<kx:id>` (short ids resolved), in order, once each.
+fn named_entries<'e>(entries: &'e [crate::store::Entry], text: &str) -> Vec<&'e crate::store::Entry> {
+    static REF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\[([A-Za-z0-9][A-Za-z0-9._-]*)\]|<kx:([A-Za-z0-9][A-Za-z0-9._-]*)>").expect("valid regex")
+    });
+    let mut seen = std::collections::HashSet::new();
+    REF.captures_iter(text)
+        .filter_map(|c| c.get(1).or_else(|| c.get(2)))
+        .filter_map(|m| crate::store::Store::find(entries, m.as_str()))
+        .filter(|e| seen.insert(e.id.clone()))
+        .collect()
+}
+
+/// The structured form of a text tool's answer, built from the answer and the request.
+fn structure(app: &App, name: &str, args: &Value, text: String) -> ToolOutput {
+    let mut links = Vec::new();
+    let structured = match name {
+        "ctx_brief" | "ctx_why" => {
+            let (entries, _) = app.entries();
+            // TODO(agent C): once `ops::governing_lines` lands, add its governing section here.
+            let named = named_entries(&entries, &text);
+            links = named.iter().map(|e| entry_link(&e.id, &e.title)).collect();
+            let ids: Vec<&str> = named.iter().map(|e| e.id.as_str()).collect();
+            if name == "ctx_brief" {
+                json!({"text": text, "focus": list_arg(args, "focus"),
+                    "budget_tokens": int_arg(args, "budget_tokens").unwrap_or(app.cfg().brief.budget_tokens), "entries": ids})
+            } else {
+                json!({"target": str_arg(args, "target").unwrap_or_default(), "text": text, "entries": ids})
+            }
+        }
+        "ctx_read" => {
+            let uri = str_arg(args, "uri").unwrap_or_default();
+            let mut v = json!({"uri": uri, "level": int_arg(args, "level").unwrap_or(1).min(2), "text": text});
+            if !uri.starts_with("file:") && !uri.contains("://") && !uri.starts_with("git:") && !uri.starts_with("inbox:") {
+                let (entries, _) = app.entries();
+                if let Some(e) = crate::store::Store::find(&entries, &uri) {
+                    v["entry"] = json!(e.id);
+                }
+            }
+            v
+        }
+        "ctx_inbox" => {
+            let action = str_arg(args, "action").unwrap_or_else(|| "list".into());
+            let mut v = json!({"action": action, "text": text});
+            if action == "list" {
+                let items: Vec<Value> = crate::inbox::Inbox::open(&app.repo)
+                    .list()
+                    .iter()
+                    .map(|e| {
+                        json!({"id": e.id, "kind": e.kind, "title": e.title,
+                            "visibility": e.visibility.as_deref().unwrap_or("team"), "source": e.get_extra("source")})
+                    })
+                    .collect();
+                v["items"] = json!(items);
+            }
+            v
+        }
+        _ => return ToolOutput::text(text),
+    };
+    ToolOutput { text, structured: Some(structured), links }
+}
+
+// -------------------------------------------------------------------- aliases and boundaries
+
+/// Accept the other names agents use for a parameter: `reason` = `why` = `because`, `id`/`ids`,
+/// `focus`/`paths`, `limit`/`max`, `kind`/`kinds` (a string too), `budget_tokens` for ctx_threads.
+/// The documented name always wins; nothing is renamed.
+pub fn normalize_args(name: &str, args: &Value) -> Value {
+    let Some(obj) = args.as_object() else { return args.clone() };
+    let mut o = obj.clone();
+    fn has(o: &serde_json::Map<String, Value>, k: &str) -> bool {
+        o.get(k).is_some_and(|v| !v.is_null() && v != "")
+    }
+    fn alias(o: &mut serde_json::Map<String, Value>, canonical: &str, others: &[&str]) {
+        if has(o, canonical) {
+            return;
+        }
+        if let Some(v) = others.iter().find_map(|k| o.get(*k).filter(|v| !v.is_null() && *v != "").cloned()) {
+            o.insert(canonical.to_string(), v);
+        }
+    }
+    fn first_of(v: Option<&Value>) -> Option<Value> {
+        match v {
+            Some(Value::Array(a)) => a.first().cloned(),
+            Some(Value::String(s)) => s.split(',').next().map(|x| json!(x.trim())),
+            _ => None,
+        }
+    }
+    match name {
+        "ctx_challenge" => alias(&mut o, "why", &["reason", "because"]),
+        "ctx_confirm" | "ctx_verify" => alias(&mut o, "because", &["reason", "why"]),
+        "ctx_init_submit" => alias(&mut o, "reason", &["why", "because"]),
+        _ => {}
+    }
+    // one id where the tool takes one, a list where it takes several
+    if matches!(name, "ctx_challenge" | "ctx_verify")
+        && !has(&o, "id")
+        && let Some(v) = first_of(o.get("ids"))
+    {
+        o.insert("id".into(), v);
+    }
+    match name {
+        "ctx_inbox" => alias(&mut o, "ids", &["id"]),
+        "ctx_read" => alias(&mut o, "uri", &["id", "path"]),
+        "ctx_brief" => alias(&mut o, "focus", &["paths"]),
+        "ctx_search" | "ctx_drift" => alias(&mut o, "kinds", &["kind"]),
+        _ => {}
+    }
+    if name == "ctx_log"
+        && !has(&o, "kind")
+        && let Some(v) = first_of(o.get("kinds"))
+    {
+        o.insert("kind".into(), v);
+    }
+    alias(&mut o, "limit", &["max"]);
+    if name == "ctx_threads" && !has(&o, "budget_chars") {
+        let tokens = o.get("budget_tokens").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
+        if let Some(t) = tokens {
+            o.insert("budget_chars".into(), json!(t.saturating_mul(4)));
+        }
+    }
+    Value::Object(o)
+}
+
+/// `dir` of a tool that runs commands or changes local state: inside this repository (its
+/// submodules and nested checkouts included) or one of its worktrees, never elsewhere on disk.
+fn confine_dir(app: &App, tool: &str, dir: &str) -> Result<()> {
+    let p = std::path::Path::new(dir.trim());
+    let abs = if p.is_absolute() { p.to_path_buf() } else { app.repo.root.join(p) };
+    // a path that does not exist is refused by `open_dir` with its own message
+    let Ok(canon) = abs.canonicalize() else { return Ok(()) };
+    let canon_of = |s: &std::path::Path| s.canonicalize().unwrap_or_else(|_| s.to_path_buf());
+    let mut roots = vec![canon_of(&app.repo.root)];
+    roots.extend(app.repo.worktree_roots().iter().map(|r| canon_of(std::path::Path::new(r))));
+    if roots.iter().any(|r| canon.starts_with(r)) {
+        return Ok(());
+    }
+    bail!("{tool} takes `dir` only inside this repository, its worktrees or its submodules; '{dir}' is outside them")
+}
+
+/// `ctx_read` never serves git internals or credentials: `.git/` (objects, config with remote
+/// tokens, hooks), `.git-credentials` and `.ssh/`, also when a symlink points there.
+fn deny_private_paths(app: &App, uri: &str) -> Result<()> {
+    let u = uri.trim();
+    if u.contains("://") || ["kx:", "git:", "inbox:"].iter().any(|s| u.starts_with(s)) {
+        return Ok(());
+    }
+    let raw = u.strip_prefix("file:").unwrap_or(u);
+    let path = raw.split('#').next().unwrap_or("");
+    let private = |p: &str| {
+        p.split(['/', '\\']).any(|seg| {
+            let seg = seg.to_ascii_lowercase();
+            seg == ".git" || seg == ".git-credentials" || seg == ".ssh"
+        })
+    };
+    let resolved = app.repo.abs(path.trim_start_matches("./").trim_start_matches('/')).canonicalize().ok().and_then(|c| {
+        let root = app.repo.root.canonicalize().ok()?;
+        c.strip_prefix(root).ok().map(|r| r.to_string_lossy().to_string())
+    });
+    if private(path) || resolved.as_deref().is_some_and(private) {
+        bail!("refusing to read '{path}': git internals and credentials are not context");
+    }
+    Ok(())
+}
+
+/// Which threads `ctx_threads` reads over MCP: named ones (`claude:`, `codex:`, `superset:`,
+/// `last`, a bare session id) and transcript files of this repository's own threads. Never `-`:
+/// stdin is the server's JSON-RPC stream.
+fn threads_spec_allowed(spec: &str, roots: &[String]) -> Result<()> {
+    let s = spec.trim();
+    let hint = "name a thread as claude:<id>, codex:<id>, superset:<workspace> or last";
+    if s == "-" {
+        bail!("thread \"-\" (stdin) is not available over MCP: {hint}");
+    }
+    if s == "last" || ["claude:", "codex:", "superset:"].iter().any(|p| s.starts_with(p)) {
+        return Ok(());
+    }
+    let path = std::path::Path::new(s);
+    if !path.exists() && !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        // a bare session id: looked up among transcripts like claude:<id> / codex:<id>
+        return Ok(());
+    }
+    let Ok(canon) = path.canonicalize() else { bail!("no transcript '{s}': {hint}") };
+    let ours = crate::threads::in_roots(roots, 10_000).into_iter().any(|f| f.path.canonicalize().is_ok_and(|c| c == canon));
+    if !ours {
+        bail!("'{s}' is not a transcript of this repository's agent threads: {hint}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+
+    #[test]
+    fn tools_list_fits_its_budget() {
+        let json = serde_json::to_string(&json!({"tools": definitions()})).unwrap();
+        assert!(json.len() < 20_000, "tools/list for ctx_* is {} chars", json.len());
+    }
+
+    #[test]
+    fn instructions_stand_alone_in_their_first_512_chars() {
+        for text in [INSTRUCTIONS, NOT_SET_UP_INSTRUCTIONS, NO_REPO_INSTRUCTIONS] {
+            let head: String = text.chars().take(512).collect();
+            assert!(head.contains("ctx_brief"), "{head}");
+            assert!(text.chars().count() < 4_096);
+        }
+        let head: String = INSTRUCTIONS.chars().take(512).collect();
+        assert!(head.contains("decisions") && head.contains("search your tools"), "{head}");
+    }
+
+    #[test]
+    fn verify_is_destructive_and_open_world_and_brief_always_loads() {
+        let defs = definitions();
+        let tool = |n: &str| defs.iter().find(|t| t["name"] == n).unwrap().clone();
+        let verify = tool("ctx_verify");
+        assert_eq!(verify["annotations"]["destructiveHint"], true);
+        assert_eq!(verify["annotations"]["openWorldHint"], true);
+        assert!(verify["description"].as_str().unwrap().contains("pinned"));
+        assert_eq!(tool("ctx_brief")["_meta"]["anthropic/alwaysLoad"], true);
+        assert_eq!(tool("ctx_read")["_meta"]["anthropic/maxResultSizeChars"], 200_000);
+        assert_eq!(tool("ctx_api")["_meta"]["anthropic/maxResultSizeChars"], 200_000);
+        for n in ["ctx_drift", "ctx_threads", "ctx_init"] {
+            assert!(tool(n)["inputSchema"]["properties"]["dir"].is_object(), "{n} takes dir");
+        }
+        for n in ["ctx_brief", "ctx_search", "ctx_read", "ctx_why", "ctx_inbox", "ctx_drift"] {
+            assert_eq!(tool(n)["outputSchema"]["type"], "object", "{n} has an outputSchema");
+        }
+        let submit = tool("ctx_init_submit");
+        let props = &submit["inputSchema"]["properties"]["decisions"]["items"]["properties"];
+        assert!(props["status"].is_object() && props["tags"].is_object());
+        assert!(is_tool("ctx_brief") && !is_tool("ctx_nope"));
+    }
+
+    #[test]
+    fn aliases_fill_the_documented_name_and_never_override_it() {
+        let a = normalize_args("ctx_challenge", &json!({"id": "x", "reason": "moved"}));
+        assert_eq!(a["why"], "moved");
+        let a = normalize_args("ctx_challenge", &json!({"id": "x", "why": "kept", "reason": "other"}));
+        assert_eq!(a["why"], "kept");
+        assert_eq!(normalize_args("ctx_verify", &json!({"ids": ["a"], "why": "w"}))["id"], "a");
+        assert_eq!(normalize_args("ctx_verify", &json!({"id": "a", "why": "w"}))["because"], "w");
+        assert_eq!(normalize_args("ctx_inbox", &json!({"action": "show", "id": "c1"}))["ids"], "c1");
+        assert_eq!(normalize_args("ctx_brief", &json!({"paths": ["src/"]}))["focus"], json!(["src/"]));
+        assert_eq!(normalize_args("ctx_search", &json!({"query": "q", "max": 3}))["limit"], 3);
+        assert_eq!(normalize_args("ctx_search", &json!({"query": "q", "kind": "decision"}))["kinds"], "decision");
+        assert_eq!(normalize_args("ctx_log", &json!({"kinds": "learning,decision"}))["kind"], "learning");
+        assert_eq!(normalize_args("ctx_threads", &json!({"budget_tokens": 5000}))["budget_chars"], 20_000);
+        assert_eq!(normalize_args("ctx_read", &json!({"id": "kx:a"}))["uri"], "kx:a");
+    }
+
+    #[test]
+    fn threads_over_mcp_refuse_stdin_and_foreign_files() {
+        assert!(threads_spec_allowed("-", &[]).unwrap_err().to_string().contains("stdin"));
+        assert!(threads_spec_allowed("claude:4f1c2a9b", &[]).is_ok());
+        assert!(threads_spec_allowed("last", &[]).is_ok());
+        let foreign = std::env::temp_dir().join(format!("kontext-not-a-thread-{}.jsonl", std::process::id()));
+        std::fs::write(&foreign, "{}\n").unwrap();
+        assert!(threads_spec_allowed(foreign.to_str().unwrap(), &["/nonexistent-root".into()]).is_err());
+        let _ = std::fs::remove_file(foreign);
+    }
 }

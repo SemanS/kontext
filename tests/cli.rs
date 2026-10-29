@@ -463,7 +463,9 @@ fn mcp_session(repo: &Path, config: &Path) {
     // clients such as Codex decide approval by these hints
     for t in replies[&2]["result"]["tools"].as_array().unwrap() {
         let a = &t["annotations"];
-        assert!(a["readOnlyHint"].is_boolean() && a["destructiveHint"] != true, "{t}");
+        // ctx_verify runs a repository command: destructive and open-world by decision
+        let destructive = t["name"] == "ctx_verify";
+        assert!(a["readOnlyHint"].is_boolean() && (a["destructiveHint"] == true) == destructive, "{t}");
     }
     let brief_tool = replies[&2]["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "ctx_brief").unwrap();
     assert_eq!(brief_tool["annotations"]["readOnlyHint"], true);

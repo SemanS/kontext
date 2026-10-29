@@ -260,6 +260,16 @@ impl Repo {
         self.git_opt(&["rev-parse", "-q", "--verify", "HEAD"]).filter(|s| !s.is_empty())
     }
 
+    /// Size and mtime of this worktree's HEAD file: it changes on checkout (and on every commit
+    /// while HEAD is detached). A long-running server compares it per request and re-reads the
+    /// branch when it moved, so captures never carry the branch the server started on.
+    pub fn head_stamp(&self) -> String {
+        match std::fs::metadata(self.git_dir.join("HEAD")) {
+            Ok(m) => format!("{:?}:{}", m.modified().ok(), m.len()),
+            Err(_) => "-".into(),
+        }
+    }
+
     pub fn user_name(&self) -> Option<String> {
         self.git_opt(&["config", "user.name"]).filter(|s| !s.is_empty())
     }
@@ -509,6 +519,22 @@ mod tests {
         assert!(main.worktree_alive(&other.worktree_key), "a derived cache must not determine worktree ownership");
         main.git(&["worktree", "remove", sibling.to_str().unwrap()]).unwrap();
         assert!(!main.worktree_alive(&other.worktree_key));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn head_stamp_moves_with_a_checkout() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("kontext-head-stamp-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(Command::new("git").args(["init", "-q", "-b", "main"]).arg(&root).status().unwrap().success());
+        let repo = Repo::discover(&root).unwrap();
+        repo.git(&["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+        assert_eq!(repo.branch.as_deref(), Some("main"));
+        let before = repo.head_stamp();
+        repo.git(&["checkout", "-qb", "feature/a-longer-branch-name"]).unwrap();
+        assert_ne!(repo.head_stamp(), before);
+        assert_eq!(Repo::discover(&root).unwrap().branch.as_deref(), Some("feature/a-longer-branch-name"));
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -51,7 +51,7 @@ impl McpDriver {
     }
 
     fn client(&self, timeout: Duration) -> Result<Arc<McpClient>> {
-        let mut guard = self.client.lock().unwrap();
+        let mut guard = self.client.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(c) = guard.as_ref()
             && c.alive()
         {
@@ -279,11 +279,16 @@ impl Driver for HttpDriver {
             }
             other => bail!("adapter '{}': unsupported HTTP method {other}", self.name),
         };
-        let mut resp = resp.with_context(|| format!("adapter '{}': {method} {url}", self.name))?;
+        // errors reach agent-visible notes and the outbox: the URL loses its query and userinfo
+        let shown = strip_url_secrets(&url);
+        let mut resp = match resp {
+            Ok(r) => r,
+            Err(e) => bail!("adapter '{}': {method} {shown}: {}", self.name, strip_url_secrets(&e.to_string())),
+        };
         let status = resp.status().as_u16();
         let text = resp.body_mut().read_to_string().unwrap_or_default();
         if status >= 400 {
-            bail!("adapter '{}': HTTP {status} from {url}: {}", self.name, crate::util::truncate_chars(&text, 300));
+            bail!("adapter '{}': HTTP {status} from {shown}: {}", self.name, crate::util::truncate_chars(&strip_url_secrets(&text), 300));
         }
         Ok(parse_output(&text, op.format.as_deref()))
     }
@@ -296,12 +301,15 @@ pub struct CommandDriver {
     base_command: Option<Vec<String>>,
     cwd: PathBuf,
     env: BTreeMap<String, String>,
+    /// kontext's local state dir (`.git/kontext`): where output files are created
+    state_dir: PathBuf,
 }
 
 impl CommandDriver {
-    pub fn new(name: &str, cfg: &AdapterCfg, ctx: &Value, root: PathBuf) -> CommandDriver {
+    pub fn new(name: &str, cfg: &AdapterCfg, ctx: &Value, root: PathBuf, state_dir: PathBuf) -> CommandDriver {
         CommandDriver {
             name: name.to_string(),
+            state_dir,
             base_command: cfg.command.clone(),
             cwd: cfg.cwd.as_ref().map(|c| PathBuf::from(render_str(c, ctx))).unwrap_or(root),
             env: cfg.env.iter().map(|(k, v)| (k.clone(), render_str(v, ctx))).collect(),
@@ -311,15 +319,12 @@ impl CommandDriver {
 
 impl Driver for CommandDriver {
     fn call(&self, op: &OpCfg, role: &str, ctx: &Value, timeout: Duration) -> Result<Value> {
-        let tmp = std::env::temp_dir().join(format!(
-            "kontext-{}-{}-{}.out",
-            self.name,
-            std::process::id(),
-            crate::util::short_hash(&format!("{:?}", Instant::now()))
-        ));
+        // the output file lives in kontext's private state dir, is created here (never reused
+        // through a planted name) and is removed on every exit path, failures and timeouts included
+        let tmp = if op.output_file { Some(OutputFile::create(&self.state_dir, &self.name)?) } else { None };
         let mut ctx = ctx.clone();
-        if op.output_file {
-            ctx["output_file"] = Value::String(tmp.to_string_lossy().to_string());
+        if let Some(t) = &tmp {
+            ctx["output_file"] = Value::String(t.path.to_string_lossy().to_string());
         }
         let argv: Vec<String> = op
             .command
@@ -374,15 +379,79 @@ impl Driver for CommandDriver {
             let msg = if stderr.trim().is_empty() { stdout.clone() } else { stderr };
             bail!("adapter '{}': `{program}` exited with {status}: {}", self.name, crate::util::truncate_chars(msg.trim(), 400));
         }
-        let text = if op.output_file {
-            let t = std::fs::read_to_string(&tmp).unwrap_or(stdout);
-            let _ = std::fs::remove_file(&tmp);
-            t
-        } else {
-            stdout
+        let text = match &tmp {
+            Some(t) => std::fs::read_to_string(&t.path).ok().filter(|s| !s.trim().is_empty()).unwrap_or(stdout),
+            None => stdout,
         };
         Ok(parse_output(&text, op.format.as_deref()))
     }
+}
+
+/// A command adapter's output file: created with `create_new` (owner-only on Unix) in the state
+/// dir, removed when dropped.
+struct OutputFile {
+    path: PathBuf,
+}
+
+impl OutputFile {
+    fn create(state_dir: &std::path::Path, name: &str) -> Result<OutputFile> {
+        let dir = state_dir.join("tmp");
+        std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        for attempt in 0..8 {
+            let path = dir.join(format!(
+                "{}-{}-{}.out",
+                crate::util::slugify(name, 40),
+                std::process::id(),
+                crate::util::short_hash(&format!("{:?}{attempt}", Instant::now()))
+            ));
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            match opts.open(&path) {
+                Ok(_) => return Ok(OutputFile { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("cannot create {}", path.display())),
+            }
+        }
+        bail!("adapter '{name}': cannot create a fresh output file in {}", dir.display())
+    }
+}
+
+impl Drop for OutputFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// `scheme://user:pass@host/path?query#frag` → `scheme://host/path`: URLs in error text keep
+/// where they went, never what authenticated them (query keys, webhook tokens, userinfo).
+pub fn strip_url_secrets(text: &str) -> String {
+    // TODO(agent F): use crate::secrets::strip_url_secrets once it lands, then drop this copy.
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("://") {
+        out.push_str(&rest[..i + 3]);
+        let after = &rest[i + 3..];
+        let end = after.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | ')' | ']')).unwrap_or(after.len());
+        // punctuation closing the sentence is not part of the URL
+        let end = after[..end].trim_end_matches([':', ',', '.', ';']).len();
+        let url = &after[..end];
+        let url = url.split(['?', '#']).next().unwrap_or("");
+        let (authority, path) = match url.find('/') {
+            Some(p) => (&url[..p], &url[p..]),
+            None => (url, ""),
+        };
+        let host = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+        out.push_str(host);
+        out.push_str(path);
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Parse a textual answer: JSON (tolerating leading log lines), JSON lines, plain lines or text.
@@ -427,6 +496,36 @@ mod tests {
         assert_eq!(autobind(&why, &json!({"target": "src/a.rs"}), "history"), json!({"target": "src/a.rs"}));
         let odd = json!({"properties": {"needle": {"type": "string"}}, "required": ["needle"]});
         assert_eq!(autobind(&odd, &ctx, "search"), json!({"needle": "parser"}));
+    }
+
+    #[test]
+    fn error_urls_lose_query_and_userinfo() {
+        let e = "adapter 'leaky': HTTP 401 from http://127.0.0.1:18765/search?key=sk-SUPERSECRET123&q=zebra: unauthorized";
+        let s = strip_url_secrets(e);
+        assert_eq!(s, "adapter 'leaky': HTTP 401 from http://127.0.0.1:18765/search: unauthorized");
+        assert_eq!(
+            strip_url_secrets("POST https://bot:tok3n@hooks.example.com/T0/B1#x failed"),
+            "POST https://hooks.example.com/T0/B1 failed"
+        );
+        assert_eq!(strip_url_secrets("no url here"), "no url here");
+    }
+
+    #[test]
+    fn output_file_is_fresh_private_and_removed() {
+        let dir =
+            std::env::temp_dir().join(format!("kontext-outfile-{}-{:?}", std::process::id(), Instant::now()).replace([' ', ':'], "_"));
+        let path = {
+            let f = OutputFile::create(&dir, "codex llm").unwrap();
+            assert!(f.path.starts_with(dir.join("tmp")) && f.path.is_file());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(std::fs::metadata(&f.path).unwrap().permissions().mode() & 0o777, 0o600);
+            }
+            f.path.clone()
+        };
+        assert!(!path.exists(), "dropped output files are removed");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
