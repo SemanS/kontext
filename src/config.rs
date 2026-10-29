@@ -249,6 +249,13 @@ pub struct InitCfg {
     pub max_decision_tasks: usize,
     pub history_max_commits: usize,
     pub exclude: Vec<String>,
+    /// Extra decision words (`strong`, `rationale`, `contrast`) on top of English and the bundled
+    /// set of the detected language (sk, cs).
+    #[serde(default)]
+    pub decision_words: crate::signals::DecisionWordsCfg,
+    /// Commit authors never mined for decisions, on top of the built-in bots (substring, any case).
+    #[serde(default)]
+    pub bot_authors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

@@ -1,10 +1,11 @@
 //! Phase 5 — progressive, resumable deepening. Deterministic phases produce facts; semantic work
 //! (what a module is *for*, which commits encode decisions) is handed out as small tasks to whichever
 //! agent is connected (`ctx_init` / `ctx_init_submit`), or to an `llm` adapter in autopilot mode.
-//! Progress lives in the store itself (`deepened` markers, decision `commits`), so any clone or
-//! teammate can continue where the last one stopped.
+//! Progress lives in the store itself (`deepened` markers, decision `commits`, trailers and the
+//! union-merged `init-covered.log`), so any clone or teammate can continue where the last one stopped.
+use super::covered;
 use super::history::{Candidate, History};
-use super::render::{FACTS_START, replace_section};
+use super::render::{FACTS_PREFIX, replace_section};
 use super::scan::{Inventory, Module};
 use super::{InitState, load_cached, save_state};
 use crate::app::App;
@@ -90,6 +91,8 @@ pub struct Plan {
     pub pending: Vec<Task>,
     pub done: usize,
     pub total: usize,
+    /// Every task id the plan knows, done or not (what submit and skip accept).
+    pub known: Vec<String>,
 }
 
 fn module_by_doc<'a>(inv: &'a Inventory, e: &Entry) -> Option<&'a Module> {
@@ -103,9 +106,11 @@ pub fn plan(app: &App, inv: &Inventory, hist: &History, state: &InitState) -> Pl
     let mut refresh: Vec<Task> = Vec::new();
     let mut done = 0;
     let mut total = 0;
+    let mut known: Vec<String> = Vec::new();
 
     if let Some(ov) = entries.iter().find(|e| e.kind == "architecture" && e.id == "overview") {
         total += 1;
+        known.push("purpose".into());
         if ov.get_extra("deepened").is_some() || state.done.contains_key("purpose") {
             done += 1;
         } else {
@@ -141,6 +146,11 @@ pub fn plan(app: &App, inv: &Inventory, hist: &History, state: &InitState) -> Pl
     for (i, e) in mods.iter().enumerate() {
         let Some(m) = module_by_doc(inv, e) else { continue };
         total += 1;
+        let slug = m.id.trim_start_matches("mod-");
+        known.push(format!("mod:{slug}"));
+        known.push(format!("refresh:{slug}"));
+        // `kontext init skip mod:<slug>` leaves the doc undeepened, and the task done all the same
+        let skipped = state.done.contains_key(&format!("mod:{slug}"));
         let deepened = e.get_extra("deepened").is_some();
         let stale = deepened && e.get_extra("deepened_fingerprint").as_deref() != Some(m.fingerprint.as_str());
         let make = |kind: &str| Task {
@@ -151,9 +161,11 @@ pub fn plan(app: &App, inv: &Inventory, hist: &History, state: &InitState) -> Pl
             files: m.key_files.clone(),
             docs: m.docs.clone(),
             commits: Vec::new(),
-            facts: e.body.find(FACTS_START).map(|s| e.body[s..].to_string()).unwrap_or_default(),
+            facts: e.body.find(FACTS_PREFIX).map(|s| e.body[s..].to_string()).unwrap_or_default(),
         };
-        if !deepened {
+        if !deepened && skipped {
+            done += 1;
+        } else if !deepened {
             if i < 8 { first.push(make("module")) } else { later.push(make("module")) }
         } else if stale {
             done += 1;
@@ -163,17 +175,23 @@ pub fn plan(app: &App, inv: &Inventory, hist: &History, state: &InitState) -> Pl
         }
     }
 
-    let referenced: HashSet<String> =
-        entries.iter().flat_map(|e| e.commits.iter().map(|c| c.chars().take(7).collect::<String>())).collect();
+    // a commit is covered once a decision task distilled or skipped it (the committed log, so every
+    // clone agrees) or an entry cites it in `commits`
+    let covered = covered_commits(app, &entries);
     let mut dec_tasks = Vec::new();
+    known.extend(hist.clusters.iter().map(|c| c.id.clone()));
     for c in hist.clusters.iter().take(app.cfg().init.max_decision_tasks) {
         total += 1;
-        let all_referenced = c.commits.iter().all(|s| referenced.contains(&s.chars().take(7).collect::<String>()));
-        if state.done.contains_key(&c.id) || all_referenced {
+        let commits: Vec<Candidate> = c
+            .commits
+            .iter()
+            .filter_map(|s| hist.candidates.iter().find(|x| &x.short == s).cloned())
+            .filter(|x| !covered::contains(&covered, &x.sha))
+            .collect();
+        if state.done.contains_key(&c.id) || commits.is_empty() {
             done += 1;
             continue;
         }
-        let commits: Vec<Candidate> = c.commits.iter().filter_map(|s| hist.candidates.iter().find(|x| &x.short == s).cloned()).collect();
         dec_tasks.push(Task {
             id: c.id.clone(),
             kind: "decisions".into(),
@@ -189,7 +207,25 @@ pub fn plan(app: &App, inv: &Inventory, hist: &History, state: &InitState) -> Pl
     pending.extend(dec_tasks);
     pending.extend(later);
     pending.extend(refresh);
-    Plan { pending, done, total }
+    Plan { pending, done, total, known }
+}
+
+/// Commits decision tasks need not look at again: the covered log plus the `commits` entries cite
+/// (7-character prefixes).
+fn covered_commits(app: &App, entries: &[Entry]) -> HashSet<String> {
+    let mut set = covered::load(app);
+    set.extend(entries.iter().flat_map(|e| e.commits.iter().map(|c| c.trim().to_lowercase().chars().take(7).collect::<String>())));
+    set.retain(|s| s.len() >= 7);
+    set
+}
+
+/// Full shas of the commits a decision task covers.
+fn cluster_shas(hist: &History, id: &str) -> Vec<String> {
+    hist.clusters
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.commits.iter().filter_map(|s| hist.candidates.iter().find(|x| &x.short == s).map(|x| x.sha.clone())).collect())
+        .unwrap_or_default()
 }
 
 const SUMMARY_RULE: &str = "one line, at most 200 characters: what it is *for* (purpose, not a file list)";
@@ -237,7 +273,8 @@ pub fn render_task(app: &App, t: &Task, inline: bool, budget_chars: usize) -> St
                     let _ = writeln!(s, "  signals: {}", c.reasons.join("; "));
                 }
                 if !c.body.trim().is_empty() {
-                    let _ = writeln!(s, "  {}", util::truncate_chars(&util::one_line(&c.body), if inline { 900 } else { 400 }));
+                    let body = secrets::redact(&util::one_line(&c.body)).0;
+                    let _ = writeln!(s, "  {}", util::truncate_chars(&body, if inline { 900 } else { 400 }));
                 }
                 if !c.files.is_empty() {
                     let _ = writeln!(s, "  files: {}", c.files.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
@@ -257,8 +294,12 @@ pub fn render_task(app: &App, t: &Task, inline: bool, budget_chars: usize) -> St
         let mut paths: Vec<String> = t.docs.iter().filter(|d| !d.ends_with('/')).cloned().collect();
         paths.extend(t.files.iter().map(|(p, _)| p.clone()));
         for p in paths {
-            if used >= budget_chars || secrets::is_sensitive_path(&p) {
+            if used >= budget_chars {
                 break;
+            }
+            // a sensitive file is left out; the rest are still attached
+            if secrets::is_sensitive_path(&p) {
+                continue;
             }
             let Ok(text) = std::fs::read_to_string(app.repo.abs(&p)) else { continue };
             let room = (budget_chars - used).min(6000);
@@ -273,7 +314,7 @@ pub fn render_task(app: &App, t: &Task, inline: bool, budget_chars: usize) -> St
             }
             if let Ok(stat) = app.repo.git(&["show", "--stat", "--format=%B", &c.short]) {
                 let room = (budget_chars - used).min(2500);
-                let excerpt = util::truncate_chars(&stat, room);
+                let excerpt = secrets::redact(&util::truncate_chars(&stat, room)).0;
                 let _ = writeln!(attached, "\n----- git show --stat {} -----\n{excerpt}", c.short);
                 used += excerpt.len() + 40;
             }
@@ -289,14 +330,42 @@ fn clean(s: &str) -> String {
     secrets::redact(s.trim()).0
 }
 
+/// The date of the oldest of `shas` (YYYY-MM-DD).
 fn first_commit_date(app: &App, shas: &[String]) -> Option<String> {
-    let mut dates: Vec<String> = shas
-        .iter()
+    shas.iter()
         .filter_map(|s| app.repo.git_opt(&["show", "-s", "--format=%ad", "--date=short", s]))
-        .filter(|d| !d.is_empty())
-        .collect();
-    dates.sort();
-    dates.pop()
+        .map(|d| d.trim().to_string())
+        .filter(|d| parse_date(d).is_some())
+        .min()
+}
+
+/// A submitted date as YYYY-MM-DD, when it is one (`2024-03-05`, `2024-03-05T10:00:00Z`).
+fn parse_date(d: &str) -> Option<String> {
+    let head = d.trim().get(..10)?;
+    chrono::NaiveDate::parse_from_str(head, "%Y-%m-%d").ok().map(|x| x.format("%Y-%m-%d").to_string())
+}
+
+/// Submitted paths made repository-relative: the repository root and `./` are stripped; absolute
+/// paths, `..` and files that do not exist (globs excepted) are dropped.
+fn clean_paths(app: &App, paths: &[String]) -> Vec<String> {
+    let root = app.repo.root.to_string_lossy().to_string();
+    let mut out: Vec<String> = Vec::new();
+    for p in paths {
+        let mut p = p.trim().trim_start_matches("./").replace('\\', "/");
+        if let Some(rest) = p.strip_prefix(&format!("{}/", root.trim_end_matches('/'))) {
+            p = rest.to_string();
+        }
+        let glob = p.contains(['*', '?', '[']);
+        let body = p.trim_start_matches('!');
+        if body.is_empty() || body.starts_with('/') || body.split('/').any(|s| s == "..") || (!glob && !app.repo.abs(body).exists()) {
+            continue;
+        }
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out.truncate(8);
+    out
 }
 
 pub fn submit(app: &App, sub: Submission) -> Result<String> {
@@ -311,12 +380,25 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
             "`{id}` is being written by `kontext init --deepen` (pid {pid}); give your result as the JSON answer instead of calling ctx_init_submit"
         );
     }
+    // a typo must not record a phantom completion
+    let known = plan(app, &inv, &hist, &state).known;
+    if !known.contains(&id) {
+        let open: Vec<String> = plan(app, &inv, &hist, &state).pending.iter().take(5).map(|t| format!("`{}`", t.id)).collect();
+        bail!(
+            "unknown task id '{id}': not in the current init plan{}",
+            if open.is_empty() { " (nothing is pending)".to_string() } else { format!("; open tasks: {}", open.join(", ")) }
+        );
+    }
     let store = Store::new(&app.repo, app.cfg());
     let (entries, _) = store.load_all();
     let _lock = app.write_lock.lock().unwrap();
     let mut written: Vec<String> = Vec::new();
 
     if sub.skip {
+        // a skipped decision task covers its commits for everyone who pulls
+        if id.starts_with("dec:") {
+            covered::append(app, &cluster_shas(&hist, &id), &id)?;
+        }
         state.done.insert(
             id.clone(),
             format!("skipped {}{}", util::today(), sub.reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default()),
@@ -381,7 +463,7 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
             let body = decision_body(d);
             let commits: Vec<String> =
                 d.commits.iter().map(|c| c.trim().chars().take(12).collect()).filter(|c: &String| !c.is_empty()).collect();
-            let date = d.date.clone().filter(|x| x.len() >= 10).or_else(|| first_commit_date(app, &commits)).unwrap_or_else(util::today);
+            let date = d.date.as_deref().and_then(parse_date).or_else(|| first_commit_date(app, &commits)).unwrap_or_else(util::today);
             let mut e = Entry {
                 kind: "decision".into(),
                 title: clean(&d.title),
@@ -389,7 +471,7 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
                 date: Some(date.chars().take(10).collect()),
                 summary: d.summary.as_deref().map(clean).filter(|s| !s.is_empty()).map(|s| util::truncate_chars(&util::one_line(&s), 240)),
                 tags: d.tags.clone(),
-                paths: d.paths.clone(),
+                paths: clean_paths(app, &d.paths),
                 commits,
                 origin: Some("init".into()),
                 body,
@@ -399,6 +481,8 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
                 written.push(rel);
             }
         }
+        // every commit of the task is covered, also when it held no decision (an empty answer)
+        covered::append(app, &cluster_shas(&hist, &id), &id)?;
         state.done.insert(id.clone(), util::today());
     } else {
         bail!("unknown task id '{id}'");
@@ -413,7 +497,7 @@ pub fn submit(app: &App, sub: Submission) -> Result<String> {
             title: clean(&l.title),
             date: Some(util::today()),
             tags: l.tags.clone(),
-            paths: l.paths.clone(),
+            paths: clean_paths(app, &l.paths),
             origin: Some("init".into()),
             body: format!("{}\n", clean(&l.body)),
             ..Default::default()
@@ -653,6 +737,14 @@ mod tests {
         let t = "Sure! Here it is:\n```json\n{\"task_id\": \"x\", \"summary\": \"a {b}\"}\n```\nDone.";
         let v = extract_json_object(t).unwrap();
         assert_eq!(v["summary"], "a {b}");
+    }
+
+    #[test]
+    fn dates_parse_or_fall_back() {
+        assert_eq!(parse_date("2024-03-05").as_deref(), Some("2024-03-05"));
+        assert_eq!(parse_date("2024-03-05T10:00:00Z").as_deref(), Some("2024-03-05"));
+        assert_eq!(parse_date("around 2023"), None);
+        assert_eq!(parse_date("2024-13-45"), None);
     }
 
     #[test]

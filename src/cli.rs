@@ -680,6 +680,7 @@ fn run(cli: Cli) -> Result<i32> {
                     drop(app);
                     let opts = init::InitOpts {
                         hooks: !a.no_hooks,
+                        opt_out: a.no_hooks,
                         connect: a.connect,
                         deepen: a.deepen,
                         llm: a.llm,

@@ -6,6 +6,7 @@
 //!   4. wire     — git hooks (and, on request, agent client config)
 //!   5. deepen   — semantic summaries and decision records, one small task at a time, by the
 //!      connected agent (`ctx_init`) or an `llm` adapter (`--deepen`)
+pub mod covered;
 pub mod deepen;
 pub mod history;
 pub mod render;
@@ -76,7 +77,8 @@ pub fn save_state(app: &App, st: &InitState) -> Result<()> {
 /// trigger on its own; the result is an uncommitted `.ai/` diff for review.
 pub fn bootstrap(dir: &Path) -> Result<String> {
     let lines = std::sync::Mutex::new(Vec::new());
-    let opts = InitOpts { hooks: false, connect: Vec::new(), deepen: false, llm: None, jobs: 1, max_tasks: 0 };
+    // an agent's bootstrap neither installs hooks nor declines them for the clone
+    let opts = InitOpts { hooks: false, opt_out: false, connect: Vec::new(), deepen: false, llm: None, jobs: 1, max_tasks: 0 };
     run(dir, &opts, &|l| lines.lock().unwrap().push(l.to_string()))?;
     Ok(lines.into_inner().unwrap().join("\n"))
 }
@@ -87,23 +89,48 @@ pub fn compute(app: &App) -> Result<(Inventory, History, u64, u64)> {
     let mut inv = scan::scan(&app.repo, &cfg.exclude, cfg.min_module_files, cfg.task_max_files)?;
     let scan_ms = t0.elapsed().as_millis() as u64;
     let t1 = Instant::now();
-    let hist = history::mine(&app.repo, &inv.modules, cfg.history_max_commits, &knowledge_dirs(app))?;
+    let hist = history::mine(&app.repo, &inv.modules, &mine_opts(app, &inv))?;
     history::apply_churn(&mut inv.modules, &hist);
     scan::rank_modules(&mut inv.modules);
     let hist_ms = t1.elapsed().as_millis() as u64;
     Ok((inv, hist, scan_ms, hist_ms))
 }
 
-fn knowledge_dirs(app: &App) -> Vec<String> {
+fn knowledge_dirs(app: &App, inv: &Inventory) -> Vec<String> {
     let mut v: Vec<String> = app.cfg().kind_names().iter().map(|k| app.cfg().kind_path(k)).collect();
     v.push(app.cfg().store.dir.clone());
-    // an ADR directory detected before the shared config exists
+    // every ADR directory the scan found (a monorepo has several), and the usual ones before a scan
+    v.extend(inv.adr_dirs.iter().map(|a| a.path.clone()));
     for d in ["docs/adr", "docs/adrs", "docs/decisions", "adr", "doc/adr"] {
         if app.repo.abs(d).is_dir() {
             v.push(d.to_string());
         }
     }
+    v.sort();
+    v.dedup();
     v
+}
+
+/// What history mining needs from the config and the store.
+fn mine_opts(app: &App, inv: &Inventory) -> history::MineOpts {
+    let cfg = &app.cfg().init;
+    let (entries, _) = app.entries();
+    let mut trailer_keys = history::default_trailer_keys();
+    for k in app.cfg().kind_names() {
+        if let Some(t) = app.cfg().trailer_for(&k)
+            && !trailer_keys.contains(&t)
+        {
+            trailer_keys.push(t);
+        }
+    }
+    history::MineOpts {
+        max_commits: cfg.history_max_commits,
+        knowledge_dirs: knowledge_dirs(app, inv),
+        known_ids: entries.iter().map(|e| e.id.clone()).collect(),
+        trailer_keys,
+        bot_authors: cfg.bot_authors.clone(),
+        decision_words: cfg.decision_words.clone(),
+    }
 }
 
 fn save_cache(app: &App, inv: &Inventory, hist: &History) -> Result<()> {
@@ -151,12 +178,26 @@ fn scan_summary(inv: &Inventory) -> String {
 }
 
 fn history_summary(h: &History) -> String {
-    format!("{} commits · {} decision-shaped in {} areas", h.commits, h.candidates.len(), h.clusters.len())
+    let mut s = format!("{} commits · {} decision-shaped in {} areas", h.commits, h.candidates.len(), h.clusters.len());
+    if let Some(l) = &h.language {
+        s.push_str(&format!(" · {l} decision words"));
+    }
+    if h.cited > 0 {
+        s.push_str(&format!(" · {} already recorded (trailers)", h.cited));
+    }
+    if h.bot_commits > 0 {
+        s.push_str(&format!(" · {} bot commits skipped", h.bot_commits));
+    }
+    s
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct InitOpts {
+    /// Install the git hooks.
     pub hooks: bool,
+    /// An explicit `--no-hooks`: remember for the clone that hooks were declined. Only then;
+    /// an agent's bootstrap or an API `setup` without hooks leaves the choice open.
+    pub opt_out: bool,
     pub connect: Vec<String>,
     pub deepen: bool,
     pub llm: Option<String>,
@@ -177,7 +218,7 @@ pub fn run(dir: &Path, opts: &InitOpts, out: &dyn Fn(&str)) -> Result<()> {
     let scan_ms = t.elapsed().as_millis() as u64;
 
     let t = Instant::now();
-    let hist = history::mine(&app.repo, &inv.modules, cfg.history_max_commits, &knowledge_dirs(&app))?;
+    let hist = history::mine(&app.repo, &inv.modules, &mine_opts(&app, &inv))?;
     history::apply_churn(&mut inv.modules, &hist);
     scan::rank_modules(&mut inv.modules);
     out(&format!("[2/5] history  ✓ {} ({:.1}s)", history_summary(&hist), t.elapsed().as_secs_f32()));
@@ -192,7 +233,14 @@ pub fn run(dir: &Path, opts: &InitOpts, out: &dyn Fn(&str)) -> Result<()> {
     let app = App::open(dir)?;
     let rep = render::render_all(&app, &inv, &hist)?;
     let _ = &project;
-    let adr = inv.adr_dirs.first().map(|a| format!(" · decisions in {} ({} existing)", a.path, a.count)).unwrap_or_default();
+    let adopted = app.cfg().kind_path("decision");
+    let adr = inv
+        .adr_dirs
+        .iter()
+        .find(|a| a.path == adopted.trim_end_matches('/'))
+        .or(inv.adr_dirs.first())
+        .map(|a| format!(" · decisions in {} ({} existing)", a.path, a.count))
+        .unwrap_or_default();
     out(&format!(
         "[3/5] render   ✓ {}/architecture: overview{} + {} module docs ({} new, {} updated){adr}{} ({:.1}s)",
         store_dir,
@@ -203,6 +251,15 @@ pub fn run(dir: &Path, opts: &InitOpts, out: &dyn Fn(&str)) -> Result<()> {
         cfg_written.map(|p| format!(" · config {p}")).unwrap_or_default(),
         t.elapsed().as_secs_f32()
     ));
+    if inv.adr_dirs.len() > 1 {
+        let others: Vec<&str> = inv.adr_dirs.iter().map(|a| a.path.as_str()).filter(|p| *p != adopted.trim_end_matches('/')).collect();
+        out(&format!(
+            "      warning: {} ADR directories; new decisions go to `{}`. {} stay read-only history (commits there are not mined); list them under [store.kinds] to manage them too.",
+            inv.adr_dirs.len(),
+            adopted.trim_end_matches('/'),
+            others.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", ")
+        ));
+    }
 
     let mut st = load_state(&app);
     st.version = 1;
@@ -218,13 +275,16 @@ pub fn run(dir: &Path, opts: &InitOpts, out: &dyn Fn(&str)) -> Result<()> {
         },
     );
 
-    // wire — `--no-hooks` is remembered for the clone, so a later `init --deepen` (from any worktree)
-    // does not install hooks where someone chose not to have them (a client's repository, say)
+    // wire — an explicit `--no-hooks` is remembered for the clone, so a later `init --deepen` (from
+    // any worktree) does not install hooks where someone chose not to have them (a client's
+    // repository, say). A bootstrap without hooks (agent, API) decides nothing for the clone.
     let mut wired = Vec::new();
     let opted_out = crate::hooks::opted_out(&app.repo);
-    if !opts.hooks {
+    if opts.opt_out {
         crate::hooks::set_opted_out(&app.repo, true)?;
         wired.push("hooks skipped (--no-hooks; remembered for this clone)".into());
+    } else if !opts.hooks {
+        wired.push("hooks not installed (`kontext hooks install` or `kontext init` adds them)".into());
     } else if opted_out {
         wired.push("hooks skipped (this clone chose --no-hooks; `kontext hooks install` adds them)".into());
     } else {
