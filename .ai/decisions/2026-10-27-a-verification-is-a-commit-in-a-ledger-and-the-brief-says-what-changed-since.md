@@ -2,13 +2,14 @@
 id: 2026-10-27-a-verification-is-a-commit-in-a-ledger-and-the-brief-says-what-changed-since
 kind: decision
 title: A verification is a commit in a ledger, and the brief says what changed since; a date in the entry is only a cache
-status: accepted
+status: superseded
 date: 2026-10-27
 summary: Confirmations and executable checks are appended to .ai/confirmations.log (union-merged) with the commit they looked at and how they looked; entries carry an optional verify command; the brief and the machine API say for each governing entry how it was verified and how many commits touched its paths since. The checked date in the entry stays as a cache, never as the proof.
 tags: [freshness, drift, confirm, ledger, verify, brief]
 paths: [src/freshness.rs, src/drift.rs, src/api_write.rs, src/api_read.rs, src/ops.rs, src/store.rs, src/cli.rs, src/tools.rs, src/hooks.rs, docs/en/concepts/03-capture-and-review.md, docs/sk/concepts/03-capture-and-review.md]
 author: SemanS
 origin: agent
+superseded_by: [2026-10-29-verified-means-read-by-a-person-or-a-passed-verify-stamps]
 ---
 
 ## Context
