@@ -62,6 +62,26 @@ impl Inbox {
         self.dir.join(".promoted")
     }
 
+    /// Tombstones of candidates whose promotion landed in HEAD: `<id>` holds `promoted_to`, so a
+    /// retried capture still finds what became of it after cleanup.
+    fn landed_dir(&self) -> PathBuf {
+        self.dir.join(".landed")
+    }
+
+    /// Whether `id` was ever used by a candidate: pending, promoted, dismissed or landed.
+    pub fn id_used(&self, id: &str) -> bool {
+        let file = format!("{id}.md");
+        self.dir.join(&file).exists()
+            || self.promoted_dir().join(&file).exists()
+            || self.dir.join(".dismissed").join(&file).exists()
+            || self.landed_dir().join(id).exists()
+    }
+
+    /// The `promoted_to` path of a candidate whose promotion landed and was cleaned up.
+    pub fn landed(&self, id: &str) -> Option<String> {
+        std::fs::read_to_string(self.landed_dir().join(id)).ok().map(|s| s.trim().to_string())
+    }
+
     pub fn list(&self) -> Vec<Entry> {
         let mut v = read_dir_entries(&self.dir);
         v.sort_by_key(|e| std::cmp::Reverse(e.get_extra("captured")));
@@ -88,7 +108,8 @@ impl Inbox {
         let base = format!("{date}-{}", if slug.is_empty() { "note" } else { &slug });
         let mut id = base.clone();
         let mut n = 2;
-        while self.dir.join(format!("{id}.md")).exists() {
+        // a promoted or dismissed record keeps its id: a new candidate never overwrites that history
+        while self.id_used(&id) {
             id = format!("{base}-{n}");
             n += 1;
         }
@@ -139,19 +160,56 @@ impl Inbox {
         Ok(())
     }
 
-    /// Drop promoted candidates whose store file is now part of HEAD.
+    /// Mark a pending challenge as resolving: the retirement or replacement that answers it is
+    /// staged (`path` is the challenged entry's file). It stays listed until that change lands.
+    pub fn mark_resolving(&self, id: &str, path: &str) -> Result<()> {
+        let file = self.dir.join(format!("{id}.md"));
+        let text = std::fs::read_to_string(&file)?;
+        let mut e = Entry::parse(&format!("inbox/{id}.md"), &text, "learning");
+        e.set_extra("resolving", FmValue::Str(path.to_string()));
+        e.set_extra("resolving_at", FmValue::Str(util::now_iso()));
+        util::write_atomic(&file, &e.markdown())
+    }
+
+    /// Drop promoted candidates whose store file is now part of HEAD (a tombstone keeps where each
+    /// went), and resolving challenges whose resolution landed: the challenged entry's blob in HEAD
+    /// differs from the blob the challenge was raised against.
     pub fn cleanup_committed(&self, repo: &Repo) -> usize {
         let mut n = 0;
         for e in self.promoted() {
             if let Some(target) = e.get_extra("promoted_to")
                 && repo.git_status_ok(&["cat-file", "-e", &format!("HEAD:{target}")])
             {
+                let _ = std::fs::create_dir_all(self.landed_dir());
+                let _ = util::write_atomic(&self.landed_dir().join(&e.id), &format!("{target}\n"));
                 let _ = std::fs::remove_file(self.promoted_dir().join(format!("{}.md", e.id)));
+                n += 1;
+            }
+        }
+        for c in self.list().into_iter().filter(|c| c.kind == "challenge") {
+            let Some(path) = c.get_extra("resolving").filter(|p| !p.is_empty()) else { continue };
+            if challenge_landed(repo, &c, &path) {
+                let _ = std::fs::create_dir_all(self.landed_dir());
+                let _ = util::write_atomic(&self.landed_dir().join(&c.id), &format!("{path}\n"));
+                let _ = std::fs::remove_file(self.dir.join(format!("{}.md", c.id)));
                 n += 1;
             }
         }
         n
     }
+}
+
+/// Whether the change resolving challenge `c` is in HEAD: the challenged file's blob there is not
+/// the one the challenge was raised against (gone counts as changed). Without `against_blob` (an
+/// older challenge) the blob at `against_revision` stands in; without either, nothing landed.
+fn challenge_landed(repo: &Repo, c: &Entry, path: &str) -> bool {
+    let then = c.get_extra("against_blob").filter(|b| !b.is_empty()).or_else(|| {
+        let rev = c.get_extra("against_revision").filter(|r| !r.is_empty())?;
+        repo.git_opt(&["rev-parse", "--verify", "--quiet", &format!("{rev}:{path}")])
+    });
+    let Some(then) = then else { return false };
+    let now = repo.git_opt(&["rev-parse", "--verify", "--quiet", &format!("HEAD:{path}")]);
+    now.as_deref().map(str::trim) != Some(then.trim())
 }
 
 fn read_dir_entries(dir: &std::path::Path) -> Vec<Entry> {

@@ -540,6 +540,9 @@ pub struct CaptureReq {
     pub evidence: Vec<(String, Option<String>)>,
     /// The command that proved it (one line, run from the repository root by `kontext verify`).
     pub verify: Option<String>,
+    /// Entries this new one builds on (`extends`): resolved to full ids at capture, kept through
+    /// the inbox and promotion; an id the store does not have is `unknown_entry`.
+    pub extends: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -648,6 +651,11 @@ pub(crate) fn prepare_capture(app: &App, mut req: CaptureReq) -> Result<Prepared
     if let Some(src) = req.source.as_deref().filter(|s| !s.is_empty()) {
         entry.set_extra("source", crate::store::FmValue::Str(src.to_string()));
     }
+    let links: Vec<String> = req.extends.iter().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    if !links.is_empty() {
+        let (entries, _) = app.entries();
+        entry.set_extra("extends", crate::store::FmValue::List(crate::api_write::extends_links(&entries, &links)?));
+    }
     let masked: Vec<(String, Option<String>)> = req
         .evidence
         .iter()
@@ -678,18 +686,25 @@ pub fn capture(app: &App, req: CaptureReq) -> Result<CaptureOut> {
     if let Ok(related) = crate::related::related(app, &text, &entry.paths, &entry.supersedes, crate::related::Model::CachedOnly) {
         notes.extend(crate::related::render_notes(&related).into_iter().take(3));
     }
+    if req.promote {
+        // the one write path: through the inbox and `stage_candidate`, so a direct promotion gets
+        // the same guards, link checks and challenge resolution as `promote` (left unstaged)
+        entry.visibility = Some("team".into());
+        let saved = {
+            let _file = write_guard(app)?;
+            let _lock = app.write_lock.lock().unwrap();
+            Inbox::open(&app.repo).add(&app.repo, entry)?
+        };
+        let staged = crate::api_write::stage_candidate(app, &saved.id, false, &[])?;
+        notes.extend(staged.notes);
+        if !staged.resolved.is_empty() {
+            notes.push(format!("resolving challenge(s) {} with this replacement", staged.resolved.join(", ")));
+        }
+        return Ok(CaptureOut { id: staged.id, location: staged.path, promoted: true, visibility, redactions, notes });
+    }
     let _file = write_guard(app)?;
     let _lock = app.write_lock.lock().unwrap();
     let outbox = Outbox::open(&app.repo);
-    if req.promote {
-        entry.visibility = None;
-        let store = app.store();
-        let rel = store.write_new(&mut entry)?;
-        apply_supersedes(app, &entry, false)?;
-        outbox.push("promote", events::entry_payload(&app.repo, &entry, "team"))?;
-        kick_outbox(app);
-        return Ok(CaptureOut { id: entry.id.clone(), location: rel, promoted: true, visibility, redactions, notes });
-    }
     let saved = Inbox::open(&app.repo).add(&app.repo, entry)?;
     outbox.push("capture", events::entry_payload(&app.repo, &saved, &visibility))?;
     kick_outbox(app);
@@ -748,76 +763,40 @@ pub(crate) fn title_similarity(a: &str, b: &str) -> f32 {
     x.intersection(&y).count() as f32 / x.union(&y).count() as f32
 }
 
-fn apply_supersedes(app: &App, entry: &Entry, stage: bool) -> Result<Vec<String>> {
-    let mut touched = Vec::new();
-    if entry.supersedes.is_empty() {
-        return Ok(touched);
+/// An inbox candidate this worktree may promote: it exists, is ours, is team knowledge and is not a
+/// challenge. Checked for every id before anything is written.
+fn promotable(app: &App, inbox: &Inbox, id: &str) -> Result<Entry> {
+    let cand = inbox.get(id).ok_or_else(|| anyhow!("no inbox entry '{id}' (see `kontext inbox`)"))?;
+    if !Origin::of(&app.repo, &cand).is_ours() {
+        bail!("'{}' belongs to another active worktree{}", cand.id, Origin::of(&app.repo, &cand).note());
     }
-    let store = app.store();
-    let (entries, _) = store.load_all();
-    for s in &entry.supersedes {
-        match Store::find(&entries, s) {
-            Some(old) if old.id != entry.id => {
-                store.mark_superseded(old, &entry.id)?;
-                touched.push(old.rel_path.clone());
-            }
-            _ => eprintln!("kontext: supersedes '{s}': no such entry"),
-        }
+    if cand.visibility.as_deref() == Some("private") {
+        bail!("'{}' is private; recapture it with visibility=team if the team should see it", cand.id);
     }
-    if stage && !touched.is_empty() {
-        let mut args = vec!["add", "--"];
-        args.extend(touched.iter().map(String::as_str));
-        app.repo.git(&args)?;
+    if cand.kind == "challenge" {
+        bail!(
+            "'{}' is a challenge: it is resolved by retiring the entry (`ctx_prepare_commit` retire=[{}]) or by a replacement that supersedes it",
+            cand.id,
+            cand.get_extra("against").unwrap_or_default()
+        );
     }
-    Ok(touched)
+    Ok(cand)
 }
 
-/// Promote inbox candidates into the store (working tree), optionally staging them.
+/// Promote inbox candidates into the store, optionally staging them. Every id is checked first;
+/// each candidate then goes through [`crate::api_write::stage_candidate`], the path `drafts.stage`
+/// takes, so the written file and its guards are the same whichever client promotes.
 pub fn promote(app: &App, ids: &[String], stage: bool) -> Result<Vec<(String, String)>> {
     let inbox = Inbox::open(&app.repo);
-    let store = app.store();
-    let outbox = Outbox::open(&app.repo);
-    let _file = write_guard(app)?;
-    let _lock = app.write_lock.lock().unwrap();
+    let cands: Vec<Entry> = ids.iter().map(|id| promotable(app, &inbox, id)).collect::<Result<_>>()?;
     let mut done = Vec::new();
-    for id in ids {
-        let cand = inbox.get(id).ok_or_else(|| anyhow!("no inbox entry '{id}' (see `kontext inbox`)"))?;
-        if cand.visibility.as_deref() == Some("private") {
-            bail!("'{}' is private; recapture it with visibility=team if the team should see it", cand.id);
-        }
-        if cand.kind == "challenge" {
-            bail!(
-                "'{}' is a challenge: it is resolved by retiring the entry (`ctx_prepare_commit` retire=[{}]) or by a replacement that supersedes it",
-                cand.id,
-                cand.get_extra("against").unwrap_or_default()
-            );
-        }
-        let mut e = cand.clone();
-        e.extra.retain(|(k, _)| !matches!(k.as_str(), "captured" | "branch" | "worktree" | "source"));
-        e.visibility = None;
-        e.id.clear();
-        e.rel_path.clear();
+    for cand in cands {
         // a decision captured without paths governs the change it ships with (conventions are
         // usually repository-wide and keep none)
-        if stage && e.paths.is_empty() && e.kind != "convention" {
-            e.paths = change_paths(app);
-        }
-        let rel = store.write_new(&mut e)?;
-        let superseded = apply_supersedes(app, &e, stage)?;
-        inbox.mark_promoted(&cand.id, &rel)?;
-        for old in &e.supersedes {
-            if let Some(found) = Store::find(&store.load_all().0, old) {
-                crate::api_write::resolve_challenges(app, &found.id, &rel)?;
-            }
-        }
-        if stage {
-            app.repo.git(&["add", "--", &rel])?;
-        }
-        outbox.push("promote", events::entry_payload(&app.repo, &e, "team"))?;
-        let _ = superseded;
-        done.push((cand.id.clone(), rel));
+        let paths = if stage && cand.paths.is_empty() && cand.kind != "convention" { change_paths(app) } else { Vec::new() };
+        let staged = crate::api_write::stage_candidate(app, &cand.id, stage, &paths)?;
+        done.push((cand.id.clone(), staged.path));
     }
-    kick_outbox(app);
     Ok(done)
 }
 
@@ -2066,16 +2045,27 @@ pub fn no_knowledge_hint(app: &App) -> String {
 pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     let mut out = String::from("# Prepare commit\n");
     let inbox = Inbox::open(&app.repo);
-    for id in &req.drop {
-        match inbox.get(id) {
-            Some(e) => {
-                inbox.remove(&e.id)?;
-                let _ = writeln!(out, "- dropped inbox entry {}", e.id);
+    // every id is checked before anything changes: a bad one leaves the inbox and the index as they were
+    let drops: Vec<Entry> = req
+        .drop
+        .iter()
+        .map(|id| {
+            let e = inbox.get(id).ok_or_else(|| anyhow!("no inbox entry '{id}' to drop (see `kontext inbox`); nothing was changed"))?;
+            if !Origin::of(&app.repo, &e).is_ours() {
+                bail!("'{}' belongs to another active worktree; nothing was changed", e.id);
             }
-            None => {
-                let _ = writeln!(out, "- (no inbox entry '{id}' to drop)");
-            }
-        }
+            Ok(e)
+        })
+        .collect::<Result<_>>()?;
+    for id in &req.promote {
+        promotable(app, &inbox, id).map_err(|e| anyhow!("{e:#}; nothing was changed"))?;
+    }
+    for key in &req.retire {
+        challenge_for(app, &inbox, key).map_err(|e| anyhow!("{e:#}; nothing was changed"))?;
+    }
+    for e in &drops {
+        inbox.remove(&e.id)?;
+        let _ = writeln!(out, "- dropped inbox entry {}", e.id);
     }
     if !req.promote.is_empty() {
         for (id, rel) in promote(app, &req.promote, true)? {
@@ -2126,10 +2116,17 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     relevant.sort_by_key(|x| std::cmp::Reverse(x.1));
     if !relevant.is_empty() {
         let _ = writeln!(out, "\n## Recorded knowledge covering this change — confirm it still holds");
-        for (e, n) in relevant.iter().take(10) {
+        const COVERING: usize = 10;
+        for (e, n) in relevant.iter().take(COVERING) {
             let rule = e.rule_text(220);
-            let text = if rule.is_empty() { e.title.clone() } else { format!("{} — {rule}", e.title) };
+            // a proposed or otherwise unaccepted entry is not a rule yet: say so
+            let mark = e.status.as_deref().filter(|s| *s != "accepted").map(|s| format!(" ({s})")).unwrap_or_default();
+            let text = if rule.is_empty() { format!("{}{mark}", e.title) } else { format!("{}{mark} — {rule}", e.title) };
             let _ = writeln!(out, "- [{}] {text} ({n} file(s)) <kx:{}>", e.kind, e.id);
+        }
+        if relevant.len() > COVERING {
+            let more: Vec<String> = relevant[COVERING..].iter().map(|(e, _)| format!("[{}]", e.id)).collect();
+            let _ = writeln!(out, "- … {} more: {}", more.len(), more.join(" "));
         }
         let _ = writeln!(
             out,
@@ -2250,7 +2247,8 @@ pub fn prepare_commit(app: &App, req: &PrepareReq) -> Result<String> {
     Ok(out)
 }
 
-/// Challenges this worktree raised: resolved by review, through a retirement or a replacement.
+/// Challenges this worktree raised: resolved by review, through a retirement or a replacement. One
+/// whose resolution is staged stays listed as resolving until the change lands in HEAD.
 fn challenges_section(app: &App, inbox: &Inbox, entries: &[Entry]) -> String {
     let mut out = String::new();
     let challenges: Vec<Entry> = inbox.list().into_iter().filter(|c| c.kind == "challenge" && Origin::of(&app.repo, c).is_ours()).collect();
@@ -2259,17 +2257,25 @@ fn challenges_section(app: &App, inbox: &Inbox, entries: &[Entry]) -> String {
         for c in &challenges {
             let against = c.get_extra("against").unwrap_or_default();
             let target = entries.iter().find(|e| e.id == against);
-            let changed = match (target, c.get_extra("against_blob")) {
-                (Some(t), Some(blob)) => app.repo.git(&["hash-object", "--", &t.rel_path]).is_ok_and(|now| now.trim() != blob),
-                _ => false,
-            };
+            let resolving = c.get_extra("resolving").is_some_and(|p| !p.is_empty());
+            let changed = !resolving
+                && match (target, c.get_extra("against_blob")) {
+                    (Some(t), Some(blob)) => app.repo.git(&["hash-object", "--", &t.rel_path]).is_ok_and(|now| now.trim() != blob),
+                    _ => false,
+                };
             let _ = writeln!(
                 out,
                 "- `{}` against [{against}] {}: {}{}",
                 c.id,
                 target.map(|t| t.title.as_str()).unwrap_or("(entry no longer in the store)"),
                 c.summary_text(200),
-                if changed { " (the entry changed since it was challenged: check it still applies)" } else { "" }
+                if resolving {
+                    " (resolving: its retirement or replacement is staged; it leaves the inbox when that lands)"
+                } else if changed {
+                    " (the entry changed since it was challenged: check it still applies)"
+                } else {
+                    ""
+                }
             );
         }
         let _ = writeln!(
@@ -2280,19 +2286,30 @@ fn challenges_section(app: &App, inbox: &Inbox, entries: &[Entry]) -> String {
     out
 }
 
-/// Retire the entry a challenge of this worktree is against (`key` names the entry or the
-/// challenge), with the challenge as the reason; staged.
-fn retire_challenged(app: &App, key: &str) -> Result<(String, String)> {
-    let inbox = Inbox::open(&app.repo);
-    let ours: Vec<Entry> = inbox.list().into_iter().filter(|c| c.kind == "challenge" && Origin::of(&app.repo, c).is_ours()).collect();
+/// The challenge of this worktree that `key` names (the challenge or the entry it is against; one
+/// not yet resolving first) and the entry it is against.
+fn challenge_for(app: &App, inbox: &Inbox, key: &str) -> Result<(Entry, Entry)> {
+    let mut ours: Vec<Entry> = inbox.list().into_iter().filter(|c| c.kind == "challenge" && Origin::of(&app.repo, c).is_ours()).collect();
+    ours.sort_by_key(|c| c.get_extra("resolving").is_some_and(|p| !p.is_empty()));
     let (entries, _) = app.entries();
     let target_id = Store::find(&entries, key).map(|e| e.id.clone());
     let challenge = ours
-        .iter()
-        .find(|c| c.id == key || c.get_extra("against") == target_id)
+        .into_iter()
+        .find(|c| c.id == key || (target_id.is_some() && c.get_extra("against") == target_id))
         .ok_or_else(|| anyhow!("no challenge of this worktree against '{key}': challenge it first (`ctx_challenge`), or use `kontext api drafts.retire` with a reason"))?;
     let against = challenge.get_extra("against").unwrap_or_default();
-    let entry = Store::find(&entries, &against).ok_or_else(|| anyhow!("the challenged entry '{against}' is no longer in the store"))?;
+    let entry =
+        Store::find(&entries, &against).cloned().ok_or_else(|| anyhow!("the challenged entry '{against}' is no longer in the store"))?;
+    Ok((challenge, entry))
+}
+
+/// Retire the entry a challenge of this worktree is against (`key` names the entry or the
+/// challenge), with the challenge as the reason; staged. The write lock is held from the checks on.
+fn retire_challenged(app: &App, key: &str) -> Result<(String, String)> {
+    let _file = write_guard(app)?;
+    let _lock = app.write_lock.lock().unwrap();
+    let inbox = Inbox::open(&app.repo);
+    let (challenge, entry) = challenge_for(app, &inbox, key)?;
     if let Some(blob) = challenge.get_extra("against_blob")
         && app.repo.git(&["hash-object", "--", &entry.rel_path])?.trim() != blob
     {
@@ -2301,9 +2318,7 @@ fn retire_challenged(app: &App, key: &str) -> Result<(String, String)> {
     if !app.repo.git(&["status", "--porcelain=v1", "--", &entry.rel_path])?.trim().is_empty() {
         bail!("{} has local or staged changes; commit or revert them first", entry.rel_path);
     }
-    let _file = write_guard(app)?;
-    let _lock = app.write_lock.lock().unwrap();
-    let (_, after) = crate::api_write::plan_retire(app, entry, challenge.body.trim())?;
+    let (_, after) = crate::api_write::plan_retire(app, &entry, challenge.body.trim())?;
     util::write_atomic(&app.repo.abs(&entry.rel_path), &after)?;
     app.repo.git(&["add", "--", &entry.rel_path])?;
     crate::api_write::resolve_challenges(app, &entry.id, &entry.rel_path)?;
