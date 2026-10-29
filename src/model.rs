@@ -38,13 +38,32 @@ fn opening(s: &str) -> String {
     norm_text(s).chars().take(90).collect()
 }
 
+/// How much an inactive (superseded or deprecated) hit counts in the fusion: it stays in the
+/// results, marked, but below the active knowledge that replaced it.
+pub const INACTIVE_WEIGHT: f32 = 0.5;
+
+/// Whether a hit's status says it is no longer the team's rule.
+pub fn is_inactive(status: Option<&str>) -> bool {
+    let first = status.unwrap_or("").split([' ', '·']).next().unwrap_or("");
+    matches!(first, "superseded" | "deprecated" | "rejected")
+}
+
 /// Merge ranked lists from several sources with weighted reciprocal rank fusion: every source
 /// contributes by rank, so no source's score scale (BM25 here, cosine similarity there) crowds the
 /// others out, and a single source keeps its own order. Only proven copies are dropped: the same
-/// URI, an adapter copy of a local entry (a `sync`ed entry comes back as `…/<id>.md`) and a hit
-/// whose whole normalized text equals an earlier one. A hit that only opens like an earlier one is
+/// URI, an adapter copy of a local entry (a `sync`ed entry comes back as `…/<kind>/<id>.md`) and a
+/// hit whose whole normalized text equals an earlier one. A hit that only opens like an earlier one is
 /// kept and placed under it (`similar_to`), so the difference stays visible.
+#[allow(dead_code)] // the plain form, for callers without digests
 pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
+    merge_with(groups, limit, &HashMap::new())
+}
+
+/// `merge`, where `digests` maps a hit's URI to a digest of its whole text (the index stores one per
+/// document). Two hits that both carry a digest are copies only when the digests are equal; a hit
+/// without one (an adapter's) is compared by its title and snippet. Of two copies that differ in
+/// status, the active one is kept. Superseded and deprecated hits count `INACTIVE_WEIGHT`.
+pub fn merge_with(groups: Vec<HitGroup>, limit: usize, digests: &HashMap<String, String>) -> Vec<Hit> {
     // small k: the top of each list matters most
     const K: f32 = 8.0;
     let mut all = Vec::new();
@@ -53,15 +72,19 @@ pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
             if h.source.is_empty() {
                 h.source = g.source.clone();
             }
-            h.score = g.weight / (K + 1.0 + i as f32);
+            let demote = if is_inactive(h.status.as_deref()) { INACTIVE_WEIGHT } else { 1.0 };
+            h.score = g.weight * demote / (K + 1.0 + i as f32);
             all.push(h);
         }
     }
     // stable: on equal scores the earlier group (local) stays first
     all.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    let local_ids: HashSet<String> = all.iter().filter_map(|h| h.uri.strip_prefix("kx:")).map(str::to_string).collect();
+    let local_kinds: HashMap<String, Option<String>> =
+        all.iter().filter_map(|h| h.uri.strip_prefix("kx:").map(|id| (id.to_string(), h.kind.clone()))).collect();
     let mut seen_uri = HashSet::new();
-    let mut seen_text = HashSet::new();
+    // where each kept text sits in `grouped`, and whether it carried a digest
+    let mut seen_text: HashMap<String, ((usize, usize), bool)> = HashMap::new();
+    let mut seen_digest: HashMap<String, (usize, usize)> = HashMap::new();
     let mut openings: HashMap<String, usize> = HashMap::new();
     let mut grouped: Vec<Vec<Hit>> = Vec::new();
     let mut kept = 0;
@@ -72,24 +95,52 @@ pub fn merge(groups: Vec<HitGroup>, limit: usize) -> Vec<Hit> {
         if !h.uri.is_empty() && !seen_uri.insert(h.uri.clone()) {
             continue;
         }
-        if mirrored_id(&h.uri).is_some_and(|id| local_ids.contains(id)) {
+        if mirrored_id(&h.uri).is_some_and(|id| local_kinds.get(id).is_some_and(|kind| mirrors_kind(&h.uri, kind.as_deref()))) {
             continue;
         }
         let text = format!("{} {}", h.title, h.snippet);
         let full = norm_text(&text);
-        if !full.is_empty() && !seen_text.insert(full) {
+        let digest = digests.get(&h.uri).filter(|d| !d.is_empty()).cloned();
+        let copy_of = match &digest {
+            Some(d) => seen_digest.get(d).copied().or_else(|| seen_text.get(&full).filter(|(_, had)| !had).map(|(at, _)| *at)),
+            None => seen_text.get(&full).map(|(at, _)| *at),
+        };
+        if let Some((g, i)) = copy_of {
+            // copies of one text: the active one stands where the first copy stood
+            if is_inactive(grouped[g][i].status.as_deref()) && !is_inactive(h.status.as_deref()) {
+                let old_uri = grouped[g][i].uri.clone();
+                h.score = grouped[g][i].score;
+                h.similar_to = grouped[g][i].similar_to.take();
+                let new_uri = h.uri.clone();
+                grouped[g][i] = h;
+                if i == 0 {
+                    for other in grouped[g].iter_mut().skip(1) {
+                        if other.similar_to.as_deref() == Some(old_uri.as_str()) {
+                            other.similar_to = Some(new_uri.clone());
+                        }
+                    }
+                }
+            }
             continue;
         }
         let open = opening(&text);
-        match openings.get(&open).filter(|_| !open.is_empty()) {
+        let at = match openings.get(&open).filter(|_| !open.is_empty()) {
             Some(&g) => {
                 h.similar_to = Some(grouped[g][0].uri.clone());
                 grouped[g].push(h);
+                (g, grouped[g].len() - 1)
             }
             None => {
                 openings.insert(open, grouped.len());
                 grouped.push(vec![h]);
+                (grouped.len() - 1, 0)
             }
+        };
+        if !full.is_empty() {
+            seen_text.entry(full).or_insert((at, digest.is_some()));
+        }
+        if let Some(d) = digest {
+            seen_digest.entry(d).or_insert(at);
         }
         kept += 1;
     }
@@ -103,6 +154,17 @@ fn mirrored_id(uri: &str) -> Option<&str> {
     }
     let last = uri.trim_end_matches('/').rsplit('/').next()?;
     Some(last.strip_suffix(".md").unwrap_or(last)).filter(|s| !s.is_empty())
+}
+
+/// Whether an adapter URI sits in the directory of the local entry's kind (`…/decision/<id>.md`),
+/// as a synced copy does. A file that only shares the id's name (`…/memories/overview.md`) is not
+/// a copy; nor is anything when the local hit's kind is unknown.
+fn mirrors_kind(uri: &str, kind: Option<&str>) -> bool {
+    let Some(kind) = kind.filter(|k| !k.is_empty()) else { return false };
+    let mut segs = uri.trim_end_matches('/').rsplit('/');
+    segs.next();
+    let Some(dir) = segs.next() else { return false };
+    dir == kind || dir.strip_suffix('s') == Some(kind)
 }
 
 /// The part of `h`'s text after the words it shares with `head`, from the first word that differs.
@@ -254,16 +316,96 @@ mod tests {
 
     #[test]
     fn adapter_copies_of_local_entries_collapse() {
-        let local = HitGroup { source: "local".into(), weight: 1.0, hits: vec![hit("local", "kx:use-postgres", "Use Postgres", 3.0)] };
+        let mut local_hit = hit("local", "kx:use-postgres", "Use Postgres", 3.0);
+        local_hit.kind = Some("decision".into());
+        let mut overview = hit("local", "kx:overview", "Shop", 2.0);
+        overview.kind = Some("architecture".into());
+        let local = HitGroup { source: "local".into(), weight: 1.0, hits: vec![local_hit, overview] };
         let ov = HitGroup {
             source: "ov".into(),
             weight: 0.9,
             hits: vec![
                 hit("ov", "viking://user/u/peers/p/resources/kontext/decision/use-postgres.md", "viking copy", 0.9),
                 hit("ov", "viking://user/u/peers/p/memories/other.md", "other memory", 0.8),
+                // named like a local id, but not in its kind directory: an unrelated memory
+                hit("ov", "viking://user/u/peers/p/memories/overview.md", "team overview memory", 0.7),
             ],
         };
         let uris: Vec<String> = merge(vec![local, ov], 10).into_iter().map(|h| h.uri).collect();
-        assert_eq!(uris, vec!["kx:use-postgres".to_string(), "viking://user/u/peers/p/memories/other.md".to_string()]);
+        assert_eq!(
+            uris,
+            vec![
+                "kx:use-postgres".to_string(),
+                "kx:overview".to_string(),
+                "viking://user/u/peers/p/memories/other.md".to_string(),
+                "viking://user/u/peers/p/memories/overview.md".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn same_title_and_summary_with_different_bodies_both_stay() {
+        let mut a = hit("local", "kx:backoff", "Frobnicator retries use jittered backoff", 2.0);
+        a.snippet = "Frobnicator retries use jittered backoff".into();
+        let mut b = hit("local", "kx:backoff-2", "Frobnicator retries use jittered backoff", 1.0);
+        b.snippet = a.snippet.clone();
+        let digests: HashMap<String, String> =
+            [("kx:backoff".to_string(), "d1".to_string()), ("kx:backoff-2".to_string(), "d2".to_string())].into_iter().collect();
+        let m = merge_with(vec![HitGroup { source: "local".into(), weight: 1.0, hits: vec![a, b] }], 10, &digests);
+        let uris: Vec<&str> = m.iter().map(|h| h.uri.as_str()).collect();
+        assert_eq!(uris, vec!["kx:backoff", "kx:backoff-2"], "different whole texts are not copies");
+        assert_eq!(m[1].similar_to.as_deref(), Some("kx:backoff"), "shown under the first, never dropped");
+    }
+
+    #[test]
+    fn of_two_copies_the_active_one_stays() {
+        let mut old = hit("local", "kx:prices-old", "Prices are integer cents", 2.0);
+        old.snippet = "Store prices as integer cents.".into();
+        old.status = Some("superseded".into());
+        let mut new = hit("local", "kx:prices-new", "Prices are integer cents", 1.0);
+        new.snippet = old.snippet.clone();
+        new.status = Some("accepted".into());
+        let digests: HashMap<String, String> =
+            [("kx:prices-old".to_string(), "same".to_string()), ("kx:prices-new".to_string(), "same".to_string())].into_iter().collect();
+        // the superseded copy ranks first in its source and is demoted, but even at equal rank the copy kept is the active one
+        let m = merge_with(vec![HitGroup { source: "local".into(), weight: 1.0, hits: vec![old.clone(), new.clone()] }], 10, &digests);
+        assert_eq!(m.iter().map(|h| h.uri.as_str()).collect::<Vec<_>>(), vec!["kx:prices-new"]);
+        let m = merge_with(
+            vec![
+                HitGroup { source: "local".into(), weight: 1.0, hits: vec![old] },
+                HitGroup { source: "sub/".into(), weight: 0.1, hits: vec![new] },
+            ],
+            10,
+            &digests,
+        );
+        assert_eq!(
+            m.iter().map(|h| h.uri.as_str()).collect::<Vec<_>>(),
+            vec!["kx:prices-new"],
+            "the active copy replaces the inactive one"
+        );
+    }
+
+    #[test]
+    fn inactive_hits_are_demoted_never_hidden() {
+        let mut old = hit("local", "kx:old", "Old rule about caching", 9.0);
+        old.status = Some("superseded".into());
+        let mut dep = hit("local", "kx:dep", "Deprecated rule about caching pages", 8.0);
+        dep.status = Some("deprecated".into());
+        let mut new = hit("local", "kx:new", "New rule about cache lifetimes", 1.0);
+        new.status = Some("accepted".into());
+        let m = merge(vec![HitGroup { source: "local".into(), weight: 1.0, hits: vec![old, dep, new] }], 10);
+        let uris: Vec<&str> = m.iter().map(|h| h.uri.as_str()).collect();
+        assert_eq!(uris, vec!["kx:new", "kx:old", "kx:dep"]);
+        assert!(is_inactive(Some("superseded · review due")));
+        assert!(!is_inactive(Some("accepted")));
+        assert!(!is_inactive(None));
+    }
+
+    #[test]
+    fn mirror_needs_the_kind_directory() {
+        assert!(mirrors_kind("viking://r/kontext/decision/use-postgres.md", Some("decision")));
+        assert!(mirrors_kind("viking://r/kontext/decisions/use-postgres.md", Some("decision")));
+        assert!(!mirrors_kind("viking://r/memories/use-postgres.md", Some("decision")));
+        assert!(!mirrors_kind("viking://r/decision/use-postgres.md", None));
     }
 }
