@@ -268,8 +268,21 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
-    /// Trust the adapters declared in this repository's shared config (after reviewing them)
-    Trust,
+    /// Trust the adapters declared in this repository's shared config, or pin entries' verify commands (interactive terminal only)
+    Trust {
+        /// Pin entries' `verify` commands instead: lists every unpinned one and asks for each
+        #[arg(long)]
+        verify: bool,
+        /// With --verify: only this entry (kx:<id>, id or unique prefix)
+        #[arg(requires = "verify", conflicts_with = "all")]
+        id: Option<String>,
+        /// With --verify: pin every listed command after one confirmation
+        #[arg(long, requires = "verify")]
+        all: bool,
+        /// Skip the confirmation (still needs an interactive terminal)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Repository identity, config layers, store, index, inbox, init progress, adapters, hooks
     Status,
     /// Rebuild the local search index from scratch
@@ -939,7 +952,17 @@ fn run(cli: Cli) -> Result<i32> {
             let mut failed = 0;
             let mut results = Vec::new();
             for id in &ids {
-                match crate::api_write::verify(&app, &json!({"id": id, "because": because})) {
+                let req = json!({"id": id, "because": because});
+                let run_it = || crate::api_write::verify_with_transport(&app, &req, crate::api_write::Transport::Cli);
+                // an unpinned command: a person at a terminal sees it and decides; nothing else runs it
+                let result = match run_it() {
+                    Err(e) if api::error_code(&e) == Some("untrusted_verify") && interactive() => match pin_from_prompt(&app, &e)? {
+                        true => run_it(),
+                        false => Err(e),
+                    },
+                    other => other,
+                };
+                match result {
                     Ok(out) => {
                         if out["passed"] != json!(true) {
                             failed += 1;
@@ -957,6 +980,10 @@ fn run(cli: Cli) -> Result<i32> {
                                 },
                                 out["commit"].as_str().map(|c| &c[..c.len().min(8)]).unwrap_or("no commit")
                             );
+                            if let Some(dirty) = out["dirty_paths"].as_array().filter(|d| !d.is_empty()) {
+                                let dirty: Vec<&str> = dirty.iter().filter_map(Value::as_str).collect();
+                                println!("  ran on uncommitted changes to {} (noted in the ledger)", dirty.join(", "));
+                            }
                             if out["passed"] != json!(true) {
                                 let tail = out["output_tail"].as_str().unwrap_or("");
                                 let lines: Vec<&str> = tail.lines().collect();
@@ -1050,20 +1077,15 @@ fn run(cli: Cli) -> Result<i32> {
             let app = open(&dir)?;
             println!("{}", connect::connect(&app, &target, write)?);
         }
-        Cmd::Trust => {
-            let app = open(&dir)?;
-            match (&app.loaded.untrusted_adapters, &app.loaded.shared_path) {
-                (Some(hash), Some(path)) => {
-                    let text = std::fs::read_to_string(path)?;
-                    let t: toml::Table = text.parse()?;
-                    if let Some(a) = t.get("adapters") {
-                        println!("Adapters declared in {}:\n\n{}", path.display(), toml::to_string_pretty(a)?);
-                    }
-                    let p = config::trust(&app.repo, hash)?;
-                    println!("Trusted (recorded in {}). They run on this machine until the table changes.", p.display());
-                }
-                _ => println!("Nothing to trust: the shared config declares no untrusted adapters."),
+        Cmd::Trust { verify, id, all, yes } => {
+            if !interactive() {
+                eprintln!(
+                    "kontext: trust pins only from an interactive terminal (stdin and stderr): a person reviews what it pins. Run it yourself."
+                );
+                return Ok(1);
             }
+            let app = open(&dir)?;
+            return if verify { trust_verify_cmd(&app, id.as_deref(), all, yes) } else { trust_adapters_cmd(&app, yes) };
         }
         Cmd::Status => {
             let app = open(&dir)?;
@@ -1354,4 +1376,112 @@ fn status(app: &App) -> Result<()> {
         println!("warning   {w}");
     }
     Ok(())
+}
+
+/// A person can answer: stdin and stderr are both terminals. Not proof of a person, but an agent's
+/// tool call does not pass it by accident.
+fn interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Ask on stderr, read one line from stdin: only `y` or `yes` agrees.
+fn confirm(question: &str) -> bool {
+    use std::io::Write;
+    eprint!("{question} [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// `kontext trust`: show everything the pin covers (the shared adapters, vars and project name), then pin it.
+fn trust_adapters_cmd(app: &App, yes: bool) -> Result<i32> {
+    let (Some(hash), Some(path)) = (&app.loaded.untrusted_adapters, &app.loaded.shared_path) else {
+        println!("Nothing to trust: the shared config declares no untrusted adapters.");
+        return Ok(0);
+    };
+    let t: toml::Table = std::fs::read_to_string(path)?.parse()?;
+    println!("The pin covers these parts of {}:\n", path.display());
+    for key in ["adapters", "vars"] {
+        if let Some(v) = t.get(key) {
+            let mut one = toml::Table::new();
+            one.insert(key.into(), v.clone());
+            println!("{}", toml::to_string_pretty(&one)?);
+        }
+    }
+    if let Some(name) = t.get("project").and_then(|p| p.get("name")) {
+        println!("[project]\nname = {name}\n");
+    }
+    println!("{hash}");
+    if !yes && !confirm("Trust them? They may start processes and call URLs on this machine.") {
+        println!("Not trusted.");
+        return Ok(1);
+    }
+    let p = config::trust(&app.repo, hash)?;
+    println!("Trusted (recorded in {}). They run on this machine until any of the above changes.", p.display());
+    Ok(0)
+}
+
+fn print_verify_pin(p: &config::VerifyPin) {
+    println!("{}  ({})\n  verify: {}\n  sha256: {}", p.id, p.rel_path, p.command, config::verify_pin_hash(&p.rel_path, &p.command));
+}
+
+/// `kontext trust --verify [<id>|--all]`: list every unpinned verify command and pin the ones the person approves.
+fn trust_verify_cmd(app: &App, id: Option<&str>, all: bool, yes: bool) -> Result<i32> {
+    let list = crate::verification::unpinned(app, id);
+    if list.is_empty() {
+        println!(
+            "{}",
+            match id {
+                Some(id) => format!("Nothing to pin: {id} has no unpinned verify command on an active entry."),
+                None => "Nothing to pin: every active entry's verify command is pinned on this machine.".into(),
+            }
+        );
+        return Ok(0);
+    }
+    println!(
+        "Unpinned verify commands ({}). A pinned command runs with your user's rights through sh; the pin covers its text, not the code it runs:\n",
+        list.len()
+    );
+    let mut chosen = Vec::new();
+    if all || id.is_some() {
+        for p in &list {
+            print_verify_pin(p);
+        }
+        if yes || confirm(&format!("\nPin {}?", if list.len() == 1 { "it".to_string() } else { format!("all {}", list.len()) })) {
+            chosen = list;
+        }
+    } else {
+        for p in list {
+            print_verify_pin(&p);
+            if yes || confirm("Pin it?") {
+                chosen.push(p);
+            }
+            println!();
+        }
+    }
+    if chosen.is_empty() {
+        println!("Nothing pinned.");
+        return Ok(1);
+    }
+    let path = config::pin_verify(&app.repo, &chosen)?;
+    println!("Pinned {} command(s) in {}. Editing a command revokes its pin.", chosen.len(), path.display());
+    Ok(0)
+}
+
+/// `kontext verify` on a terminal, for an `untrusted_verify` refusal: show the command, ask, pin.
+fn pin_from_prompt(app: &App, err: &anyhow::Error) -> Result<bool> {
+    let details = api::error_details(err).cloned().unwrap_or_default();
+    let (Some(id), Some(command)) = (details["id"].as_str(), details["command"].as_str()) else { return Ok(false) };
+    let Some(p) = crate::verification::unpinned(app, Some(id)).into_iter().find(|p| p.command == command) else { return Ok(false) };
+    eprintln!("{id} has a verify command that is not pinned on this machine:");
+    eprintln!("  {}  ({})\n  verify: {command}", p.id, p.rel_path);
+    if !confirm("Run it, and pin it for next time?") {
+        return Ok(false);
+    }
+    let path = config::pin_verify(&app.repo, &[p])?;
+    eprintln!("Pinned in {}.", path.display());
+    Ok(true)
 }

@@ -45,6 +45,8 @@ pub fn capabilities() -> Vec<&'static str> {
 struct ApiError {
     code: String,
     message: String,
+    /// Extra fields merged into the error object (additive; `code` and `message` stay).
+    details: Option<Value>,
 }
 
 impl fmt::Display for ApiError {
@@ -60,12 +62,30 @@ pub fn error_code(err: &anyhow::Error) -> Option<&str> {
 }
 
 pub fn error(code: &str, message: impl Into<String>) -> anyhow::Error {
-    ApiError { code: code.into(), message: message.into() }.into()
+    ApiError { code: code.into(), message: message.into(), details: None }.into()
+}
+
+/// An [`error`] that also carries machine fields (an object) next to `code` and `message`.
+pub fn error_with(code: &str, message: impl Into<String>, details: Value) -> anyhow::Error {
+    ApiError { code: code.into(), message: message.into(), details: Some(details) }.into()
+}
+
+/// The machine fields of an error raised with [`error_with`], if it was.
+pub fn error_details(err: &anyhow::Error) -> Option<&Value> {
+    err.downcast_ref::<ApiError>().and_then(|e| e.details.as_ref())
 }
 
 pub fn failure(err: anyhow::Error) -> Value {
     let code = err.downcast_ref::<ApiError>().map(|e| e.code.as_str()).unwrap_or("operation_failed");
-    json!({"schema_version": 1, "ok": false, "error": {"code": code, "message": format!("{err:#}")}})
+    let mut error = json!({"code": code, "message": format!("{err:#}")});
+    if let Some(Value::Object(details)) = error_details(&err) {
+        for (k, v) in details {
+            if k != "code" && k != "message" {
+                error[k] = v.clone();
+            }
+        }
+    }
+    json!({"schema_version": 1, "ok": false, "error": error})
 }
 
 fn dispatch(app: &App, operation: &str, input: &Value) -> Result<Value> {

@@ -26,9 +26,9 @@ Order: challenged locally, past `review_by`, most commits on their paths since t
 For each candidate within the budget:
 
 1. Read it: `ctx_read kx:<id>` (level 1) or `kontext read kx:<id>`.
-2. Look at what it governs: `git log --oneline -- <its paths>` since its last look, and the code itself where the claim can be seen. If it carries a `verify` command, run `kontext verify <id>` instead of reading twice.
+2. Look at what it governs: `git log --oneline -- <its paths>` since its last look, and the code itself where the claim can be seen. If it carries a `verify` command, `ctx_verify` runs it only when a person pinned it on this machine. When it answers `untrusted_verify` or hands the command back, show the person the command and stop on that entry: a verify command is code from the repository. Never run `kontext trust` yourself; the person pins it at their terminal with `kontext trust --verify <id>`.
 3. Record one of:
-   - **Still holds** → `kontext confirm <id> --because "<what you saw>"` (`ctx_confirm`). Up to five per call; more is recorded as a bulk stamp, which reads weaker in the health view.
+   - **Still holds** → `ctx_confirm` with `because: "<what you saw>"`. Confirm only what you looked at.
    - **Wrong now, and you know the replacement** → `kontext capture --kind <kind> --title "…" --supersedes <id> --paths … --body …` (`ctx_capture` with `supersedes`), with the proof as `--verify` when a command shows it.
    - **Wrong now, replacement unknown** → `kontext challenge <id> "<why>"` (`ctx_challenge`). The brief marks it `challenged locally` until someone retires or supersedes it.
    - **Cannot tell** → leave it, say so in the report. A stamp you cannot stand behind is worse than none.
