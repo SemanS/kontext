@@ -1,0 +1,50 @@
+{
+  "description": "kontext: the brief on session start, the governing entries on edits, a guard on an agent's `kontext trust`",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "command -v kontext >/dev/null 2>&1 && kontext hook --host claude 2>/dev/null || true # kontext:managed",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Edit|Write|MultiEdit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "command -v kontext >/dev/null 2>&1 && kontext hook --host claude 2>/dev/null || true # kontext:managed",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "command -v kontext >/dev/null 2>&1 && kontext hook --host claude 2>/dev/null || true # kontext:managed",
+            "timeout": 15,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume|clear|compact"
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "command": "command -v kontext >/dev/null 2>&1 && kontext hook --host claude 2>/dev/null || true # kontext:managed",
+            "timeout": 15,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -238,10 +238,13 @@ enum Cmd {
         #[arg(long)]
         staged: bool,
     },
-    /// Git hook entry point (called by the installed hooks)
+    /// Hook entry point: git hooks by name, agent-host hooks with --host (JSON on stdin)
     Hook {
+        /// Agent-host hook: claude, codex or cursor (reads the host's hook JSON on stdin, prints its answer, exits 0)
+        #[arg(long)]
+        host: Option<String>,
         /// pre-commit, prepare-commit-msg, post-commit, post-merge or post-rewrite
-        name: String,
+        name: Option<String>,
         /// Arguments git passed to the hook
         args: Vec<String>,
     },
@@ -267,6 +270,12 @@ enum Cmd {
         /// Write the config (default: print what to add)
         #[arg(long)]
         write: bool,
+        /// Also install the agent-host hooks (claude, codex, cursor): the brief on session start, governing entries on edits
+        #[arg(long)]
+        hooks: bool,
+        /// Replace skills the team edited (skills)
+        #[arg(long)]
+        force: bool,
     },
     /// Trust the adapters declared in this repository's shared config (after reviewing them)
     Trust,
@@ -991,7 +1000,12 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(1);
             }
         }
-        Cmd::Hook { name, args } => {
+        Cmd::Hook { host, name, args } => {
+            if let Some(host) = host {
+                // an agent host's hook never fails the host: no answer and exit 0 on any error
+                return Ok(crate::hook::main(dir.clone(), &host));
+            }
+            let Some(name) = name else { bail!("give a git hook name, or --host claude|codex|cursor") };
             let app = match open(&dir) {
                 Ok(a) => a,
                 Err(e) => {
@@ -1047,9 +1061,9 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("\nAdd one with `kontext adapters add <preset>` (user scope) — or copy it into any config layer.");
             }
         },
-        Cmd::Connect { target, write } => {
+        Cmd::Connect { target, write, hooks, force } => {
             let app = open(&dir)?;
-            println!("{}", connect::connect(&app, &target, write)?);
+            println!("{}", connect::connect_with(&app, &target, connect::Opts { write, hooks, force })?);
         }
         Cmd::Trust => {
             let app = open(&dir)?;

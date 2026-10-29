@@ -86,6 +86,26 @@ fn remove_block(text: &str) -> Option<String> {
     Some(out)
 }
 
+/// A block whose end marker was edited away: its start line and the lines kontext writes after it
+/// go, the first line kontext would not have written stays.
+fn remove_partial_block(text: &str) -> Option<String> {
+    let s = text.find(START_PREFIX)?;
+    let s = text[..s].rfind('\n').map_or(0, |i| i + 1);
+    let mut e = s;
+    for (i, line) in text[s..].split_inclusive('\n').enumerate() {
+        let l = line.trim();
+        let ours = (i == 0 && l.starts_with(START_PREFIX))
+            || l.starts_with("k=$(command -v kontext")
+            || l.starts_with(r#"if [ -n "$k" ]; then"#)
+            || l == END;
+        if !ours {
+            break;
+        }
+        e += line.len();
+    }
+    Some(format!("{}{}", &text[..s], &text[e..]))
+}
+
 fn make_executable(p: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -136,7 +156,8 @@ pub fn install(app: &App, dir_override: Option<PathBuf>) -> Result<InstallReport
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 if text.contains(START_PREFIX) {
-                    let without = remove_block(&text).unwrap_or(text.clone());
+                    // a block without its end marker is repaired, not doubled
+                    let without = remove_block(&text).or_else(|| remove_partial_block(&text)).unwrap_or(text.clone());
                     let next = insert_block(&without, &blk);
                     if next != text {
                         std::fs::write(&path, next)?;
@@ -525,5 +546,19 @@ mod tests {
         let with = insert_block(husky, &block("pre-commit"));
         assert!(with.starts_with("# >>> kontext >>>") && with.ends_with("npx lint-staged\n"));
         assert!(is_shell("#!/usr/bin/env bash") && !is_shell("#!/usr/bin/env node") && is_shell("npx lint-staged"));
+    }
+
+    #[test]
+    fn a_partial_block_is_repaired_not_doubled() {
+        let original = "#!/bin/sh\nset -eu\nnpm run vault:check\n";
+        let full = insert_block(original, &block("pre-commit"));
+        // someone deleted the end marker by hand
+        let partial = full.replace(&format!("{END}\n"), "");
+        assert!(remove_block(&partial).is_none());
+        let repaired = remove_partial_block(&partial).unwrap();
+        assert_eq!(repaired, original);
+        let reinstalled = insert_block(&repaired, &block("pre-commit"));
+        assert_eq!(reinstalled.matches(START_PREFIX).count(), 1);
+        assert_eq!(reinstalled, full);
     }
 }
