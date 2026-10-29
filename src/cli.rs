@@ -1102,12 +1102,6 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(1);
             }
         }
-        Cmd::Hook { host, name, args } => {
-            if let Some(host) = host {
-                // an agent host's hook never fails the host: no answer and exit 0 on any error
-                return Ok(crate::hook::main(dir.clone(), &host));
-            }
-            let Some(name) = name else { bail!("give a git hook name, or --host claude|codex|cursor") };
         Cmd::Repair { dry_run } => {
             let app = open(&dir)?;
             let (edits, problems) = app.store().repair(dry_run)?;
@@ -1138,7 +1132,12 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(1);
             }
         }
-        Cmd::Hook { name, args } => {
+        Cmd::Hook { host, name, args } => {
+            if let Some(host) = host {
+                // an agent host's hook never fails the host: no answer and exit 0 on any error
+                return Ok(crate::hook::main(dir.clone(), &host));
+            }
+            let Some(name) = name else { bail!("give a git hook name, or --host claude|codex|cursor") };
             let app = match open(&dir) {
                 Ok(a) => a,
                 Err(e) => {

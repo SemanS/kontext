@@ -576,6 +576,8 @@ fn rename_emits_remove_and_add() {
     let list = r.kontext(&["outbox"]);
     assert!(list.contains(" remove rule attempts="), "{list}");
     assert!(list.contains(" sync rule attempts="), "{list}");
+}
+
 /// Trust pins and the verify runner: a cloned repository's commands and adapters run only after a
 /// person at a terminal pinned them, and the runner keeps secrets and time bounded.
 mod trust_and_verify {

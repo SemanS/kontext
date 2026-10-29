@@ -74,19 +74,18 @@ pub fn error_code(err: &anyhow::Error) -> Option<&str> {
 }
 
 pub fn error(code: &str, message: impl Into<String>) -> anyhow::Error {
-    ApiError { code: code.into(), message: message.into(), aliases: Vec::new() }.into()
+    ApiError { code: code.into(), message: message.into(), aliases: Vec::new(), details: None }.into()
 }
 
 /// An error under `code` that an older binary reported as `alias`: the failure lists the alias in
 /// `error.aliases`, so a client branching on the old code keeps working.
 pub fn error_with_alias(code: &str, alias: &str, message: impl Into<String>) -> anyhow::Error {
-    ApiError { code: code.into(), message: message.into(), aliases: vec![alias.into()] }.into()
-    ApiError { code: code.into(), message: message.into(), details: None }.into()
+    ApiError { code: code.into(), message: message.into(), aliases: vec![alias.into()], details: None }.into()
 }
 
 /// An [`error`] that also carries machine fields (an object) next to `code` and `message`.
 pub fn error_with(code: &str, message: impl Into<String>, details: Value) -> anyhow::Error {
-    ApiError { code: code.into(), message: message.into(), details: Some(details) }.into()
+    ApiError { code: code.into(), message: message.into(), aliases: Vec::new(), details: Some(details) }.into()
 }
 
 /// The machine fields of an error raised with [`error_with`], if it was.
@@ -99,6 +98,7 @@ pub fn failure(err: anyhow::Error) -> Value {
     let mut error = json!({"code": code, "message": format!("{err:#}")});
     if let Some(e) = err.downcast_ref::<ApiError>().filter(|e| !e.aliases.is_empty()) {
         error["aliases"] = json!(e.aliases);
+    }
     if let Some(Value::Object(details)) = error_details(&err) {
         for (k, v) in details {
             if k != "code" && k != "message" {
