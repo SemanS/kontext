@@ -57,6 +57,8 @@ struct ApiError {
     message: String,
     /// Older codes a client may still branch on for the same condition.
     aliases: Vec<String>,
+    /// Extra fields merged into the error object (additive; `code` and `message` stay).
+    details: Option<Value>,
 }
 
 impl fmt::Display for ApiError {
@@ -79,6 +81,17 @@ pub fn error(code: &str, message: impl Into<String>) -> anyhow::Error {
 /// `error.aliases`, so a client branching on the old code keeps working.
 pub fn error_with_alias(code: &str, alias: &str, message: impl Into<String>) -> anyhow::Error {
     ApiError { code: code.into(), message: message.into(), aliases: vec![alias.into()] }.into()
+    ApiError { code: code.into(), message: message.into(), details: None }.into()
+}
+
+/// An [`error`] that also carries machine fields (an object) next to `code` and `message`.
+pub fn error_with(code: &str, message: impl Into<String>, details: Value) -> anyhow::Error {
+    ApiError { code: code.into(), message: message.into(), details: Some(details) }.into()
+}
+
+/// The machine fields of an error raised with [`error_with`], if it was.
+pub fn error_details(err: &anyhow::Error) -> Option<&Value> {
+    err.downcast_ref::<ApiError>().and_then(|e| e.details.as_ref())
 }
 
 pub fn failure(err: anyhow::Error) -> Value {
@@ -86,6 +99,12 @@ pub fn failure(err: anyhow::Error) -> Value {
     let mut error = json!({"code": code, "message": format!("{err:#}")});
     if let Some(e) = err.downcast_ref::<ApiError>().filter(|e| !e.aliases.is_empty()) {
         error["aliases"] = json!(e.aliases);
+    if let Some(Value::Object(details)) = error_details(&err) {
+        for (k, v) in details {
+            if k != "code" && k != "message" {
+                error[k] = v.clone();
+            }
+        }
     }
     json!({"schema_version": 1, "ok": false, "error": error})
 }

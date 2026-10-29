@@ -576,4 +576,371 @@ fn rename_emits_remove_and_add() {
     let list = r.kontext(&["outbox"]);
     assert!(list.contains(" remove rule attempts="), "{list}");
     assert!(list.contains(" sync rule attempts="), "{list}");
+/// Trust pins and the verify runner: a cloned repository's commands and adapters run only after a
+/// person at a terminal pinned them, and the runner keeps secrets and time bounded.
+mod trust_and_verify {
+    use super::Repo;
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Output, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// A remote with credentials in it: gives the repository a known slug and tests that templates never see them.
+    fn remote() -> String {
+        format!("https://x-access-token:{}@example.invalid/acme/maint.git", "ghp_remotesecret123")
+    }
+    const SLUG: &str = "example.invalid-acme-maint";
+
+    fn repo() -> Repo {
+        let r = Repo::new();
+        r.git(&["remote", "add", "origin", remote().as_str()]);
+        r
+    }
+
+    fn sha256_hex(text: &str) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn trust_file(r: &Repo) -> std::path::PathBuf {
+        r.0.join(".git/user-config/trust.toml")
+    }
+
+    /// Pin a verify command the way `kontext trust --verify` records it.
+    fn pin(r: &Repo, id: &str, command: &str) {
+        let rel = format!(".ai/decisions/{id}.md");
+        let key = sha256_hex(&format!("{rel}\0{command}"));
+        let mut text = std::fs::read_to_string(trust_file(r)).unwrap_or_else(|_| "pin_version = 2\n".into());
+        text.push_str(&format!(
+            "\n[repos.\"{SLUG}\".verify.{key}]\nid = \"{id}\"\npath = \"{rel}\"\ncommand = {}\npinned_at = \"2026-10-29T00:00:00Z\"\n",
+            toml_str(command)
+        ));
+        r.write(".git/user-config/trust.toml", &text);
+    }
+
+    /// A TOML basic string (a JSON string is one).
+    fn toml_str(s: &str) -> String {
+        serde_json::to_string(s).unwrap()
+    }
+
+    fn yaml_str(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "''"))
+    }
+
+    fn entry_with(r: &Repo, id: &str, command: &str) {
+        r.decision(id, "Checked by a command", "accepted", &format!("verify: {}\n", yaml_str(command)));
+    }
+
+    fn kontext_raw(r: &Repo, args: &[&str]) -> Output {
+        r.cmd(env!("CARGO_BIN_EXE_kontext")).args(args).stdin(Stdio::null()).output().unwrap()
+    }
+
+    /// Run kontext under a pseudo-terminal (`script`), as a person at a terminal would.
+    fn kontext_tty(r: &Repo, args: &[&str]) -> Output {
+        let bin = env!("CARGO_BIN_EXE_kontext");
+        let mut c = r.cmd("script");
+        if cfg!(target_os = "macos") {
+            c.args(["-q", "/dev/null", bin]).args(args);
+        } else {
+            let line = std::iter::once(bin).chain(args.iter().copied()).map(|a| format!("'{a}'")).collect::<Vec<_>>().join(" ");
+            c.args(["-qec", &line, "/dev/null"]);
+        }
+        c.stdin(Stdio::null()).output().unwrap()
+    }
+
+    fn mcp_verify(r: &Repo, id: &str) -> Value {
+        let mut child = r
+            .cmd(env!("CARGO_BIN_EXE_kontext"))
+            .arg("mcp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ctx_verify","arguments":{"id":id}}});
+        for line in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#.to_string(),
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#.to_string(),
+            call.to_string(),
+        ] {
+            writeln!(stdin, "{line}").unwrap();
+        }
+        stdin.flush().unwrap();
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let mut reply = Value::Null;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            let v: Value = serde_json::from_str(&line).unwrap();
+            if v["id"] == 2 {
+                reply = v;
+                break;
+            }
+        }
+        drop(stdin);
+        let _ = child.wait();
+        reply
+    }
+
+    #[test]
+    fn verify_refuses_unpinned_command() {
+        let r = repo();
+        let command = "touch .git/pwned";
+        entry_with(&r, "2026-01-10-checked", command);
+        r.commit("seed");
+        let marker = r.0.join(".git/pwned");
+
+        // an agent over MCP gets the command back, nothing runs
+        let reply = mcp_verify(&r, "2026-01-10-checked");
+        assert!(reply.to_string().contains(command), "the command is shown: {reply}");
+        assert!(!marker.exists(), "ctx_verify ran an unpinned command");
+
+        // an application gets untrusted_verify with what a person needs to decide
+        let out = r.api("drafts.verify", json!({"id":"2026-01-10-checked"}));
+        assert_eq!(out["ok"], false, "{out}");
+        assert_eq!(out["error"]["code"], "untrusted_verify", "{out}");
+        assert_eq!(out["error"]["id"], "2026-01-10-checked");
+        assert_eq!(out["error"]["command"], command);
+        assert_eq!(out["error"]["command_sha256"], sha256_hex(&format!(".ai/decisions/2026-01-10-checked.md\0{command}")));
+        assert_eq!(out["error"]["hint"], "kontext trust --verify 2026-01-10-checked");
+        assert!(!marker.exists(), "drafts.verify ran an unpinned command");
+
+        // the terminal command without a terminal refuses too
+        let cli = kontext_raw(&r, &["verify", "2026-01-10-checked"]);
+        assert!(!cli.status.success());
+        let err = String::from_utf8_lossy(&cli.stderr);
+        assert!(err.contains("kontext trust --verify 2026-01-10-checked") && err.contains(command), "{err}");
+        assert!(!marker.exists(), "kontext verify ran an unpinned command");
+        assert!(!r.0.join(".ai/confirmations.log").exists(), "nothing was recorded");
+
+        // pinned by a person: it runs
+        pin(&r, "2026-01-10-checked", command);
+        let ran = r.ok("drafts.verify", json!({"id":"2026-01-10-checked"}));
+        assert_eq!((ran["ran"].clone(), ran["passed"].clone()), (json!(true), json!(true)), "{ran}");
+        assert!(marker.exists());
+        let trust = std::fs::read_to_string(trust_file(&r)).unwrap();
+        assert!(trust.contains("pin_version = 2"), "{trust}");
+    }
+
+    #[test]
+    fn verify_pin_revoked_when_command_changes() {
+        let r = repo();
+        entry_with(&r, "2026-01-10-checked", "touch .git/first");
+        r.commit("seed");
+        pin(&r, "2026-01-10-checked", "touch .git/first");
+        assert_eq!(r.ok("drafts.verify", json!({"id":"2026-01-10-checked"}))["passed"], true);
+        entry_with(&r, "2026-01-10-checked", "touch .git/second");
+        r.commit("change the command");
+        let out = r.api("drafts.verify", json!({"id":"2026-01-10-checked"}));
+        assert_eq!(out["error"]["code"], "untrusted_verify", "an edited command needs a new pin: {out}");
+        assert_eq!(out["error"]["command"], "touch .git/second");
+        assert!(!r.0.join(".git/second").exists());
+    }
+
+    #[test]
+    fn verify_scrubs_environment() {
+        let r = repo();
+        let command = r#"env | grep -c TOKEN; echo "pass=$KX_PASS""#;
+        entry_with(&r, "2026-01-10-env", command);
+        // a repository cannot widen what the command sees; the user can
+        r.write(".ai/kontext.toml", "[project]\nname = \"maint\"\n\n[verify]\npass_env = [\"GITHUB_TOKEN\"]\n");
+        r.write(".git/user-config/config.toml", "[verify]\npass_env = [\"KX_PASS\"]\n");
+        r.commit("seed");
+        pin(&r, "2026-01-10-env", command);
+        let o = r
+            .cmd(env!("CARGO_BIN_EXE_kontext"))
+            .args(["api", "drafts.verify", r#"{"id":"2026-01-10-env"}"#])
+            .env("GITHUB_TOKEN", "ghp_not_for_the_command")
+            .env("MY_TOKEN", "nope")
+            .env("KX_PASS", "yes")
+            .output()
+            .unwrap();
+        let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(v["result"]["output_tail"], "0\npass=yes\n", "{v}");
+    }
+
+    #[test]
+    fn verify_returns_when_background_child_holds_stdout() {
+        let r = repo();
+        let command = "(sleep 300 &); echo ok";
+        entry_with(&r, "2026-01-10-bg", command);
+        r.commit("seed");
+        pin(&r, "2026-01-10-bg", command);
+        let started = Instant::now();
+        let o = r
+            .cmd(env!("CARGO_BIN_EXE_kontext"))
+            .args(["api", "drafts.verify", r#"{"id":"2026-01-10-bg"}"#])
+            .env("KONTEXT_VERIFY_TIMEOUT_SECS", "5")
+            .output()
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(8), "held by the background child: {:?}", started.elapsed());
+        let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+        assert_eq!(v["result"]["passed"], true, "{v}");
+        assert!(v["result"]["output_tail"].as_str().unwrap().starts_with("ok\n"), "{v}");
+    }
+
+    #[test]
+    fn verify_output_tail_is_redacted() {
+        let r = repo();
+        let command = "echo token ghp_$(echo a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8)";
+        entry_with(&r, "2026-01-10-leaky", command);
+        r.commit("seed");
+        pin(&r, "2026-01-10-leaky", command);
+        let out = r.ok("drafts.verify", json!({"id":"2026-01-10-leaky"}));
+        let tail = out["output_tail"].as_str().unwrap();
+        assert!(tail.starts_with("token "), "{tail}");
+        assert!(!tail.contains("a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"), "{tail}");
+    }
+
+    #[test]
+    fn verify_on_dirty_governed_path_is_marked() {
+        let r = repo();
+        let command = "grep -q MAGIC src/lib.rs";
+        entry_with(&r, "2026-01-10-magic", command);
+        let head = r.commit("seed");
+        pin(&r, "2026-01-10-magic", command);
+        r.write("src/lib.rs", "pub fn f() {} // MAGIC\n");
+        let out = r.ok("drafts.verify", json!({"id":"2026-01-10-magic"}));
+        assert_eq!(out["passed"], true);
+        assert_eq!(out["commit"], head.as_str());
+        assert_eq!(out["dirty"], true, "{out}");
+        assert_eq!(out["dirty_paths"], json!(["src/lib.rs"]));
+        let ledger = r.read(".ai/confirmations.log");
+        assert!(ledger.contains("[dirty: src/lib.rs]"), "{ledger}");
+        // over MCP a dirty tree is the agent's to check: the command comes back, nothing is recorded
+        r.git(&["rm", "-q", "--cached", ".ai/confirmations.log"]);
+        std::fs::remove_file(r.0.join(".ai/confirmations.log")).unwrap();
+        let reply = mcp_verify(&r, "2026-01-10-magic");
+        assert!(reply.to_string().contains(command), "{reply}");
+        assert!(!r.0.join(".ai/confirmations.log").exists(), "ctx_verify ran on a dirty tree: {reply}");
+    }
+
+    const ADAPTER: &str = r#"[project]
+name = "maint"
+
+[adapters.shared]
+driver = "command"
+
+[adapters.shared.ops.search]
+command = ["sh", "-c", "echo WORD >> ROOT/.git/shared-ran"]
+format = "text"
+"#;
+
+    fn shared_adapter(r: &Repo, word: &str) {
+        r.write(".ai/kontext.toml", &ADAPTER.replace("ROOT", &r.0.to_string_lossy()).replace("WORD", word));
+    }
+
+    fn search(r: &Repo) {
+        let _ = kontext_raw(r, &["search", "zzqqx", "--adapters"]);
+    }
+
+    #[test]
+    fn trust_gate_skips_untrusted_and_revokes_on_edit() {
+        let r = repo();
+        let marker = r.0.join(".git/shared-ran");
+        shared_adapter(&r, "one");
+        r.commit("seed");
+        search(&r);
+        assert!(!marker.exists(), "an untrusted shared adapter ran");
+        let status = String::from_utf8_lossy(&kontext_raw(&r, &["status"]).stdout).to_string();
+        assert!(status.contains("not trusted yet") && status.contains("kontext trust"), "{status}");
+
+        let trusted = kontext_tty(&r, &["trust", "--yes"]);
+        let text = String::from_utf8_lossy(&trusted.stdout).to_string();
+        assert!(trusted.status.success(), "{text}");
+        assert!(text.contains("[adapters.shared") && text.contains("sha256:"), "it prints everything it pins: {text}");
+        let pins = std::fs::read_to_string(trust_file(&r)).unwrap();
+        assert!(pins.contains("adapters = \"sha256:") && pins.contains("pin_version = 2"), "{pins}");
+        search(&r);
+        assert!(marker.exists(), "a trusted adapter runs");
+
+        std::fs::remove_file(&marker).unwrap();
+        shared_adapter(&r, "two");
+        r.commit("edit the adapter");
+        search(&r);
+        assert!(!marker.exists(), "an edited adapter table needs a new trust");
+        // vars and the project name are part of the pin too
+        let table = r.read(".ai/kontext.toml");
+        kontext_tty(&r, &["trust", "--yes"]);
+        search(&r);
+        assert!(marker.exists());
+        std::fs::remove_file(&marker).unwrap();
+        r.write(".ai/kontext.toml", &format!("{table}\n[vars]\nendpoint = \"https://elsewhere.example\"\n"));
+        search(&r);
+        assert!(!marker.exists(), "new shared vars revoke the pin");
+    }
+
+    #[test]
+    fn legacy_fnv_pin_is_refused_with_warning() {
+        let r = repo();
+        let marker = r.0.join(".git/shared-ran");
+        shared_adapter(&r, "one");
+        r.commit("seed");
+        r.write(".git/user-config/trust.toml", &format!("[repos.\"{SLUG}\"]\nadapters = \"0123456789ab\"\n"));
+        search(&r);
+        assert!(!marker.exists(), "an old FNV pin no longer trusts anything");
+        let status = String::from_utf8_lossy(&kontext_raw(&r, &["status"]).stdout).to_string();
+        assert!(status.contains("old format") && status.contains("kontext trust"), "{status}");
+    }
+
+    const USER_ADAPTER: &str = r#"[vars]
+memory_url = "http://127.0.0.1:1933"
+
+[adapters.mine]
+driver = "command"
+
+[adapters.mine.ops.search]
+command = ["sh", "-c", "echo 'url={{vars.memory_url}} remote={{repo.remote}} project={{project.name}}' >> ROOT/.git/seen"]
+format = "text"
+"#;
+
+    fn seen_after_search(r: &Repo) -> String {
+        r.write(".git/user-config/config.toml", &USER_ADAPTER.replace("ROOT", &r.0.to_string_lossy()));
+        search(r);
+        std::fs::read_to_string(r.0.join(".git/seen")).unwrap_or_default()
+    }
+
+    #[test]
+    fn shared_vars_do_not_reach_user_adapter() {
+        let r = repo();
+        r.write(".ai/kontext.toml", "[project]\nname = \"../other-team\"\n\n[vars]\nmemory_url = \"https://attacker.example\"\n");
+        r.commit("seed");
+        let seen = seen_after_search(&r);
+        assert!(seen.contains("url=http://127.0.0.1:1933"), "{seen}");
+        assert!(!seen.contains("attacker.example"), "{seen}");
+        assert!(seen.contains("project=maint") && !seen.contains("other-team"), "{seen}");
+        let status = String::from_utf8_lossy(&kontext_raw(&r, &["status"]).stdout).to_string();
+        assert!(status.contains("not a slug"), "{status}");
+    }
+
+    #[test]
+    fn template_remote_url_has_no_userinfo() {
+        let r = repo();
+        r.commit("seed");
+        let seen = seen_after_search(&r);
+        assert!(seen.contains("remote=https://example.invalid/acme/maint.git"), "{seen}");
+        assert!(!seen.contains("ghp_remotesecret123") && !seen.contains("x-access-token"), "{seen}");
+    }
+
+    #[test]
+    fn trust_refuses_without_tty() {
+        let r = repo();
+        shared_adapter(&r, "one");
+        entry_with(&r, "2026-01-10-checked", "touch .git/pwned");
+        r.commit("seed");
+        for args in [&["trust"][..], &["trust", "--yes"], &["trust", "--verify", "--all", "--yes"]] {
+            let o = kontext_raw(&r, args);
+            assert!(!o.status.success(), "{args:?}");
+            assert!(String::from_utf8_lossy(&o.stderr).contains("interactive terminal"), "{args:?}");
+        }
+        assert!(!trust_file(&r).exists(), "nothing was pinned");
+        // a person at a terminal pins every listed command
+        let o = kontext_tty(&r, &["trust", "--verify", "--all", "--yes"]);
+        let text = String::from_utf8_lossy(&o.stdout).to_string();
+        assert!(o.status.success() && text.contains("touch .git/pwned"), "{text}");
+        assert_eq!(r.ok("drafts.verify", json!({"id":"2026-01-10-checked"}))["passed"], true);
+    }
 }

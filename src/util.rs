@@ -97,8 +97,32 @@ pub fn fnv1a64(bytes: &[u8]) -> u64 {
     h
 }
 
+/// A 48-bit FNV fingerprint: a key or a revision tag, never a trust pin ([`sha256_hex`] is).
 pub fn short_hash(s: &str) -> String {
     format!("{:012x}", fnv1a64(s.as_bytes()) & 0xffff_ffff_ffff)
+}
+
+/// SHA-256 of `bytes` as lowercase hex: the hash behind trust pins.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A slug: non-empty, lowercase ASCII letters, digits and `-`, at most 64 characters.
+pub fn is_slug(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// A remote URL without its userinfo (`https://user:token@host/x` becomes `https://host/x`). An
+/// scp-like `user@host:path` keeps its user: it carries no secret.
+pub fn strip_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else { return url.to_string() };
+    let rest = &url[scheme_end + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    match rest[..authority_end].rfind('@') {
+        Some(at) => format!("{}{}", &url[..scheme_end + 3], &rest[at + 1..]),
+        None => url.to_string(),
+    }
 }
 
 pub fn write_atomic(path: &Path, content: &str) -> Result<()> {
@@ -363,5 +387,15 @@ mod tests {
         assert_eq!(est_tokens("abcd"), 1);
         assert_eq!(est_tokens("abcde"), 2);
         assert_eq!(truncate_chars("abcdef", 4), "abc…");
+    }
+
+    #[test]
+    fn sha256_slug_and_userinfo() {
+        assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert!(is_slug("billing-api2") && !is_slug("../other-team") && !is_slug("Billing") && !is_slug(""));
+        assert_eq!(strip_userinfo(&format!("https://x-access-token:{}@github.com/o/r.git", "ghp_abc")), "https://github.com/o/r.git");
+        assert_eq!(strip_userinfo("https://github.com/o/r"), "https://github.com/o/r");
+        assert_eq!(strip_userinfo("ssh://me@host:22/r?a@b"), "ssh://host:22/r?a@b");
+        assert_eq!(strip_userinfo("git@github.com:o/r.git"), "git@github.com:o/r.git");
     }
 }

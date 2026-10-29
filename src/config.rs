@@ -6,6 +6,12 @@
 //!   3. user per repo    `~/.config/kontext/repos/<slug>.toml`    (trusted)
 //!   4. repo shared      `<root>/.kontext.toml` or `<root>/.ai/kontext.toml` (committed; adapters need `kontext trust`)
 //!   5. clone local      `<git-common-dir>/kontext/config.toml`  (never committed: trusted)
+//!
+//! The shared layer is untrusted input. Its `adapters` load only while `trust.toml` pins
+//! `sha256:<hex>` of its `adapters`, `vars` and `project.name` together (an old 12-hex FNV pin is
+//! refused with a warning, never upgraded); its `[vars]` never override a var a private layer
+//! (2, 3, 5) set for an adapter a private layer declares; its `project.name` must be a slug; and
+//! `[verify] pass_env` is read from the user layers (2, 3) only.
 use crate::repo::Repo;
 use crate::util;
 use anyhow::{Context, Result};
@@ -101,6 +107,7 @@ pub struct Config {
     pub hooks: HooksCfg,
     pub secrets: SecretsCfg,
     pub init: InitCfg,
+    pub verify: VerifyCfg,
     pub vars: BTreeMap<String, String>,
     pub adapters: BTreeMap<String, AdapterCfg>,
 }
@@ -238,6 +245,14 @@ pub struct SecretsCfg {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
+pub struct VerifyCfg {
+    /// Environment variables a `verify` command sees on top of PATH, HOME, USER, LANG, LC_*,
+    /// TMPDIR and TERM. Read from the user layers only; a repository's value is ignored.
+    pub pass_env: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
 pub struct InitCfg {
     pub max_module_docs: usize,
     pub min_module_files: usize,
@@ -370,7 +385,7 @@ pub struct LoadedConfig {
     pub cfg: Config,
     pub warnings: Vec<String>,
     pub shared_path: Option<PathBuf>,
-    /// Hash of the repo-shared adapters table when it is present but not trusted.
+    /// Trust hash (`sha256:<hex>`) of the shared layer when it declares adapters that are not trusted.
     pub untrusted_adapters: Option<String>,
     pub layers: Vec<PathBuf>,
 }
@@ -413,35 +428,170 @@ pub fn shared_config_candidates(repo: &Repo) -> Vec<PathBuf> {
     v
 }
 
-fn trust_path() -> PathBuf {
+// ---------------------------------------------------------------------------------------------
+// Trust pins. `trust.toml` lives in the user's config directory, never in a repository:
+//
+//   pin_version = 2
+//   [repos.<slug>]
+//   adapters = "sha256:<hex>"   # SHA-256 over the canonical TOML of the shared layer's
+//   trusted_at = "<iso>"        # `adapters`, `vars` and `project.name` together
+//   [repos.<slug>.verify.<sha256(entry rel path, NUL, command)>]
+//   id = "<entry id>"  path = "<entry rel path>"  command = "<command>"  pinned_at = "<iso>"
+//
+// Only a person at a terminal pins (`kontext trust`, `kontext trust --verify`, `kontext verify`
+// on a TTY); no MCP tool and no API operation writes this file. Against a process that can edit
+// it the gate is honour-based. A pin covers the text it hashes, not the scripts or the code that
+// text runs from the working tree.
+// ---------------------------------------------------------------------------------------------
+
+/// Format of the pins `trust.toml` holds; older files carry 12-hex FNV adapter pins, which are refused.
+pub const PIN_VERSION: i64 = 2;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_TRUST_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Point this test thread's trust pins at `dir` instead of the user's config directory.
+#[cfg(test)]
+pub fn set_test_trust_dir(dir: &Path) {
+    TEST_TRUST_DIR.with(|d| *d.borrow_mut() = Some(dir.to_path_buf()));
+}
+
+pub fn trust_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = TEST_TRUST_DIR.with(|d| d.borrow().clone()) {
+        return dir.join("trust.toml");
+    }
     config_home().join("trust.toml")
 }
 
-pub fn adapters_hash(table: &toml::Value) -> String {
-    util::short_hash(&toml::to_string(table).unwrap_or_default())
+fn read_trust() -> toml::Table {
+    std::fs::read_to_string(trust_path()).ok().and_then(|t| t.parse().ok()).unwrap_or_default()
+}
+
+fn repo_pins<'t>(root: &'t toml::Table, repo: &Repo) -> Option<&'t toml::Table> {
+    root.get("repos")?.get(&repo.slug)?.as_table()
+}
+
+/// Read-modify-write this repository's table in `trust.toml`, keeping every other key.
+fn update_repo_pins(repo: &Repo, f: impl FnOnce(&mut toml::Table)) -> Result<PathBuf> {
+    let path = trust_path();
+    let mut root = read_trust();
+    root.insert("pin_version".into(), toml::Value::Integer(PIN_VERSION));
+    let repos = root.entry("repos").or_insert_with(|| toml::Value::Table(Default::default()));
+    let repos = repos.as_table_mut().context("trust.toml: `repos` is not a table")?;
+    let entry = repos.entry(repo.slug.clone()).or_insert_with(|| toml::Value::Table(Default::default()));
+    let entry = entry.as_table_mut().context("trust.toml: the repository's pins are not a table")?;
+    f(entry);
+    util::write_atomic(&path, &toml::to_string_pretty(&root)?)?;
+    Ok(path)
+}
+
+/// The value with every table's keys sorted, so its TOML text does not depend on file order.
+fn canonical(v: &toml::Value) -> toml::Value {
+    match v {
+        toml::Value::Table(t) => {
+            let mut keys: Vec<&String> = t.keys().collect();
+            keys.sort();
+            toml::Value::Table(keys.into_iter().map(|k| (k.clone(), canonical(&t[k]))).collect())
+        }
+        toml::Value::Array(a) => toml::Value::Array(a.iter().map(canonical).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The trust pin of a shared config layer: `sha256:<hex>` over the canonical TOML of its
+/// `adapters`, `vars` and `project.name` together — everything shared that reaches an adapter.
+pub fn adapters_hash(layer: &toml::Table) -> String {
+    let mut t = toml::Table::new();
+    for key in ["adapters", "vars"] {
+        if let Some(v) = layer.get(key) {
+            t.insert(key.into(), v.clone());
+        }
+    }
+    if let Some(name) = layer.get("project").and_then(|p| p.get("name")) {
+        let mut p = toml::Table::new();
+        p.insert("name".into(), name.clone());
+        t.insert("project".into(), toml::Value::Table(p));
+    }
+    let text = toml::to_string(&canonical(&toml::Value::Table(t))).unwrap_or_default();
+    format!("sha256:{}", util::sha256_hex(text.as_bytes()))
+}
+
+/// What `trust.toml` holds for a repository's shared adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pin {
+    /// Pinned to this exact hash.
+    Trusted,
+    /// A 12-hex FNV pin from before pin_version 2: refused, never upgraded silently.
+    Legacy,
+    /// No pin, or a pin of another table.
+    Untrusted,
+}
+
+pub fn adapters_pin(repo: &Repo, hash: &str) -> Pin {
+    let root = read_trust();
+    match repo_pins(&root, repo).and_then(|r| r.get("adapters")).and_then(|h| h.as_str()) {
+        Some(h) if h == hash && h.starts_with("sha256:") => Pin::Trusted,
+        Some(h) if h.len() == 12 && h.bytes().all(|b| b.is_ascii_hexdigit()) => Pin::Legacy,
+        _ => Pin::Untrusted,
+    }
 }
 
 pub fn is_trusted(repo: &Repo, hash: &str) -> bool {
     if std::env::var("KONTEXT_TRUST_REPO_ADAPTERS").is_ok_and(|v| v == "1") {
         return true;
     }
-    let Ok(text) = std::fs::read_to_string(trust_path()) else { return false };
-    let Ok(v) = text.parse::<toml::Table>() else { return false };
-    v.get("repos").and_then(|r| r.get(&repo.slug)).and_then(|r| r.get("adapters")).and_then(|h| h.as_str()).is_some_and(|h| h == hash)
+    adapters_pin(repo, hash) == Pin::Trusted
 }
 
+/// Pin the shared adapters (with the vars and project name the hash covers). The caller has
+/// shown the person what it pins.
 pub fn trust(repo: &Repo, hash: &str) -> Result<PathBuf> {
-    let path = trust_path();
-    let mut root: toml::Table = std::fs::read_to_string(&path).ok().and_then(|t| t.parse().ok()).unwrap_or_default();
-    let repos = root.entry("repos").or_insert_with(|| toml::Value::Table(Default::default()));
-    if let Some(t) = repos.as_table_mut() {
-        let mut entry = toml::Table::new();
+    update_repo_pins(repo, |entry| {
         entry.insert("adapters".into(), toml::Value::String(hash.to_string()));
         entry.insert("trusted_at".into(), toml::Value::String(util::now_iso()));
-        t.insert(repo.slug.clone(), toml::Value::Table(entry));
-    }
-    util::write_atomic(&path, &toml::to_string_pretty(&root)?)?;
-    Ok(path)
+    })
+}
+
+/// The key of a verify pin: SHA-256 over the entry's repository-relative path, NUL, the command.
+/// Editing the command, or moving the entry, revokes its pin.
+pub fn verify_pin_hash(rel_path: &str, command: &str) -> String {
+    util::sha256_hex(format!("{rel_path}\0{command}").as_bytes())
+}
+
+pub fn is_verify_pinned(repo: &Repo, rel_path: &str, command: &str) -> bool {
+    let root = read_trust();
+    let key = verify_pin_hash(rel_path, command);
+    repo_pins(&root, repo).and_then(|r| r.get("verify")).and_then(|v| v.get(&key)).is_some()
+}
+
+/// An entry's verify command a person approved.
+#[derive(Debug, Clone)]
+pub struct VerifyPin {
+    pub id: String,
+    pub rel_path: String,
+    pub command: String,
+}
+
+/// Record verify pins. Only terminal commands call this, after showing each command.
+pub fn pin_verify(repo: &Repo, pins: &[VerifyPin]) -> Result<PathBuf> {
+    update_repo_pins(repo, |entry| {
+        let verify = entry.entry("verify").or_insert_with(|| toml::Value::Table(Default::default()));
+        if !verify.is_table() {
+            *verify = toml::Value::Table(Default::default());
+        }
+        let verify = verify.as_table_mut().expect("a table");
+        for p in pins {
+            let mut t = toml::Table::new();
+            t.insert("id".into(), toml::Value::String(p.id.clone()));
+            t.insert("path".into(), toml::Value::String(p.rel_path.clone()));
+            t.insert("command".into(), toml::Value::String(p.command.clone()));
+            t.insert("pinned_at".into(), toml::Value::String(util::now_iso()));
+            verify.insert(verify_pin_hash(&p.rel_path, &p.command), toml::Value::Table(t));
+        }
+    })
 }
 
 fn read_layer(path: &Path) -> Result<Option<toml::Table>> {
@@ -466,42 +616,110 @@ pub fn deep_merge(base: &mut toml::Table, over: toml::Table) {
     }
 }
 
+/// What the private layers (user global, user per repo, clone local) declare that the shared
+/// layer must not change: their `[vars]` and the names of their adapters.
+#[derive(Default)]
+struct Private {
+    vars: BTreeMap<String, String>,
+    adapters: std::collections::BTreeSet<String>,
+    /// `[verify] pass_env` from the user layers only.
+    pass_env: Option<Vec<String>>,
+}
+
+impl Private {
+    fn note(&mut self, t: &toml::Table, user: bool) {
+        if let Some(vars) = t.get("vars").and_then(|v| v.as_table()) {
+            for (k, v) in vars {
+                if let Some(s) = v.as_str() {
+                    self.vars.insert(k.clone(), s.to_string());
+                }
+            }
+        }
+        if let Some(adapters) = t.get("adapters").and_then(|v| v.as_table()) {
+            self.adapters.extend(adapters.keys().cloned());
+        }
+        if user && let Some(list) = t.get("verify").and_then(|v| v.get("pass_env")).and_then(|v| v.as_array()) {
+            self.pass_env = Some(list.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+        }
+    }
+}
+
+/// Check the shared layer before it is merged: drop untrusted adapters (with a warning naming
+/// `kontext trust`) and replace a `project.name` that is not a slug. Returns the untrusted hash.
+fn gate_shared(repo: &Repo, path: &Path, t: &mut toml::Table, warnings: &mut Vec<String>) -> Option<String> {
+    let mut untrusted = None;
+    if t.contains_key("adapters") {
+        let h = adapters_hash(t);
+        let pin = if is_trusted(repo, &h) { Pin::Trusted } else { adapters_pin(repo, &h) };
+        if pin != Pin::Trusted {
+            t.remove("adapters");
+            warnings.push(match pin {
+                Pin::Legacy => format!(
+                    "adapters in {} were skipped: their trust pin is in the old format and no longer counts — review them, then run `kontext trust`",
+                    path.display()
+                ),
+                _ => format!("adapters in {} are not trusted yet and were skipped — review them, then run `kontext trust`", path.display()),
+            });
+            untrusted = Some(h);
+        }
+    }
+    let bad_name = t.get("project").and_then(|p| p.get("name")).and_then(|n| n.as_str()).filter(|n| !util::is_slug(n)).map(String::from);
+    if let Some(name) = bad_name {
+        let mut slug = util::slugify(&repo.name, 64);
+        if slug.is_empty() {
+            slug = "project".into();
+        }
+        warnings.push(format!("project.name {name:?} in {} is not a slug (lowercase a-z, 0-9, -): using {slug:?}", path.display()));
+        if let Some(p) = t.get_mut("project").and_then(|p| p.as_table_mut()) {
+            p.insert("name".into(), toml::Value::String(slug));
+        }
+    }
+    untrusted
+}
+
 pub fn load(repo: &Repo) -> Result<LoadedConfig> {
     let mut merged: toml::Table = DEFAULTS.parse().expect("built-in defaults parse");
     let mut warnings = Vec::new();
     let mut layers = Vec::new();
     let mut untrusted = None;
+    let mut private = Private::default();
 
-    let mut apply = |path: PathBuf, merged: &mut toml::Table, shared: bool, warnings: &mut Vec<String>| -> Result<bool> {
+    let mut apply = |path: PathBuf, merged: &mut toml::Table, shared: bool, user: bool, warnings: &mut Vec<String>| -> Result<bool> {
         let Some(mut t) = read_layer(&path)? else { return Ok(false) };
-        if shared && let Some(adapters) = t.get("adapters") {
-            let h = adapters_hash(adapters);
-            if !is_trusted(repo, &h) {
-                t.remove("adapters");
-                warnings.push(format!(
-                    "adapters in {} are not trusted yet and were skipped — review them, then run `kontext trust`",
-                    path.display()
-                ));
+        if shared {
+            if let Some(h) = gate_shared(repo, &path, &mut t, warnings) {
                 untrusted = Some(h);
             }
+        } else {
+            private.note(&t, user);
         }
         deep_merge(merged, t);
         layers.push(path);
         Ok(true)
     };
 
-    apply(user_config_path(), &mut merged, false, &mut warnings)?;
-    apply(user_repo_config_path(repo), &mut merged, false, &mut warnings)?;
+    apply(user_config_path(), &mut merged, false, true, &mut warnings)?;
+    apply(user_repo_config_path(repo), &mut merged, false, true, &mut warnings)?;
     let mut shared_path = None;
     for cand in shared_config_candidates(repo) {
-        if apply(cand.clone(), &mut merged, true, &mut warnings)? {
+        if apply(cand.clone(), &mut merged, true, false, &mut warnings)? {
             shared_path = Some(cand);
             break;
         }
     }
-    apply(local_config_path(repo), &mut merged, false, &mut warnings)?;
+    apply(local_config_path(repo), &mut merged, false, false, &mut warnings)?;
 
-    let cfg: Config = toml::Value::Table(merged).try_into().context("configuration does not match the expected schema")?;
+    let mut cfg: Config = toml::Value::Table(merged).try_into().context("configuration does not match the expected schema")?;
+    // shared [vars] never override what a private layer set, for the adapters a private layer declares
+    for name in &private.adapters {
+        if let Some(a) = cfg.adapters.get_mut(name) {
+            for (k, v) in &private.vars {
+                a.vars.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+    }
+    // the environment a verify command sees is the user's choice, never the repository's
+    cfg.verify.pass_env = private.pass_env.unwrap_or_default();
     Ok(LoadedConfig { cfg, warnings, shared_path, untrusted_adapters: untrusted, layers })
 }
 
@@ -566,6 +784,29 @@ mod tests {
         assert_eq!(cfg.trailer_for("decision").as_deref(), Some("Decision"));
         assert_eq!(cfg.brief.budget_tokens, 1400);
         assert_eq!(cfg.freshness.threshold_commits, 20);
+    }
+
+    #[test]
+    fn the_trust_hash_covers_adapters_vars_and_project_name_in_any_order() {
+        let layer = |text: &str| -> toml::Table { text.parse().unwrap() };
+        let a = layer("[project]\nname = \"x\"\n[vars]\nu = \"1\"\nv = \"2\"\n[adapters.m]\ndriver = \"command\"\ncommand = [\"rg\"]\n");
+        let reordered =
+            layer("[adapters.m]\ncommand = [\"rg\"]\ndriver = \"command\"\n[vars]\nv = \"2\"\nu = \"1\"\n[project]\nname = \"x\"\n");
+        let h = adapters_hash(&a);
+        assert!(h.starts_with("sha256:") && h.len() == 7 + 64, "{h}");
+        assert_eq!(h, adapters_hash(&reordered), "key order does not change the pin");
+        let other_var =
+            layer("[project]\nname = \"x\"\n[vars]\nu = \"evil\"\nv = \"2\"\n[adapters.m]\ndriver = \"command\"\ncommand = [\"rg\"]\n");
+        let other_name =
+            layer("[project]\nname = \"y\"\n[vars]\nu = \"1\"\nv = \"2\"\n[adapters.m]\ndriver = \"command\"\ncommand = [\"rg\"]\n");
+        assert_ne!(h, adapters_hash(&other_var));
+        assert_ne!(h, adapters_hash(&other_name));
+        // what does not reach an adapter does not move the pin
+        let mut with_brief = a.clone();
+        with_brief.insert("brief".into(), toml::Value::Table(layer("budget_tokens = 9")));
+        assert_eq!(h, adapters_hash(&with_brief));
+        assert_ne!(verify_pin_hash(".ai/a.md", "true"), verify_pin_hash(".ai/a.md", "true "));
+        assert_ne!(verify_pin_hash(".ai/a.md", "true"), verify_pin_hash(".ai/b.md", "true"));
     }
 
     #[test]

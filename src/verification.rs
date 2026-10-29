@@ -765,14 +765,61 @@ pub fn timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs.unwrap_or(DEFAULT_TIMEOUT_SECS))
 }
 
+/// Variables a `verify` command always sees (plus every `LC_*`); `[verify] pass_env` in the user
+/// config adds more. Everything else, tokens and cloud keys included, is withheld.
+pub const ENV_ALLOW: &[&str] = &["PATH", "HOME", "USER", "LANG", "TMPDIR", "TERM"];
+
+/// How long stdout is still read after the shell exited (or was killed), before the process group
+/// is killed: a background child that keeps the pipe open cannot hold the caller.
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Process groups of the verify commands running in this process.
+static RUNNING: LazyLock<std::sync::Mutex<BTreeSet<u32>>> = LazyLock::new(Default::default);
+
+fn kill_group(pgid: u32) {
+    #[cfg(unix)]
+    {
+        // `--` before the negative id: procps's kill on Linux reads `-123` as an option, BSD's does not mind
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pgid}")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
+}
+
+/// Kill every verify command this process started and is still waiting for, with everything it
+/// started: the MCP server calls this when its client goes away.
+#[allow(dead_code)] // the MCP server calls it when its stdin closes
+pub fn kill_running_verifies() {
+    let groups: Vec<u32> = RUNNING.lock().map(|g| g.iter().copied().collect()).unwrap_or_default();
+    for pgid in groups {
+        kill_group(pgid);
+    }
+}
+
+fn keep_env(name: &str, pass_env: &[String]) -> bool {
+    ENV_ALLOW.contains(&name) || name.starts_with("LC_") || pass_env.iter().any(|p| p == name)
+}
+
 /// Run `command` with `sh -c` in `root`, stderr folded into stdout, stdin closed, killed (with
-/// everything it started) after `limit`.
-pub fn run(root: &Path, command: &str, limit: std::time::Duration) -> anyhow::Result<Outcome> {
+/// everything it started) after `limit`. It sees only [`ENV_ALLOW`], `LC_*` and the variables named
+/// in `pass_env`; the output tail is redacted.
+pub fn run(root: &Path, command: &str, limit: std::time::Duration, pass_env: &[String]) -> anyhow::Result<Outcome> {
     use std::io::Read;
     use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex, mpsc};
     let mut cmd = Command::new("sh");
     // `exec 2>&1` merges the streams inside the shell, so their order is kept without a second pipe
     cmd.arg("-c").arg(format!("exec 2>&1\n{command}")).current_dir(root).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.env_clear();
+    for (k, v) in std::env::vars_os() {
+        if k.to_str().is_some_and(|k| keep_env(k, pass_env)) {
+            cmd.env(k, v);
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -780,49 +827,116 @@ pub fn run(root: &Path, command: &str, limit: std::time::Duration) -> anyhow::Re
         cmd.process_group(0);
     }
     let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!("could not start sh: {e}"))?;
+    let pgid = child.id();
+    if let Ok(mut g) = RUNNING.lock() {
+        g.insert(pgid);
+    }
     let mut stdout = child.stdout.take().expect("piped stdout");
-    let reader = std::thread::spawn(move || {
-        let mut tail: Vec<u8> = Vec::new();
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = stdout.read(&mut buf) {
-            if n == 0 {
-                break;
+    let tail: Arc<Mutex<Vec<u8>>> = Arc::default();
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    {
+        let tail = Arc::clone(&tail);
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = stdout.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
+                t.extend_from_slice(&buf[..n]);
+                if t.len() > 4 * TAIL_BYTES {
+                    let cut = t.len() - TAIL_BYTES;
+                    t.drain(..cut);
+                }
             }
-            tail.extend_from_slice(&buf[..n]);
-            if tail.len() > 4 * TAIL_BYTES {
-                tail.drain(..tail.len() - TAIL_BYTES);
-            }
-        }
-        tail
-    });
+            let _ = done_tx.send(());
+        });
+    }
     let started = std::time::Instant::now();
     let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if started.elapsed() >= limit {
-            timed_out = true;
-            #[cfg(unix)]
-            {
-                // `--` before the negative id: procps's kill on Linux reads `-123` as an option, BSD's does not mind
-                let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).stderr(Stdio::null()).status();
+    let waited = (|| -> anyhow::Result<std::process::ExitStatus> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
             }
-            let _ = child.kill();
-            break child.wait()?;
+            if started.elapsed() >= limit {
+                timed_out = true;
+                kill_group(pgid);
+                let _ = child.kill();
+                return Ok(child.wait()?);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    };
-    let mut tail = reader.join().unwrap_or_default();
+    })();
+    // the shell is gone: read what is left for a bounded time, then kill whatever it left behind
+    let drained = done_rx.recv_timeout(DRAIN_GRACE).is_ok();
+    kill_group(pgid);
+    if !drained {
+        // a descendant that left the group can still hold the pipe: never wait for it
+        let _ = done_rx.recv_timeout(std::time::Duration::from_millis(100));
+    }
+    if let Ok(mut g) = RUNNING.lock() {
+        g.remove(&pgid);
+    }
+    let status = waited?;
+    let mut tail = std::mem::take(&mut *tail.lock().unwrap_or_else(|e| e.into_inner()));
     if tail.len() > TAIL_BYTES {
         tail.drain(..tail.len() - TAIL_BYTES);
     }
-    let mut output_tail = String::from_utf8_lossy(&tail).into_owned();
+    // output can carry tokens and connection strings; it goes to agents and into Peer's Hub
+    let mut output_tail = crate::secrets::redact(&String::from_utf8_lossy(&tail)).0;
     if timed_out {
         output_tail.push_str(&format!("\n[kontext: stopped after {} s]", limit.as_secs()));
+    } else if !drained {
+        output_tail.push_str("\n[kontext: a background process kept the output open; it was stopped]");
     }
     let exit_code = if timed_out { None } else { status.code() };
     Ok(Outcome { passed: !timed_out && status.success(), exit_code, timed_out, output_tail })
+}
+
+/// Whether a person pinned this entry's `verify` command on this machine (`kontext trust
+/// --verify`): the command runs only then. The pin covers the entry's path and the command's text.
+pub fn is_pinned(app: &App, entry: &Entry, command: &str) -> bool {
+    crate::config::is_verify_pinned(&app.repo, &entry.rel_path, command)
+}
+
+/// Active entries whose `verify` command is not pinned on this machine (`only`: these ids).
+pub fn unpinned(app: &App, only: Option<&str>) -> Vec<crate::config::VerifyPin> {
+    let (entries, _) = app.entries();
+    let wanted: Option<String> = only.map(|id| Store::find(&entries, id).map(|e| e.id.clone()).unwrap_or_else(|| id.to_string()));
+    entries
+        .iter()
+        .filter(|e| e.is_active() && wanted.as_deref().is_none_or(|w| w == e.id))
+        .filter_map(|e| {
+            let command = e.verify.clone()?;
+            crate::store::validate_verify(&command).ok()?;
+            (!is_pinned(app, e, &command)).then(|| crate::config::VerifyPin { id: e.id.clone(), rel_path: e.rel_path.clone(), command })
+        })
+        .collect()
+}
+
+/// Uncommitted changes (staged, unstaged or untracked) to an entry's file or to the paths it
+/// governs: a verify run there checks the working tree, not the commit HEAD names.
+pub fn dirty_paths(app: &App, entry: &Entry) -> Vec<String> {
+    let ledger = ledger::rel_path(app);
+    let mut args: Vec<String> =
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--"].map(String::from).to_vec();
+    args.push(format!(":(literal){}", entry.rel_path));
+    for p in &entry.paths {
+        let p = p.trim_start_matches('/');
+        if !p.is_empty() {
+            args.push(format!(":(glob){p}"));
+        }
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Ok(out) = app.repo.git_bytes(&args) else { return Vec::new() };
+    out.split(|b| *b == 0)
+        .filter(|rec| rec.len() > 3)
+        .map(|rec| String::from_utf8_lossy(&rec[3..]).into_owned())
+        .filter(|p| *p != ledger)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]
@@ -1011,14 +1125,14 @@ mod tests {
     #[test]
     fn a_command_passes_fails_or_is_stopped() {
         let dir = std::env::temp_dir();
-        let ok = run(&dir, "echo out; echo err >&2", std::time::Duration::from_secs(10)).unwrap();
+        let ok = run(&dir, "echo out; echo err >&2", std::time::Duration::from_secs(10), &[]).unwrap();
         assert!(ok.passed && ok.exit_code == Some(0) && !ok.timed_out);
         assert_eq!(ok.output_tail, "out\nerr\n");
-        let bad = run(&dir, "printf '%05000d' 0; exit 3", std::time::Duration::from_secs(10)).unwrap();
+        let bad = run(&dir, "printf '%05000d' 0; exit 3", std::time::Duration::from_secs(10), &[]).unwrap();
         assert!(!bad.passed && bad.exit_code == Some(3));
         assert_eq!(bad.output_tail.len(), TAIL_BYTES, "the tail only");
         let started = std::time::Instant::now();
-        let slow = run(&dir, "sleep 30", std::time::Duration::from_millis(300)).unwrap();
+        let slow = run(&dir, "sleep 30", std::time::Duration::from_millis(300), &[]).unwrap();
         assert!(slow.timed_out && !slow.passed && slow.exit_code.is_none());
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "the sleep was killed with its shell");
     }
@@ -1197,6 +1311,19 @@ mod repo_tests {
         assert_eq!(get(&app, "lib-exists")["verify"], "test -f src/lib.rs && echo found");
         assert_eq!(get(&app, "lib-exists")["verification"], Value::Null);
         assert_eq!(get(&app, "lib-exists")["since"], Value::Null, "never verified: nothing to count from");
+        // nothing runs before a person pins the command on this machine
+        crate::config::set_test_trust_dir(&f.0.join(".git/kontext-trust"));
+        let refused = crate::api::execute(&app, "drafts.verify", &json!({"id":"lib-exists"}));
+        assert_eq!(refused["error"]["code"], "untrusted_verify", "{refused}");
+        assert_eq!(refused["error"]["command"], "test -f src/lib.rs && echo found");
+        assert_eq!(refused["error"]["hint"], "kontext trust --verify lib-exists");
+        assert!(!f.0.join(".ai/confirmations.log").exists());
+        let pins = crate::verification::unpinned(&app, None);
+        let mut ids: Vec<&str> = pins.iter().map(|p| p.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["broken", "lib-exists"], "never an inactive entry's");
+        crate::config::pin_verify(&app.repo, &pins).unwrap();
+        assert!(crate::verification::unpinned(&app, None).is_empty());
 
         let passed = ok(&app, "drafts.verify", json!({"id":"lib-exists","because":"before the refactor"}));
         assert_eq!(passed["passed"], true);

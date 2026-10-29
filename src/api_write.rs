@@ -1163,10 +1163,28 @@ fn repair(app: &App) -> Result<Value> {
     Ok(json!({"repaired":repaired,"skipped":skipped}))
 }
 
+/// Who asked to run a `verify` command: a terminal (`kontext verify`), an application through
+/// `drafts.verify`, or an agent through the MCP server (`ctx_verify`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Cli,
+    Api,
+    Mcp,
+}
+
 /// Run an entry's `verify` command from the repository root, append a `verify` line with the outcome
 /// to the ledger and stage it. Never for an inactive entry; an entry without a command is invalid
-/// input. The command runs without the write lock: it may take minutes.
+/// input. The command runs without the write lock: it may take minutes. A command a person has not
+/// pinned (`kontext trust --verify`) never runs: `untrusted_verify`.
 pub(crate) fn verify(app: &App, input: &Value) -> Result<Value> {
+    verify_with_transport(app, input, Transport::Api)
+}
+
+/// [`verify`] for a caller that says how it was reached. Over [`Transport::Mcp`] a command that is
+/// not pinned, or an entry whose file or governed paths have uncommitted changes, is not run: the
+/// result (`ran: false`) hands the command to the agent, which runs it in its own sandbox and records
+/// what it found as an agent stamp, never as a verify line.
+pub fn verify_with_transport(app: &App, input: &Value, transport: Transport) -> Result<Value> {
     let id = required(input, "id")?;
     let because = optional(input, "because")?;
     let (entries, _) = app.entries();
@@ -1181,26 +1199,51 @@ pub(crate) fn verify(app: &App, input: &Value) -> Result<Value> {
         error("invalid_input", format!("{} has no `verify` command; add one to its file or confirm it by reading", entry.id))
     })?;
     crate::store::validate_verify(&command).map_err(|m| error("invalid_input", format!("{}: {m}", entry.id)))?;
+    let sha = crate::config::verify_pin_hash(&entry.rel_path, &command);
+    let hint = format!("kontext trust --verify {}", entry.id);
+    let pinned = crate::verification::is_pinned(app, entry, &command);
+    let dirty = crate::verification::dirty_paths(app, entry);
+    if transport == Transport::Mcp && (!pinned || !dirty.is_empty()) {
+        let (reason, why) = if !pinned {
+            ("untrusted_verify", format!("no person pinned this command on this machine (`{hint}`)"))
+        } else {
+            ("dirty_tree", format!("uncommitted changes to {}", dirty.join(", ")))
+        };
+        return Ok(json!({"id":entry.id,"command":command,"command_sha256":sha,"ran":false,"reason":reason,
+            "dirty":!dirty.is_empty(),"dirty_paths":dirty,"hint":hint,
+            "note":format!("Not run: {why}. Run it yourself in your own sandbox if you choose; record what you found with ctx_confirm (an agent stamp), never as a verify line.")}));
+    }
+    if !pinned {
+        return Err(crate::api::error_with(
+            "untrusted_verify",
+            format!(
+                "{}: its verify command is not pinned on this machine, so nothing ran: `{command}`. A person reviews and pins it with: {hint}",
+                entry.id
+            ),
+            json!({"id":entry.id,"command":command,"command_sha256":sha,"hint":hint}),
+        ));
+    }
     let commit = app.repo.head();
-    let outcome = crate::verification::run(&app.repo.root, &command, crate::verification::timeout())?;
+    let outcome = crate::verification::run(&app.repo.root, &command, crate::verification::timeout(), &app.cfg().verify.pass_env)?;
     let at = crate::ledger::now();
     {
         let _file = write_guard(app)?;
         let _local = app.write_lock.lock().unwrap();
-        let mut line = crate::ledger::line(
-            app,
-            &at,
-            &entry.id,
-            "verify",
-            Some(outcome.passed),
-            because.map(|b| distill::mask_text(app, b)).as_deref(),
-        );
+        // a run on uncommitted changes says so: HEAD alone did not pass or fail
+        let mut reason = because.map(|b| distill::mask_text(app, b)).unwrap_or_default();
+        if !dirty.is_empty() {
+            let note = format!("[dirty: {}]", dirty.join(", "));
+            reason = if reason.is_empty() { note } else { format!("{reason} {note}") };
+        }
+        let mut line =
+            crate::ledger::line(app, &at, &entry.id, "verify", Some(outcome.passed), Some(reason.as_str()).filter(|r| !r.is_empty()));
         // the commit the command ran against, not whatever HEAD became while it ran
         line.commit = commit.clone();
         crate::ledger::append(app, &[line])?;
     }
-    Ok(json!({"id":entry.id,"command":command,"passed":outcome.passed,"exit_code":outcome.exit_code,"timed_out":outcome.timed_out,
-        "output_tail":outcome.output_tail,"at":at,"commit":commit,"path":crate::ledger::rel_path(app)}))
+    Ok(json!({"id":entry.id,"command":command,"command_sha256":sha,"ran":true,"passed":outcome.passed,"exit_code":outcome.exit_code,
+        "timed_out":outcome.timed_out,"output_tail":outcome.output_tail,"at":at,"commit":commit,"dirty":!dirty.is_empty(),
+        "dirty_paths":dirty,"path":crate::ledger::rel_path(app)}))
 }
 
 /// Set or clear the `verify` command of an inbox draft of this worktree (an empty string clears
