@@ -570,7 +570,8 @@ mod tests {
             ("sendgrid-key", ["SG.aB", "3dE5fG7hJ9kL1mN3pQ5r.aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9f"].concat(), "SG.short.x".into()),
             (
                 "azure-storage-key",
-                ["Defau", "ltEndpointsProtocol=https;AccountName=acct;AccountKey=aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9fG1hJ3kL=="].concat(),
+                ["Defau", "ltEndpointsProtocol=https;AccountName=acct;AccountKey=aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5bC7dE9fG1hJ3kL=="]
+                    .concat(),
                 "AccountKey=short".into(),
             ),
             (
@@ -589,9 +590,17 @@ mod tests {
                 "eyJ.eyJ.x".into(),
             ),
             ("bearer-token", ["Autho", "rization: Bearer aB3dE5fG7hJ9kL1mN3pQ5rS7"].concat(), ["Autho", "rization: Bearer x"].concat()),
-            ("url-credentials", ["postg", "res://admin:s3cretpass@db.internal:5432/app"].concat(), ["https", "://example.com/path"].concat()),
+            (
+                "url-credentials",
+                ["postg", "res://admin:s3cretpass@db.internal:5432/app"].concat(),
+                ["https", "://example.com/path"].concat(),
+            ),
             ("assigned-secret", ["API_K", "EY=Zx9Lq2Wr8Tb4Np6M"].concat(), ["API_K", "EY=your_api_key_here"].concat()),
-            ("secret-in-text", ["the s", "ecret is wJalrXUtnFEMIK7MDENGbPxRfiCYzQ8kP2mNq"].concat(), ["the s", "ecret is stored in Vault"].concat()),
+            (
+                "secret-in-text",
+                ["the s", "ecret is wJalrXUtnFEMIK7MDENGbPxRfiCYzQ8kP2mNq"].concat(),
+                ["the s", "ecret is stored in Vault"].concat(),
+            ),
             ("hex-secret", format!("the api key {hex32} works"), format!("commit {hex32} works")),
         ];
         for (rule, positive, negative) in &cases {
