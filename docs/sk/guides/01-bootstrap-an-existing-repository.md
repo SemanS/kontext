@@ -44,15 +44,15 @@ Existujúce ADR sa hneď zobrazia v `kontext log`, v briefe aj vo vyhľadávaní
 
 ## História v inom jazyku a boti {#history-in-another-language-and-bots}
 
-Fáza history hľadá commity v tvare rozhodnutí. Jej slovné signály sú anglické; ak tvoj tím píše správy commitov v inom jazyku, pridaj svoje slová pred prvým behom:
+Fáza history hľadá commity v tvare rozhodnutí. Jej slovné signály sú anglické, plus dodávané slovenské a české slová, keď sú predmety commitov v jednom z týchto jazykov. Pre iný jazyk alebo slová, ktoré používa tvoj tím, pridaj kmene pred prvým behom:
 
 ```toml
 [init]
-decision_words = ["rozhodli", "namiesto", "prechádzame", "lebo"]
-bot_authors = ["release-bot@example.com"]
+decision_words = { strong = ["rozhodli", "prechádzame"], rationale = ["lebo"], contrast = ["namiesto"] }
+bot_authors = ["release-bot"]
 ```
 
-Výmeny závislostí, typy Conventional Commits, značky breaking a trailery `Decision:` sa rátajú v každom jazyku. Commity botov (dependabot, renovate, `*[bot]` a `bot_authors`) sa vynechajú. Commity, ktoré existujúci záznam už cituje, sa znova neplánujú ako úlohy `dec:` a preskočená úloha, aj `mod:`, ostane preskočená pre celý tím.
+Výmeny závislostí, typy Conventional Commits, značky breaking a trailery `Decision:` sa rátajú v každom jazyku. Commity botov (`[bot]`, renovate, dependabot, github-actions, greenkeeper, snyk-bot a `bot_authors` ako podreťazec autora) sa vynechajú. Commity, ktoré existujúci záznam už cituje, sa znova neplánujú ako úlohy `dec:` a preskočená úloha, aj `mod:`, ostane preskočená pre celý tím.
 
 Opätovné `kontext init` po tom, čo si upravil `paths`, `tags` alebo `summary` dokumentu modulu, tvoje úpravy zachová; prepíše sa len blok generovaných faktov.
 

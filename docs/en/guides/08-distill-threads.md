@@ -58,7 +58,7 @@ Work threads carry what a project is made of: people's names and addresses, past
   redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
   ```
 
-A pattern that does not compile stops distill, `ctx_threads` and the autopilot before anything is sent; `kontext status` and `kontext check` name it. A wrong pattern is never dropped silently.
+A pattern that does not compile stops distill, `ctx_threads` and the autopilot before anything is sent; `kontext status` names it. A wrong pattern is never dropped silently.
 
 What is **not** masked: names of people and companies that match no pattern, street addresses, free-text identifiers, and the meaning of what was said. Add patterns for what your client considers sensitive, and read the prompt with `--dry-run` first when in doubt.
 

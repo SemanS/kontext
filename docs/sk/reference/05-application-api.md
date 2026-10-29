@@ -45,21 +45,28 @@ V rámci `api_version: 1`:
 - **Zúženie vstupu** je dovolené len tam, kde staré správanie odporovalo zaznamenanému rozhodnutiu
   alebo bezpečnostnému sľubu. Oznamuje sa capability reťazcom a poznámkou k migrácii v zozname zmien.
   Doterajšie zúženia: `drafts.stage amends` prijme len aditívne telá (`amend_not_additive`,
-  capability `drafts.stage.amends.additive`); guard revízie odmietne `HEAD` a iné pohyblivé mená
-  (`stale_entry`); `drafts.verify` spustí len pinnuté príkazy (`untrusted_verify`, capability
-  `verify.trust`).
+  capability `drafts.stage.amends.additive`); guard revízie odmietne `HEAD` a iné mená refov
+  (`invalid_input`); `drafts.verify` spustí len pinnuté príkazy (`untrusted_verify`, capability
+  `drafts.verify.pinned`); `export` bez commitnutej konfigurácie číta vstavané predvolené hodnoty
+  (`config_source.kind: "defaults"`, úložisko `.ai`) namiesto lokálnej konfigurácie úložiska.
 
 Parametre dostávajú aliasy, nikdy sa nepremenúvajú. `api.describe {}` vráti JSON Schema vstupu každej
 operácie, `{"operations": {"<name>": {"input": {…}}}}`, takže klient overí, čo nainštalovaná binárka
-prijíma. Capability reťazce, ktoré hľadať v `status.capabilities` popri menách operácií:
-`api.describe`, `verify.trust`, `drafts.stage.amends`, `drafts.stage.amends.additive`,
-`drafts.stage.extends`, `verification.last_verified`, `drift.ordered`.
+prijíma; `api.describe {"operation": "<name>"}` vráti `{operation, input}` pre jednu. Capability
+reťazce, ktoré hľadať v `status.capabilities` popri menách operácií (`api.describe` je jedna z nich):
+`drafts.stage.amends`, `drafts.stage.extends`, `drafts.stage.amends.additive`,
+`drafts.capture.extends`, `drafts.confirm.operation_id`, `drafts.verify.pinned`,
+`verification.last_verified` a `drift.ordered`.
 
-**Jeden pojem revízie.** Revízia je blob id: `revision` z `entries.related` a `entries.changed`,
-`entry_revision` v `drafts.extend`, `drafts.revise` a `retire` aj `amends.revision` prijímajú blob id
-súboru záznamu alebo plný hash commitu, ktorého obsah súboru sa zhoduje so súčasným. Posunutá revízia
-je všade `stale_entry`; starší `operation_conflict` pre posunutú revíziu ostáva ako alias v
-`error.details.alias`.
+**Jeden pojem revízie.** Revízia je blob id: `revision` v JSON záznamu, z `entries.related` a
+`entries.changed`; `entry_revision` v `drafts.extend`, `drafts.revise` a `retire` aj `amends.revision`
+prijímajú blob id súboru záznamu, plný hash commitu, ktorého blob súboru je súčasný, alebo 12-hex
+revíziu, ktorú vracali staršie binárky. `HEAD`, meno vetvy alebo krátky hash je `invalid_input`.
+Revízia, ktorá už nesedí, je všade `stale_entry`.
+
+**Aliasy chýb.** Zlyhanie môže niesť `error.aliases`, staršie kódy, podľa ktorých sa klient pri tej
+istej situácii ešte môže vetviť: `stale_entry` uvádza `operation_conflict` a `model_unavailable` uvádza
+`llm_unavailable`. Vetvi sa najprv podľa `code`, potom podľa `aliases`.
 
 
 ## Operácie
@@ -82,7 +89,7 @@ je všade `stale_entry`; starší `operation_conflict` pre posunutú revíziu os
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | kandidát v inboxe, poznámky, počet redakcií, `evidence` a `related_entries` |
 | `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?`, `amends?` ([podrobnosti](#amend)) | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | záznam stagnutý so stavom `deprecated` a poznámkou `## Retired` ([podrobnosti](#retire)) |
-| `drafts.confirm` | `id` alebo `ids`, `because?`, `kind?`; alebo `repair: true` | `id`, `path`, `checked` a `ledger`: záznam potvrdený teraz, jeho riadok v denníku, oboje stagnuté ([podrobnosti](#confirm)) |
+| `drafts.confirm` | `id` alebo `ids`, `because?`, `kind?`, `operation_id?`; alebo `repair: true` | `id`, `path`, `checked` a `ledger`: záznam potvrdený teraz, jeho riadok v denníku, oboje stagnuté ([podrobnosti](#confirm)) |
 | `drafts.verify` | `id`, `because?` | výsledok príkazu `verify` záznamu, zapísaný do denníka a stagnutý ([podrobnosti](#verify)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | návrh, ktorý záznam nahrádza; nič nezapisuje ([podrobnosti](#revise)) |
 | `drafts.extend` | `entry_id`, `entry_revision`, `text`, `llm?` | záznam s poznatkom doplneným do tela, rovnaké id aj súbor; nič nezapisuje ([podrobnosti](#extend)) |
@@ -176,7 +183,8 @@ Pribudol v 0.4.0 (`status.capabilities` uvádza `entries.drift`).
 ```
 
 Všetky polia sú voliteľné. `base` je git revízia; bez nej merge base `HEAD` s `origin/HEAD` (inak
-`origin/main`, inak `origin/master`), a ak nie je, `HEAD`. `head` je git revízia; bez nej sa počíta
+`origin/main`, inak `origin/master`), inak s upstreamom vetvy, inak s predvolenou vetvou
+`checkout.defaultRemote`, a ak nie je, `HEAD`. `head` je git revízia; bez nej sa počíta
 aj pracovný strom: commity `base..HEAD` plus necommitnuté a nesledované zmeny (pracovná kópia jj je
 z pohľadu gitu necommitnutá). `kinds` je predvolene `["decision","convention","learning","incident"]`;
 architektúra sa kontroluje, len keď ju pomenuješ. Neznáma revízia alebo revízia začínajúca `-` je
@@ -197,9 +205,12 @@ ostatných čítaniach ([nižšie](#verification)). `commits` sú ne-merge commi
 sa dotkli zodpovedajúcich súborov, najnovšie prvé; keď je zmena len necommitnutá, je prázdne. S
 explicitným `head` sa záznamy čítajú tak, ako sú commitnuté v `head`. Záznamy sú zoradené podľa ID.
 
-Pribudlo v 0.10.0 (capability `drift.ordered`): výsledok nesie `base_source` (`input`, `merge_base`
-alebo `none`). Pri `none` nebol žiadny základ: `entries` je prázdne a `reason` povie prečo, a
-`kontext drift --fail` skončí nenulou namiesto hlásenia, že drift nie je. Záznam sa ráta ako pozretý,
+Pribudlo v 0.10.0 (capability `drift.ordered`): výsledok nesie `base_source`, odkiaľ základ pochádza:
+`explicit` (vstup `base`), `origin-head`, `origin-main` (aj `origin/master`), `upstream`,
+`default-remote` (`checkout.defaultRemote`), alebo `fallback-none`, keď sa nič nevyriešilo a základom je
+samotný `HEAD` (žiadny remote, plytký klon). Pri `fallback-none` je rozsah prázdny a výsledok nesie
+`warning` s dôvodom; `kontext drift --fail` a `kontext ci --strict` skončia kódom 3 namiesto hlásenia,
+že drift nie je. Záznam sa ráta ako pozretý,
 len keď je pohľad (úprava, potvrdenie alebo prejdená kontrola) v poslednom commite rozsahu, ktorý
 zmenil jeho riadené súbory, alebo po ňom; pohľad pred touto zmenou ju už nepokrýva.
 Na odpovedi sa nezúčastňuje žiadny model.
@@ -227,6 +238,8 @@ Pridané po 0.5.0, všetko nepovinné:
 - `repair: true` (samotné): prepíše `checked` každého aktívneho záznamu, ktorého súbor zaostáva za
   najnovším potvrdením v denníku, a súbory stagne. Výsledok je `{repaired: [{id, path, from, to}],
   skipped: [{id, path, reason}]}`.
+- `operation_id` (0.10.0, capability `drafts.confirm.operation_id`): opakované volanie s tým istým ID
+  vráti prvý výsledok s `replayed: true` namiesto druhého riadku v denníku.
 
 `ledger` je `{at, kind, commit, because, path}`: čas riadku, jeho druh, `HEAD` (pred prvým commitom null),
 dôvod (bez neho null) a cesta k denníku.
@@ -238,22 +251,33 @@ repozitára so zatvoreným vstupom, zastaví ho po `KONTEXT_VERIFY_TIMEOUT_SECS`
 pridá riadok `verify` s výsledkom a denník stagne:
 
 ```json
-{"id": "…", "command": "cargo test -p billing cents", "passed": true, "exit_code": 0, "timed_out": false,
+{"id": "…", "command": "cargo test -p billing cents", "command_sha256": "<hex>", "ran": true,
+ "passed": true, "exit_code": 0, "timed_out": false,
  "output_tail": "…posledné 2 KB stdout a stderr…", "at": "2026-10-27T09:40:02Z", "commit": "<celý sha>",
- "path": ".ai/confirmations.log"}
+ "dirty": false, "dirty_paths": [], "path": ".ai/confirmations.log"}
 ```
+
+Pribudlo v 0.10.0: `ran`, `command_sha256`, `dirty` a `dirty_paths` (necommitnuté zmeny súboru
+záznamu alebo jeho riadených ciest v čase, keď príkaz bežal).
 
 `exit_code` je null, keď bol príkaz zastavený. Záznam bez `verify` je `invalid_input`; neaktívny je
 `operation_conflict` a jeho príkaz sa nikdy nespustí; neznámy je `not_found`. Príkaz beží bez zámku
 zápisu, takže ostatné zápisy čakajú len na pridanie riadku.
 
 Príkaz beží, len keď je jeho text pinnutý v používateľovom `trust.toml` (`kontext trust --verify <id>`
-z terminálu; žiadna operácia nepinuje). Inak nebeží nič a chyba je `untrusted_verify` s
-`details: {command, hash, pin: "kontext trust --verify <id>"}`; príkaz ukáž človeku, neopakuj volanie.
-Príkaz dostane povolený zoznam premenných prostredia (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`,
-`TERM` a používateľov `[verify] pass_env`), jeho skupina procesov sa zabije pri timeoute alebo 2 s po
-skončení shellu s ešte otvoreným stdout, `output_tail` sa rediguje a riadok denníka nesie
-`dirty: true`, keď mal pracovný strom zmeny. Pozri [Bezpečnosť](../concepts/08-security.md#verify).
+z terminálu; žiadna operácia nepinuje; capability `drafts.verify.pinned`). Inak nebeží nič a chyba je
+`untrusted_verify` s týmito poliami popri `code` a `message`:
+
+```json
+{"code": "untrusted_verify", "message": "…", "id": "…", "command": "cargo test -p billing cents",
+ "command_sha256": "<hex>", "hint": "kontext trust --verify <id>"}
+```
+
+Príkaz ukáž človeku, neopakuj volanie. Príkaz dostane povolený zoznam premenných prostredia (`PATH`,
+`HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM` a používateľov `[verify] pass_env`), jeho skupina
+procesov sa zabije pri timeoute alebo 2 s po skončení shellu s ešte otvoreným stdout a `output_tail`
+sa rediguje. Keď bol strom špinavý, dôvod v riadku denníka končí `[dirty: <cesty>]`. Pozri
+[Bezpečnosť](../concepts/08-security.md#verify).
 
 ### Overenie, čo sa odvtedy zmenilo, predpoklady {#verification}
 
@@ -308,8 +332,9 @@ Pribudlo v 0.10.0 (capability `verification.last_verified`), popri poliach vyš�
 - `amended_since: true`, keď sa telo záznamu zmenilo po jeho poslednom overujúcom pohľade.
 - `since` počíta podľa predkov: ne-merge commity na riadených cestách dosiahnuteľné z `HEAD` a nie z
   commitu pohľadu, takže sa zaráta aj vetva zlúčená po potvrdení. Čas sa použije len bez takého
-  commitu. `since.truncated` je true, keď prechod orezalo `index.max_commits`, a `since.lower_bound` v
-  plytkom klone.
+  commitu. `since.truncated: true`, keď commit pohľadu leží za `index.max_commits` prečítanými
+  commitmi, takže sa zaráta každý prečítaný commit; `since.lower_bound: true` v plytkom klone. Obe sú
+  prítomné, len keď sú true, aj pri `since_verified`.
 
 Jeden `git log` a jeden `git log -p` denníka pokryjú všetky záznamy, uložené v cache podľa `HEAD`; zoznam
 stojí jeden `rev-parse`, kým sa nič necommitne. `landed` pridá pre každý `HEAD` jeden `git log` súborov,
@@ -360,9 +385,9 @@ Dopĺňajú sa len konvencie, poznatky (learning) a incidenty. Rozhodnutie (aleb
 `decision_not_amended`: rozhodnutie sa mení len nahradením, preto sa poznatok, ktorý na ňom stavia,
 uloží ako nový záznam, ktorý ho `extends`. Iný druh je `invalid_input`, neaktívny záznam
 `operation_conflict`. `entry_revision` je `revision` kandidáta z `entries.related` (blob id súboru) alebo
-plný hash commitu s rovnakým obsahom súboru; `HEAD`, meno vetvy, krátky hash alebo čokoľvek iné je
-`stale_entry` (porovnajte znova). Súbor s
-lokálnymi, stagnutými alebo necommitnutými zmenami je `operation_conflict`.
+plný hash commitu s rovnakým obsahom súboru; `HEAD`, meno vetvy alebo krátky hash je `invalid_input`
+a revízia, ktorá už nesedí, je `stale_entry` (porovnajte znova). Súbor s lokálnymi, stagnutými alebo
+necommitnutými zmenami je `operation_conflict`.
 
 ### Doplnenie a prepojenie pri stagingu {#amend}
 
@@ -506,8 +531,10 @@ záznam. Podľa neho klient zistí, či sa záznam zmenil, odkedy ho naposledy u
 Pri exporte dodajte celý SHA commitu a celý lokálny review ref, napríklad `refs/remotes/origin/main`.
 Revízia sa musí rovnať aktuálnemu tipu tohto refu. Export číta commitnuté bloby, nie checkout,
 vynechá navrhované/neaktívne záznamy a vráti presný Markdown s hashmi. Lokálne úpravy súborov ani
-zdieľanej konfigurácie nenahradia commitnutú konfiguráciu exportu. Ak je potrebná lokálna
-konfigurácia úložiska, odpoveď označí jej pôvod.
+zdieľanej konfigurácie nenahradia commitnutú konfiguráciu exportu. Pôvod konfigurácie odpoveď označí
+v `config_source`. Bez commitnutej konfigurácie v revízii je `config_source.kind` `defaults` a adresár
+úložiska `.ai`; lokálna konfigurácia úložiska sa pre export nikdy nepoužije (0.10.0; predtým
+`local_configuration`).
 
 Politiku, ktorá vetva je schválená, prípadný fetch a kontroly review u poskytovateľa Gitu určuje
 volajúci. Pole accepted ani ľubovoľný `HEAD` nie sú dôkazom schválenej vetvy. Klienti majú pri importe

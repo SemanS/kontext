@@ -22,7 +22,7 @@ kontext odpovedá z repozitára, ktorému patria cesty, ktoré dostane:
 
 `dir` pomenuje repozitár priamo, pre každý nástroj: `ctx_search` s `dir: "pricing"`, `ctx_prepare_commit` s `dir: "/work/shop-checkout"`. Odpoveď z iného repozitára začína riadkom, ktorý povie, odkiaľ prišla.
 
-`dir` je obmedzený: musí ležať v tomto repozitári, v jeho worktree alebo submodule, alebo v repozitári pod tým istým koreňom. Cesta kdekoľvek inde na počítači sa odmietne, takže prompt nevie nasmerovať nástroj na nesúvisiaci repozitár. Kontexty otvorené cez `dir` sa držia v ohraničenej cache. Mimo akéhokoľvek git repozitára to server povie v inštrukciách a volania s `dir` fungujú ďalej.
+`dir` nástrojov, ktoré spúšťajú príkazy alebo menia lokálny stav (`ctx_verify`, `ctx_inbox`, `ctx_prepare_commit`), je obmedzený: musí ležať v tomto repozitári, v jeho worktree alebo submodule a cesta kdekoľvek inde sa odmietne, takže ich prompt nevie nasmerovať na nesúvisiaci checkout. Čítacie nástroje do susedných repozitárov siahnu aj naďalej. Kontexty otvorené cez `dir` sa držia v ohraničenej cache. Mimo akéhokoľvek git repozitára to server povie v inštrukciách a volania s `dir` fungujú ďalej.
 
 ## Čo ukáže vonkajší repozitár {#what-the-outer-repository-shows}
 

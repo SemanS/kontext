@@ -44,15 +44,15 @@ Existing ADRs appear in `kontext log`, the brief and search right away, and new 
 
 ## History in another language, and bots
 
-The history phase looks for decision-shaped commits. Its word signals are English; if your team writes commit messages in another language, add your words before the first run:
+The history phase looks for decision-shaped commits. Its word signals are English, plus bundled Slovak and Czech words when the commit subjects are in one of those languages. For another language, or words your team uses, add stems before the first run:
 
 ```toml
 [init]
-decision_words = ["rozhodli", "namiesto", "prechádzame", "lebo"]
-bot_authors = ["release-bot@example.com"]
+decision_words = { strong = ["rozhodli", "prechádzame"], rationale = ["lebo"], contrast = ["namiesto"] }
+bot_authors = ["release-bot"]
 ```
 
-Dependency swaps, Conventional-Commit types, breaking markers and `Decision:` trailers count in any language. Bot commits (dependabot, renovate, `*[bot]`, and `bot_authors`) are left out. Commits an existing entry already cites are not planned as `dec:` tasks again, and a skipped task, `mod:` included, stays skipped for the whole team.
+Dependency swaps, Conventional-Commit types, breaking markers and `Decision:` trailers count in any language. Bot commits (`[bot]`, renovate, dependabot, github-actions, greenkeeper, snyk-bot, and `bot_authors` as a substring of the author) are left out. Commits an existing entry already cites are not planned as `dec:` tasks again, and a skipped task, `mod:` included, stays skipped for the whole team.
 
 Re-running `kontext init` after you edited a module doc's `paths`, `tags` or `summary` keeps your edits; only the generated facts block is rewritten.
 

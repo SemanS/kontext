@@ -28,7 +28,7 @@ Dve tieňové polia, `title_f` a `body_f`, držia ten istý text malými písmen
 
 BM25 nad titulkom (váha 2,5), pomocným textom s rozloženými identifikátormi (1,5), telom a skladanými tieňovými poliami s nižšou váhou. Celý dopyt sa počíta aj ako fráza (váha 2): záznam s presne takým znením ide prvý, no fráza sama nepridá žiadny výsledok. Lokálne výsledky majú váhu 1,0; adaptéry predvolene 0,9 (`weight` pri každom adaptéri).
 
-V rámci lokálneho zdroja vážia `[search] weights` podľa zdroja: reviewovaný záznam je pri rovnakom skóre nad kúskom dokumentácie alebo commitom. Predvolené hodnoty sú nastavené na graded eval sade (`tests/eval/qrels.tsv`, nDCG@5, recall@10, MRR); zmena poradia potrebuje toto meranie. Nahradený alebo vyradený výsledok sa posunie nižšie, nikdy sa neskryje, a ukáže svojho nástupcu: `→ superseded by [id]`. Frázový bonus sa ráta z vyčistených slov dopytu, bez rozložených identifikátorov. Dopyt, ktorý je presne id záznamu alebo cesta, ide skratkou priamo na ten záznam.
+V rámci lokálneho zdroja má každý zdroj pred spojením skupín váhu: záznamy 1.0, kúsky dokumentácie 0.7, commity 0.6, záznamy vnoreného úložiska 0.95, takže reviewovaný záznam je pri rovnakom poradí nad kúskom dokumentácie alebo commitom. Váhy sú vstavané (kľúče `[search]` pre ne sú plánované) a nastavené na graded eval sade (`tests/eval/qrels.tsv`, nDCG@5, recall@10, MRR); zmena poradia potrebuje toto meranie. Nahradený, vyradený alebo zamietnutý výsledok dostane polovičnú váhu, nikdy sa neskryje, a jeho stav ukáže nástupcu: `superseded · → superseded by [<id>] <Title>`. Frázový bonus sa ráta z vyčistených slov dopytu, bez rozložených identifikátorov. Dopyt, ktorý je presne id záznamu alebo cesta, ide skratkou priamo na ten záznam.
 
 ## Federované vyhľadávanie
 

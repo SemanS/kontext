@@ -39,7 +39,7 @@ Pre tím patrí brána tam, kadiaľ prejde každý commit, nech ho urobilo čoko
 
 `kontext confirm` aj povýšenia stagujú súbory v indexe gitu; jj berie súbory z pracovnej kópie a index ignoruje, takže to neškodí. Trailery sa nepridajú samy: napíš ich do popisu (`prepare-commit` ich vypíše).
 
-Kontroly, ktoré hľadajú špinavý strom (beh `verify` zapíše `dirty: true`, `confirm` odmietne súbor s nestagnutými úpravami), vidia pracovnú kópiu jj ako necommitnuté zmeny z pohľadu gitu. Najprv spusti `jj commit` alebo `jj new`, aby súbory, ktoré potvrdzuješ, boli v commite; colocated jj smoke test beží v CI, keď je `jj` nainštalované.
+Kontroly, ktoré hľadajú špinavý strom (beh `verify` označí `[dirty: <cesty>]` v denníku a cez MCP sa nespustí, `confirm` odmietne súbor s nestagnutými úpravami), vidia pracovnú kópiu jj ako necommitnuté zmeny z pohľadu gitu. Najprv spusti `jj commit` alebo `jj new`, aby súbory, ktoré potvrdzuješ, boli v commite; colocated jj smoke test beží v CI, keď je `jj` nainštalované.
 
 ## Trailery
 

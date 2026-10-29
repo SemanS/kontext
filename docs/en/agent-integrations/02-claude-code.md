@@ -30,44 +30,29 @@ Registered for every project, kontext stays out of the way where nobody set it u
 
 ## Brief at session start
 
-Add a `SessionStart` hook that injects the brief as additional context:
+Hooks inject the brief at session start and the governing entries before an edit (opt-in until the A/B report; see [Hooks](../guides/09-hooks.md)):
 
 ```sh
-kontext connect claude-hooks --write
+kontext connect claude --hooks --write    # also registers the MCP server in .mcp.json
+kontext connect claude-hooks --write      # only the hooks
 ```
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [ { "type": "command", "timeout": 15,
-        "command": "command -v kontext >/dev/null 2>&1 && kontext brief --format claude-hook 2>/dev/null || true" } ] }
-    ]
-  }
-}
-```
-
-`kontext brief --format claude-hook` prints `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "…"}}`. The hook is a no-op on machines without kontext.
+`kontext brief --format claude-hook` still prints `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "…"}}`; the SessionStart hook older versions wrote with it is replaced by `kontext hook --host claude`.
 
 ## Hooks {#hooks}
 
-The SessionStart hook above sends one unfocused brief. For governing knowledge at the moment a file is edited, install the full set (opt-in until the A/B report; see [Hooks](../guides/09-hooks.md)):
-
-```sh
-kontext connect claude --hooks --write
-```
-
-It writes into `.claude/settings.json`:
+Both commands write into `.claude/settings.json`:
 
 | Event | Matcher | What the agent gets |
 | --- | --- | --- |
-| `SessionStart` | `startup`, `resume`, `clear`, `compact` | the brief, again after a compaction |
+| `SessionStart` | `startup\|resume\|clear\|compact` | the brief; after a compaction or resume a shorter brief and the ids already told |
 | `SubagentStart` | | the brief for the subagent |
-| `PreToolUse` | `Edit\|Write` | the entries governing `tool_input.file_path` not yet told in this session |
+| `PreToolUse` | `Edit\|Write\|MultiEdit` | the entries governing the edited files not yet told in this session |
+| `PreToolUse` | `Bash` | a deny for `kontext trust`, nothing otherwise |
 
-Every hook runs `kontext hook --host claude`, which reads the hook JSON on stdin and answers with `additionalContext` (at most 10 000 characters). Hooks share one `session_budget_tokens` budget with `ctx_brief`, never block a tool, never call a model, and exit 0 with no output on any error. `KONTEXT_HOOKS=off` or `[hooks] enabled = false` turns them off.
+Every hook runs `kontext hook --host claude`, which reads the hook JSON on stdin and answers with `hookSpecificOutput.additionalContext` (at most 10 000 characters). Hooks draw from one `[hooks] session_budget_tokens` budget (6000), never block an edit, never call a model, and exit 0 with no output on any error. `KONTEXT_HOOKS=off` or `[hooks] enabled = false` turns them off.
 
-`kontext connect` also adds a deny rule for `kontext trust` run through Bash, so the agent cannot pin commands or adapters for you (see [Security](../concepts/08-security.md#verify)).
+The `Bash` hook is written by every `kontext connect claude --write`, with or without `--hooks`: it denies `kontext trust` run by the agent, so the agent cannot pin commands or adapters for you (see [Security](../concepts/08-security.md#verify)).
 
 ## Slash commands
 
@@ -92,7 +77,7 @@ kontext connect skills --write        # .claude/skills/ and .agents/skills/konte
 | `kontext-verify` | give entries a `verify` command that proves the claim, so `kontext verify` re-runs it |
 | `kontext-merge` | find entries that say the same thing or disagree (`entries.related`) and draft one superseding entry per group |
 
-Each one ends in the local inbox or staged files for a person to review and commit; nothing in `.ai/` changes before that. Each file carries a hash marker of the shipped text: re-running `connect skills --write` after an upgrade updates files nobody edited and leaves files your team changed, with a note. The same files work in any client that reads the `SKILL.md` layout (`.agents/skills` for Codex, `.claude/skills` for Cursor and OpenCode).
+Each one ends in the local inbox or staged files for a person to review and commit; nothing in `.ai/` changes before that. Each file ends with a `<!-- kontext-skill-hash: <hash> -->` marker of the shipped text it was written from: re-running `connect skills --write` after an upgrade updates files nobody edited and keeps files your team changed, with a note; `--force` replaces them. The same files work in any client that reads the `SKILL.md` layout (`.agents/skills` for Codex, `.claude/skills` for Cursor and OpenCode).
 
 When a verify command is not pinned, `kontext-audit` and `kontext-verify` show the command and stop; they never run `kontext trust`.
 

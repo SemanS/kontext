@@ -1,15 +1,15 @@
 # MCP tools, prompts and resources
 
-Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Capabilities: `tools`, `prompts`, `resources`. Tool failures are returned as `isError: true` results; an unknown tool is the protocol error `-32602`, a panic inside one request `-32603`.
+Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Capabilities: `tools`, `prompts`, `resources` (no `logging` since 0.10.0). Tool failures are returned as `isError: true` results; an unknown tool, a missing tool name or a bad `resources/list` cursor is the protocol error `-32602`, a panic inside one request `-32603`.
 
 ## Protocol {#protocol}
 
 The server answers both eras of MCP:
 
-- **Stateless (2026-07-28).** `server/discover` returns the capabilities, instructions and server info; every request may carry `_meta` with the protocol version instead of an `initialize` handshake. Results carry `resultType`, and list results carry `ttlMs` and `cacheScope`. An unknown version is `-32022`.
+- **Stateless (2026-07-28).** `server/discover` returns the capabilities, instructions and server info; every request may carry `_meta["io.modelcontextprotocol/protocolVersion"]` instead of an `initialize` handshake. Results carry `resultType: "complete"` and `_meta["io.modelcontextprotocol/serverInfo"]`; list and read results carry `ttlMs` and `cacheScope: "private"`. An unknown version is `-32022` with `data: {supported, requested}`.
 - **Legacy handshake.** `initialize` with 2024-11-05, 2025-03-26, 2025-06-18 or 2025-11-25 echoes the client's version; an unknown one falls back to 2025-11-25.
 
-Lists are returned in a deterministic order. `resources/list` pages with a cursor. `tools.listChanged` is true only when adapters `expose` tools. `notifications/cancelled` stops the request and kills a running verify command.
+Lists are returned in a deterministic order. `resources/list` pages with a cursor. `tools.listChanged` may be true: it is true only when adapters `expose` tools. `notifications/cancelled` stops the request and kills a running verify command.
 
 **Instructions.** The first 512 characters of the server instructions stand alone (what kontext holds, call `ctx_brief` first, when to search); the whole stays under 4 096 characters. `ctx_brief` carries `_meta["anthropic/alwaysLoad"]: true`, so hosts that defer tools behind tool search still load it; `ctx_read` and `ctx_api` carry `maxResultSizeChars`.
 
@@ -23,13 +23,13 @@ There are sixteen tools: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_
 
 **Structured results.** `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_inbox` and `ctx_drift` declare an `outputSchema` and return `structuredContent` beside the text, which stays as it was. Hits and governing entries also come as `resource_link` blocks to `kontext://entry/{id}`. The other tools return text.
 
-**Parameter aliases.** Parameters gain aliases, never renames: `id` and `uri` are interchangeable where a tool names one entry, `focus` and `paths`, `limit` and `max`, `budget_tokens` everywhere (`budget_chars` stays on `ctx_threads`), and `reason`, `why` and `because`.
+**Parameter aliases.** Parameters gain aliases, never renames: `id` and `uri` (and `path`) on `ctx_read`; `id` and `ids` on `ctx_inbox`, `ctx_challenge` and `ctx_verify`; `focus` and `paths` on `ctx_brief`; `kind` and `kinds` on `ctx_search`, `ctx_drift` and `ctx_log`, where `kinds` may also be a comma-separated string; `limit` and `max`; `budget_tokens` everywhere (on `ctx_threads` it sets `budget_chars` to four characters a token); and `reason`, `why` and `because`, which mean the same on `ctx_challenge`, `ctx_confirm`, `ctx_verify` and `ctx_init_submit`.
 
 Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. `ctx_verify` runs a pinned shell command and is `destructiveHint: true`, `openWorldHint: true`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
 
 ### Another repository: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. It must lie in this repository, one of its worktrees or submodules, or a repository below the same root; anything else is refused. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. For `ctx_verify`, `ctx_inbox` and `ctx_prepare_commit`, which run commands or change local state, `dir` must lie in this repository, one of its worktrees or its submodules; anything else is refused. The read tools may still reach a sibling repository. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -46,13 +46,13 @@ With a focus, a *Governs &lt;focus&gt; (N)* section comes first and is never dro
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
 | `query` | string | required | words, identifiers, paths |
-| `kinds` | string[] | | `decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit` |
+| `kinds` | string[] or string | | `decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`; `kind` is an alias |
 | `sources` | string[] | all | `local` and/or adapter names |
 | `limit` | integer | 10 | maximum hits (up to 50) |
 | `adapters` | boolean | `[search] adapters` | `true` asks the search adapters even when local hits suffice, `false` never asks them |
 | `budget_tokens` | integer | 1200 | approximate size of the answer |
 
-Each hit: `N. title — snippet [kind · status · date · source] <uri>`. The status is left out when it is `accepted`; marks such as `local, unapproved` and `review due` follow it. A hit that only opens like the one above it (the same first words, a different claim) is not dropped: it follows as `↳ similar, differs: … <uri>` with the part that differs. Only proven copies are dropped: the same URI, an adapter's copy of a local entry and a hit whose whole normalised text equals an earlier one; a superseded twin is never kept over its active successor. Reviewed entries rank above doc chunks at equal score (`[search] weights`); a superseded hit is demoted and shown with `→ superseded by [id]`, never hidden.
+Each hit: `N. title — snippet [kind · status · date · source] <uri>`. The status is left out when it is `accepted`; marks such as `local, unapproved` and `review due` follow it. A hit that only opens like the one above it (the same first words, a different claim) is not dropped: it follows as `↳ similar, differs: … <uri>` with the part that differs. Only proven copies are dropped: the same URI, an adapter's copy of a local entry and a hit whose title and text have the same digest as an earlier one; a superseded twin is never kept over its active successor. Local sources are weighed before they are fused (entries 1.0, doc chunks 0.7, commits 0.6; built in, see [`[search]`](./03-configuration.md#search)); a superseded or deprecated hit is weighed down and its status reads `superseded · → superseded by [<id>] <Title>`, never hidden.
 
 The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *local note*) and submodules that keep their own team knowledge (marked with their path).
 
@@ -62,7 +62,7 @@ The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *
 | --- | --- | --- | --- |
 | `uri` | string | required | `kx:<id>`, `file:<path>[#section]`, `git:<sha>`, `inbox:<id>`, an adapter URI, or a plain path |
 | `level` | 0 \| 1 \| 2 | 1 | one line, overview, full |
-| `offset`, `part` | integer | | page through a long file |
+| `offset`, `part` | integer | | page through a long text: one longer than 32 000 characters comes in parts, and the answer ends with how to read on (`part: 2` or `offset: N`) |
 
 `id` is an alias of `uri`. A plain argument prefers an existing path and the answer says what it resolved to. Levels 0 and 1 show `superseded_by` with a link and the marks (local, challenged, review due). `file:` refuses `.git/`, `.git-credentials` and `.ssh`.
 
@@ -131,7 +131,7 @@ Records that an entry still holds after the code it governs changed: sets its [`
 | `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
 | `because` | string | | one line: why it was run |
 
-Runs the entry's [`verify`](../concepts/03-capture-and-review.md#verify) command from the repository root, but only when the command text is pinned in your `trust.toml` (`kontext trust --verify <id>`, from a terminal). Pinned, it runs with an environment allowlist and a timeout, appends a `verify` line with pass or fail, `HEAD` and a dirty-tree mark to the ledger, stages it, and answers with the outcome and the redacted end of the output. Unpinned, nothing runs: the answer is `untrusted_verify` with the command, its hash and the pin line, and the agent may run the command in its own sandbox and record the result with `ctx_confirm`. An entry without a command, or an inactive one, is refused. `destructiveHint: true`, `openWorldHint: true`; see [Security](../concepts/08-security.md#verify).
+Runs the entry's [`verify`](../concepts/03-capture-and-review.md#verify) command from the repository root, but only when the command text is pinned in your `trust.toml` (`kontext trust --verify <id>`, from a terminal) and the entry's file and governed paths have no uncommitted changes. Then it runs with an environment allowlist and a timeout, appends a `verify` line with pass or fail and `HEAD` to the ledger, stages it, and answers with the outcome and the redacted end of the output. Otherwise nothing runs: the answer starts with `Not run <id> (untrusted_verify)` or `(dirty_tree)`, shows the command and a note, and the agent may run the command in its own sandbox and record what it found with `ctx_confirm` (an agent stamp, never a `verify` line). An entry without a command, or an inactive one, is refused. `destructiveHint: true`, `openWorldHint: true`; see [Security](../concepts/08-security.md#verify).
 
 ### `ctx_drift`
 
@@ -158,7 +158,7 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
 | `action` | `list` \| `show` \| `promote` \| `drop` \| `verify` | `list` | |
-| `ids` | string[] | | for show / promote / drop; one id for verify. Exact ids or a unique prefix; `drop` removes only this clone's own candidates |
+| `ids` | string[] | | for show / promote / drop; one id for verify. Exact ids, or a prefix or suffix that matches one candidate |
 | `verify` | string | | for `action=verify`: the command that proved the draft (as in `ctx_capture`); `""` clears it. Promotion keeps it |
 
 ### `ctx_prepare_commit`
@@ -166,7 +166,7 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 | Parameter | Type | |
 | --- | --- | --- |
 | `promote` | string[] | inbox ids to write into the store and stage |
-| `drop` | string[] | inbox ids to discard |
+| `drop` | string[] | inbox ids to discard; every id is checked first, and a candidate another worktree wrote is refused |
 | `retire` | string[] | entries challenged in this worktree (or the challenges): status `deprecated`, the challenge as the reason in a `## Retired` note, staged |
 
 Returns the report described in [Capture and review](../concepts/03-capture-and-review.md#before-committing-ctx-prepare-commit). With nothing staged it reads the working tree's changes against `HEAD` (as under jj) and says so. It lists the commit trailers and says whether the prepare-commit-msg hook adds them: a clone without kontext's hooks (a fresh clone, a Superset project) needs them added by hand, or `kontext hooks install`.
@@ -188,7 +188,7 @@ A capture whose paths all belong to another repository with team knowledge goes 
 
 | Parameter | Type | |
 | --- | --- | --- |
-| `task_id` | string (required) | `purpose`, `mod:<module>`, `dec:<area>`, `refresh:<module>` |
+| `task_id` | string (required) | `purpose`, `mod:<module>`, `dec:<module>-<sha7>`, `refresh:<module>` |
 | `summary` | string | one line, at most ~200 characters |
 | `overview` | string | Markdown, 5–15 lines |
 | `decisions` | object[] | `{title, decision, summary?, context?, alternatives?, consequences?, paths?, commits?, date?, status?, tags?}` (for `dec:` tasks) |

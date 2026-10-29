@@ -46,21 +46,28 @@ Within `api_version: 1`:
 - **Narrowing an input** is allowed only where the old behaviour contradicted a recorded decision or a
   security promise. It is announced with a capability string and a migration note in the changelog.
   The narrowings so far: `drafts.stage amends` accepts only additive bodies (`amend_not_additive`,
-  capability `drafts.stage.amends.additive`); a revision guard refuses `HEAD` and other moving names
-  (`stale_entry`); `drafts.verify` runs only pinned commands (`untrusted_verify`, capability
-  `verify.trust`).
+  capability `drafts.stage.amends.additive`); a revision guard refuses `HEAD` and other ref names
+  (`invalid_input`); `drafts.verify` runs only pinned commands (`untrusted_verify`, capability
+  `drafts.verify.pinned`); `export` without a committed configuration reads the built-in defaults
+  (`config_source.kind: "defaults"`, store `.ai`) instead of the local store configuration.
 
 Parameters gain aliases, never renames. `api.describe {}` returns the JSON Schema of every
 operation's input, `{"operations": {"<name>": {"input": {…}}}}`, so a client can check what an installed
-binary accepts. Capability strings to look for in `status.capabilities` besides the operation names:
-`api.describe`, `verify.trust`, `drafts.stage.amends`, `drafts.stage.amends.additive`,
-`drafts.stage.extends`, `verification.last_verified`, `drift.ordered`.
+binary accepts; `api.describe {"operation": "<name>"}` returns `{operation, input}` for one. Capability
+strings to look for in `status.capabilities` besides the operation names (`api.describe` is one):
+`drafts.stage.amends`, `drafts.stage.extends`, `drafts.stage.amends.additive`,
+`drafts.capture.extends`, `drafts.confirm.operation_id`, `drafts.verify.pinned`,
+`verification.last_verified` and `drift.ordered`.
 
-**One notion of revision.** A revision is a blob id: `revision` from `entries.related` and
-`entries.changed`, `entry_revision` in `drafts.extend`, `drafts.revise` and `retire`, and
-`amends.revision` all take the entry file's blob id or a full commit hash whose file content equals
-the current one. A moved revision is `stale_entry` everywhere; the older `operation_conflict` for a
-moved revision stays as an alias in `error.details.alias`.
+**One notion of revision.** A revision is a blob id: `revision` in entry JSON, from `entries.related`
+and `entries.changed`; `entry_revision` in `drafts.extend`, `drafts.revise` and `retire`, and
+`amends.revision` take the entry file's blob id, a full commit hash whose blob for the file is the
+current one, or the 12-hex revision older binaries returned. `HEAD`, a branch name or a short hash
+is `invalid_input`. A revision that no longer matches is `stale_entry` everywhere.
+
+**Error aliases.** A failure may carry `error.aliases`, the older codes a client may still branch on
+for the same condition: `stale_entry` lists `operation_conflict`, and `model_unavailable` lists
+`llm_unavailable`. Branch on `code` first, then on `aliases`.
 
 
 ## Operations
@@ -83,7 +90,7 @@ moved revision stays as an alias in `error.details.alias`.
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
 | `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?`, `amends?` ([details](#amend)) | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
-| `drafts.confirm` | `id` or `ids`, `because?`, `kind?`; or `repair: true` | `id`, `path`, `checked` and `ledger`: the entry confirmed now, its ledger line appended, both staged ([details](#confirm)) |
+| `drafts.confirm` | `id` or `ids`, `because?`, `kind?`, `operation_id?`; or `repair: true` | `id`, `path`, `checked` and `ledger`: the entry confirmed now, its ledger line appended, both staged ([details](#confirm)) |
 | `drafts.verify` | `id`, `because?` | the outcome of the entry's `verify` command, recorded in the ledger and staged ([details](#verify)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | a draft that supersedes the entry; no writes ([details](#revise)) |
 | `drafts.extend` | `entry_id`, `entry_revision`, `text`, `llm?` | the entry with a finding added to its body, same id and file; no writes ([details](#extend)) |
@@ -177,7 +184,8 @@ Added in 0.4.0 (`status.capabilities` lists `entries.drift`).
 ```
 
 All fields are optional. `base` is a git revision; without it, the merge base of `HEAD` with
-`origin/HEAD` (else `origin/main`, else `origin/master`), falling back to `HEAD`. `head` is a git
+`origin/HEAD` (else `origin/main`, else `origin/master`), else with the branch's upstream, else with
+the default branch of `checkout.defaultRemote`, falling back to `HEAD`. `head` is a git
 revision; without it the working tree counts: the commits `base..HEAD` plus uncommitted and untracked
 changes (a jj working copy is uncommitted in git's terms). `kinds` defaults to
 `["decision","convention","learning","incident"]`; architecture is checked only when named. An
@@ -200,9 +208,12 @@ are added as for the other reads ([below](#verification)). `commits` are the non
 uncommitted. With an explicit `head` the entries are read as committed at `head`. Entries are ordered
 by id. The answer involves no model.
 
-Added in 0.10.0 (capability `drift.ordered`): the result carries `base_source` (`input`, `merge_base`
-or `none`). With `none` there was no baseline: `entries` is empty and `reason` says why, and
-`kontext drift --fail` exits non-zero instead of reporting no drift. An entry counts as looked at only
+Added in 0.10.0 (capability `drift.ordered`): the result carries `base_source`, where the base came
+from: `explicit` (the `base` input), `origin-head`, `origin-main` (also `origin/master`), `upstream`,
+`default-remote` (`checkout.defaultRemote`), or `fallback-none` when nothing resolved and the base is
+`HEAD` itself (no remote, a shallow clone). With `fallback-none` the range is empty and the result
+carries `warning` with the reason; `kontext drift --fail` and `kontext ci --strict` exit 3 instead of
+reporting no drift. An entry counts as looked at only
 when a look (an edit, a confirmation or a passed check) is at or after the last commit in the range
 that changed its governed files; a look before that change no longer covers it.
 
@@ -230,6 +241,8 @@ Added after 0.5.0, all optional:
 - `repair: true` (alone): rewrites the cached `checked` of every active entry whose file is behind its
   newest ledger confirmation, and stages the files. The result is `{repaired: [{id, path, from, to}],
   skipped: [{id, path, reason}]}`.
+- `operation_id` (0.10.0, capability `drafts.confirm.operation_id`): a retry with the same id returns
+  the first result with `replayed: true` instead of appending a second ledger line.
 
 `ledger` is `{at, kind, commit, because, path}`: the line's time, its kind, `HEAD` (null before the
 first commit), the reason (null without one) and the ledger's path.
@@ -241,22 +254,33 @@ repository root, stdin closed, stopped after `KONTEXT_VERIFY_TIMEOUT_SECS` (defa
 `verify` line with the outcome and stages the ledger:
 
 ```json
-{"id": "…", "command": "cargo test -p billing cents", "passed": true, "exit_code": 0, "timed_out": false,
+{"id": "…", "command": "cargo test -p billing cents", "command_sha256": "<hex>", "ran": true,
+ "passed": true, "exit_code": 0, "timed_out": false,
  "output_tail": "…last 2 KB of stdout and stderr…", "at": "2026-10-27T09:40:02Z", "commit": "<full sha>",
- "path": ".ai/confirmations.log"}
+ "dirty": false, "dirty_paths": [], "path": ".ai/confirmations.log"}
 ```
+
+Added in 0.10.0: `ran`, `command_sha256`, `dirty` and `dirty_paths` (uncommitted changes to the
+entry's file or its governed paths when the command ran).
 
 `exit_code` is null when the command was stopped. An entry without `verify` is `invalid_input`; an
 inactive one is `operation_conflict` and its command never runs; an unknown one is `not_found`. The
 command runs without the write lock, so other writes wait only for the append.
 
 The command runs only when its text is pinned in the user's `trust.toml` (`kontext trust --verify <id>`
-from a terminal; no operation pins). Otherwise nothing runs and the error is `untrusted_verify` with
-`details: {command, hash, pin: "kontext trust --verify <id>"}`; show the command to a person, do not
-retry. The command gets an environment allowlist (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`,
-`TERM` and the user's `[verify] pass_env`), its process group is killed at the timeout or 2 s after
-the shell exits with stdout still open, `output_tail` is redacted, and the ledger line carries
-`dirty: true` when the working tree had changes. See [Security](../concepts/08-security.md#verify).
+from a terminal; no operation pins; capability `drafts.verify.pinned`). Otherwise nothing runs and the
+error is `untrusted_verify`, with these fields beside `code` and `message`:
+
+```json
+{"code": "untrusted_verify", "message": "…", "id": "…", "command": "cargo test -p billing cents",
+ "command_sha256": "<hex>", "hint": "kontext trust --verify <id>"}
+```
+
+Show the command to a person; do not retry. The command gets an environment allowlist (`PATH`,
+`HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM` and the user's `[verify] pass_env`), its process
+group is killed at the timeout or 2 s after the shell exits with stdout still open, and `output_tail`
+is redacted. When the tree was dirty, the ledger line's reason ends with `[dirty: <paths>]`. See
+[Security](../concepts/08-security.md#verify).
 
 ### Verification, what changed since, premises {#verification}
 
@@ -312,8 +336,9 @@ Added in 0.10.0 (capability `verification.last_verified`), beside the fields abo
 - `amended_since: true` when the entry's body changed after its last verifying look.
 - `since` counts by ancestry: the non-merge commits on governed paths reachable from `HEAD` and not
   from the commit of the look, so a branch merged after a confirmation is counted. Time is used only
-  without such a commit. `since.truncated` is true when `index.max_commits` cut the walk, and
-  `since.lower_bound` in a shallow clone.
+  without such a commit. `since.truncated: true` when the look's commit lies beyond the
+  `index.max_commits` commits read, so every commit read is counted; `since.lower_bound: true` in a
+  shallow clone. Both are present only when true, also on `since_verified`.
 
 One `git log` and one `git log -p` of the ledger cover every entry, cached per `HEAD`; a list costs a
 `rev-parse` while nothing is committed. `landed` adds, per `HEAD`, a `git log` of the files whose
@@ -364,8 +389,9 @@ Only conventions, learnings and incidents are amended. A decision (or `adr`) is 
 `decision_not_amended`: a decision changes only by supersession, so a finding that builds on one is
 kept as a new entry that `extends` it. Another kind is `invalid_input`, an inactive entry
 `operation_conflict`. `entry_revision` is the candidate's `revision` from `entries.related` (the file's
-blob id) or a full commit hash that holds the same file content; `HEAD`, a branch name, a short hash
-or anything else is `stale_entry` (compare again). A file with local, staged or uncommitted changes is `operation_conflict`.
+blob id) or a full commit hash that holds the same file content; `HEAD`, a branch name or a short hash
+is `invalid_input`, and a revision that no longer matches is `stale_entry` (compare again). A file
+with local, staged or uncommitted changes is `operation_conflict`.
 
 ### Amending and linking on staging {#amend}
 
@@ -513,7 +539,9 @@ For a reviewed export, supply a full commit SHA and a full local review ref, for
 `refs/remotes/origin/main`. The revision must equal that ref's current tip. Export reads committed
 blobs, not the checkout, excludes proposed/inactive entries, and returns the exact Markdown and blob
 hashes. Dirty files and dirty shared configuration cannot replace the committed export configuration.
-The response identifies the configuration source when local store configuration is needed.
+The response identifies the configuration source in `config_source`. Without a committed
+configuration at the revision, `config_source.kind` is `defaults` and the store directory is `.ai`;
+the local store configuration is never used for an export (0.10.0; before, `local_configuration`).
 
 The caller owns the policy that designates a ref as reviewed, plus any required fetch and hosting
 provider review checks. An accepted frontmatter field or arbitrary `HEAD` is not proof of a reviewed

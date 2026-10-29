@@ -39,7 +39,7 @@ For the team, put the gate where every commit passes, whatever made it: the chec
 
 `kontext confirm` and the promotions stage files in git's index; jj takes the files from the working copy and ignores the index, so this is harmless. Trailers are not added for you: write them into the description (`prepare-commit` lists them).
 
-Guards that look for a dirty tree (a `verify` run records `dirty: true`, `confirm` refuses a file with unstaged edits) see jj's working copy as uncommitted changes in git's terms. Run `jj commit` or `jj new` first, so the files you confirm are in a commit; a colocated jj smoke test runs in CI when `jj` is installed.
+Guards that look for a dirty tree (a `verify` run marks `[dirty: <paths>]` in the ledger and is not run over MCP, `confirm` refuses a file with unstaged edits) see jj's working copy as uncommitted changes in git's terms. Run `jj commit` or `jj new` first, so the files you confirm are in a commit; a colocated jj smoke test runs in CI when `jj` is installed.
 
 ## Trailers
 

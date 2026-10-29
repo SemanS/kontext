@@ -56,7 +56,7 @@ The section has its own small budget and is the first thing a full brief drops; 
 
 An entry is referred to by its full id (`[2026-09-28-adapters-are-configuration]`), or by its ADR number. A shorter prefix would stop being unique once a longer id is added, and agents copy these references into `supersedes` and `[[links]]`.
 
-Claude Code, Codex and Cursor can receive the brief automatically at session start and the governing entries before an edit: see [Hooks](../guides/09-hooks.md). Hooks and `ctx_brief` draw from one `[hooks] session_budget_tokens` budget per session.
+Claude Code, Codex and Cursor can receive the brief automatically at session start and the governing entries before an edit: see [Hooks](../guides/09-hooks.md). What the hooks inject in one session, and `ctx_brief` when it knows the session, draws from one `[hooks] session_budget_tokens` budget (6000).
 
 ### Freshness {#freshness}
 
@@ -103,6 +103,6 @@ Every hit carries a URI. `ctx_read` returns it at the level the agent asks for:
 - `ctx_why` keeps each section short: at most `limit` items per section.
 - `ctx_threads` returns a transcript in parts of `budget_chars` (default 20000), each small enough for one tool result.
 - Adapter sections in the brief get at most a third of the remaining budget each.
-- Host hooks share one `[hooks] session_budget_tokens` budget with `ctx_brief`; an edit hook repeats only entries not yet told in the session or whose blob changed.
+- Host hooks draw from one `[hooks] session_budget_tokens` budget per session (`ctx_brief` too, given a `session_id` or `CLAUDE_SESSION_ID`); an edit hook repeats only entries not yet told in the session or whose blob changed.
 
 Token counts are estimated at four characters per token (deliberately simple and conservative).

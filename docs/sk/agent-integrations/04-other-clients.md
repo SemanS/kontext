@@ -12,7 +12,7 @@ kontext connect cursor --write     # writes .cursor/mcp.json
 
 Cursor číta aj `.cursorrules`; kontext ho v briefe uvádza v časti *Rules for agents*. `kontext connect agents-md --write` pridá pracovné pravidlá do `AGENTS.md`.
 
-**Hooky.** `kontext connect cursor --hooks --write` zapíše `.cursor/hooks.json`: hook na začiatku session a hook po úprave súboru (`postToolUse`), oba spúšťajú `kontext hook --host cursor`. Cursor číta aj hooky Claude Code z `.claude/settings.json`; nainštaluj jednu sadu, nie obe. Opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md).
+**Hooky.** `kontext connect cursor --hooks --write` zapíše `.cursor/hooks.json` (`version: 1`): `sessionStart` a `postToolUse` (po úprave súboru), oba spúšťajú `kontext hook --host cursor`. Každé `--write` pridá aj `beforeShellExecution`, ktorý zamietne `kontext trust` spustený agentom. Cursor číta aj hooky Claude Code z `.claude/settings.json`; nainštaluj jednu sadu, nie obe. Opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md).
 
 **Skills.** Cursor číta súbory `SKILL.md` z `.claude/skills/`, kam ich dá `kontext connect skills --write`.
 

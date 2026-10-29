@@ -28,7 +28,7 @@ Two shadow fields, `title_f` and `body_f`, hold the same text lower-cased, ASCII
 
 BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5), body, and the folded shadow fields at a lower boost. The whole query also counts as a phrase (boost 2): it ranks an entry with the exact wording first without adding hits of its own. Local results have weight 1.0; adapters default to 0.9 (`weight` per adapter).
 
-Within the local source, `[search] weights` weigh by source: a reviewed entry ranks above a doc chunk or a commit at equal score. The defaults are set on the graded eval set (`tests/eval/qrels.tsv`, nDCG@5, recall@10, MRR); a change to ranking needs that measurement. A superseded or deprecated hit is demoted, never hidden, and shows its successor: `→ superseded by [id]`. The phrase bonus is computed from the cleaned query words, without the identifier expansions. A query that is exactly an entry id or a path takes a shortcut to that entry.
+Within the local source, each source has a weight before the groups are fused: entries 1.0, doc chunks 0.7, commits 0.6, a nested store's entries 0.95, so a reviewed entry ranks above a doc chunk or a commit at equal rank. The weights are built in (`[search]` keys for them are planned) and were set on the graded eval set (`tests/eval/qrels.tsv`, nDCG@5, recall@10, MRR); a change to ranking needs that measurement. A superseded, deprecated or rejected hit is weighed down by half, never hidden, and its status shows the successor: `superseded · → superseded by [<id>] <Title>`. The phrase bonus is computed from the cleaned query words, without the identifier expansions. A query that is exactly an entry id or a path takes a shortcut to that entry.
 
 ## Federated search
 

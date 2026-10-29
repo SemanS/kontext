@@ -30,44 +30,29 @@ Keď je kontext zaregistrovaný pre všetky projekty, nezavadzia tam, kde ho nik
 
 ## Brief na začiatku session
 
-Pridaj hook `SessionStart`, ktorý vloží brief ako dodatočný kontext:
+Hooky vložia brief na začiatku session a riadiace záznamy pred úpravou (opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md)):
 
 ```sh
-kontext connect claude-hooks --write
+kontext connect claude --hooks --write    # zaregistruje aj MCP server v .mcp.json
+kontext connect claude-hooks --write      # len hooky
 ```
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [ { "type": "command", "timeout": 15,
-        "command": "command -v kontext >/dev/null 2>&1 && kontext brief --format claude-hook 2>/dev/null || true" } ] }
-    ]
-  }
-}
-```
-
-`kontext brief --format claude-hook` vypíše `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "…"}}`. Na počítačoch, kde kontext nie je nainštalovaný, hook nerobí nič.
+`kontext brief --format claude-hook` stále vypíše `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "…"}}`; hook SessionStart, ktorý s ním zapisovali staršie verzie, nahradí `kontext hook --host claude`.
 
 ## Hooky {#hooks}
 
-Hook SessionStart vyššie pošle jeden brief bez focusu. Ak chceš riadiace znalosti v momente úpravy súboru, nainštaluj celú sadu (opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md)):
-
-```sh
-kontext connect claude --hooks --write
-```
-
-Zapíše do `.claude/settings.json`:
+Oba príkazy zapíšu do `.claude/settings.json`:
 
 | Udalosť | Matcher | Čo agent dostane |
 | --- | --- | --- |
-| `SessionStart` | `startup`, `resume`, `clear`, `compact` | brief, aj znova po kompaktácii |
+| `SessionStart` | `startup\|resume\|clear\|compact` | brief; po kompaktácii alebo resume kratší brief a id, ktoré už session dostala |
 | `SubagentStart` | | brief pre subagenta |
-| `PreToolUse` | `Edit\|Write` | záznamy riadiace `tool_input.file_path`, ktoré v tejto session ešte nezazneli |
+| `PreToolUse` | `Edit\|Write\|MultiEdit` | záznamy riadiace upravené súbory, ktoré v tejto session ešte nezazneli |
+| `PreToolUse` | `Bash` | zamietnutie `kontext trust`, inak nič |
 
-Každý hook spúšťa `kontext hook --host claude`, ktorý číta hook JSON zo stdin a odpovedá cez `additionalContext` (najviac 10 000 znakov). Hooky zdieľajú jeden rozpočet `session_budget_tokens` s `ctx_brief`, nikdy neblokujú nástroj, nikdy nevolajú model a pri akejkoľvek chybe skončia kódom 0 bez výstupu. `KONTEXT_HOOKS=off` alebo `[hooks] enabled = false` ich vypne.
+Každý hook spúšťa `kontext hook --host claude`, ktorý číta hook JSON zo stdin a odpovedá cez `hookSpecificOutput.additionalContext` (najviac 10 000 znakov). Hooky čerpajú z jedného rozpočtu `[hooks] session_budget_tokens` (6000), nikdy neblokujú úpravu, nikdy nevolajú model a pri akejkoľvek chybe skončia kódom 0 bez výstupu. `KONTEXT_HOOKS=off` alebo `[hooks] enabled = false` ich vypne.
 
-`kontext connect` pridá aj zákaz pre `kontext trust` spúšťaný cez Bash, takže agent za teba nepinne príkazy ani adaptéry (pozri [Bezpečnosť](../concepts/08-security.md#verify)).
+Hook na `Bash` zapíše každé `kontext connect claude --write`, s `--hooks` aj bez neho: zamietne `kontext trust` spustený agentom, takže agent za teba nepinne príkazy ani adaptéry (pozri [Bezpečnosť](../concepts/08-security.md#verify)).
 
 ## Slash príkazy
 
@@ -92,7 +77,7 @@ kontext connect skills --write        # .claude/skills/ a .agents/skills/kontext
 | `kontext-verify` | dá záznamom príkaz `verify`, ktorý tvrdenie dokáže, aby ho `kontext verify` vedel spustiť znova |
 | `kontext-merge` | nájde záznamy, ktoré hovoria to isté alebo si odporujú (`entries.related`), a navrhne jeden nahrádzajúci záznam na skupinu |
 
-Každý končí v lokálnom inboxe alebo v stagnutých súboroch, ktoré človek skontroluje a commitne; v `.ai/` sa pred tým nič nemení. Každý súbor nesie hash značku dodávaného textu: opätovné `connect skills --write` po aktualizácii obnoví súbory, ktoré nikto neupravil, a súbory upravené tímom ponechá, s poznámkou. Tie isté súbory fungujú v každom klientovi, ktorý číta rozloženie `SKILL.md` (`.agents/skills` pre Codex, `.claude/skills` pre Cursor a OpenCode).
+Každý končí v lokálnom inboxe alebo v stagnutých súboroch, ktoré človek skontroluje a commitne; v `.ai/` sa pred tým nič nemení. Každý súbor končí značkou `<!-- kontext-skill-hash: <hash> -->` dodávaného textu, z ktorého vznikol: opätovné `connect skills --write` po aktualizácii obnoví súbory, ktoré nikto neupravil, a súbory upravené tímom ponechá, s poznámkou; `--force` ich nahradí. Tie isté súbory fungujú v každom klientovi, ktorý číta rozloženie `SKILL.md` (`.agents/skills` pre Codex, `.claude/skills` pre Cursor a OpenCode).
 
 Keď verify príkaz nie je pinnutý, `kontext-audit` a `kontext-verify` ukážu príkaz a zastavia sa; `kontext trust` nikdy nespúšťajú.
 

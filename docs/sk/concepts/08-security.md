@@ -26,7 +26,7 @@ Adaptéry môžu spúšťať procesy a volať URL. Repozitár, ktorý si naklonu
 Čo dôvera pokrýva:
 
 - **Deklarovaný text, nie skripty, ktoré spúšťa.** Ak dôveryhodný adaptér spúšťa `./scripts/sync.sh`, pin pokrýva riadok, ktorý skript menuje, nie skript. Neskorší commit, ktorý skript zmení, sa nezachytí. Skripty, ktoré adaptér spúšťa z repozitára, posudzuj ako každý kód, ktorý spúšťaš.
-- **Voči procesu, ktorý vie upraviť `trust.toml`, platí na čestné slovo.** `kontext trust` bez terminálu nebeží, ale agent, ktorý vie alokovať terminál alebo zapísať tvoju konfiguráciu, pinne čokoľvek. `kontext connect` nainštaluje pravidlo hostiteľa, ktoré zakáže `kontext trust` spustený agentom (PreToolUse na Bash v Claude Code a Codexe); je to zábradlie, nie hranica.
+- **Voči procesu, ktorý vie upraviť `trust.toml`, platí na čestné slovo.** `kontext trust` bez terminálu nebeží, ale agent, ktorý vie alokovať terminál alebo zapísať tvoju konfiguráciu, pinne čokoľvek. `kontext connect` nainštaluje pravidlo hostiteľa, ktoré zakáže `kontext trust` spustený agentom (`PreToolUse` na `Bash` v Claude Code a Codexe, `beforeShellExecution` v Cursore); je to zábradlie, nie hranica.
 
 ## Verify príkazy sú hranica dôvery {#verify}
 
@@ -34,10 +34,11 @@ Pole `verify:` záznamu je shellový príkaz z repozitára a jeho spustenie je s
 
 - verify príkaz sa spustí, len keď `trust.toml` drží pin jeho textu: `sha256(cesta záznamu, NUL, príkaz)` pod `[repos.<slug>.verify]`,
 - `kontext trust --verify <id>` (alebo `--all`) pinuje len z interaktívneho terminálu a vypíše každý príkaz, ktorý pinuje. Žiadny MCP nástroj ani operácia `ctx_api` nepinuje,
-- bez pinu `kontext verify`, `drafts.verify` ani `ctx_verify` nič nespustia a vrátia `untrusted_verify` s príkazom, jeho hashom a riadkom, ktorým ho pinneš. Úprava príkazu pin zruší,
+- bez pinu `kontext verify`, `drafts.verify` ani `ctx_verify` nič nespustia a vrátia `untrusted_verify` s príkazom, jeho SHA-256 (`command_sha256`) a riadkom, ktorým ho pinneš (`hint`). Úprava príkazu pin zruší,
 - cez MCP sa nepinnutý príkaz vráti agentovi, ktorý ho spustí vo vlastnom sandboxe; výsledok sa zapíše ako `agent` pečiatka, nie ako prejdená kontrola,
-- príkaz beží s povoleným zoznamom premenných prostredia: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM` a mená z `[verify] pass_env` z tvojej používateľskej alebo lokálnej konfigurácie (zdieľaná konfigurácia nepridá žiadne),
-- `output_tail` sa rediguje, špinavý strom sa zapíše do denníka a skupina procesov sa zabije pri timeoute, keď stdout ostane otvorený 2 s po skončení shellu, a keď sa MCP požiadavka zruší alebo sa zatvorí stdin,
+- príkaz beží s povoleným zoznamom premenných prostredia: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM` a mená z `[verify] pass_env` z tvojej používateľskej konfigurácie (zdieľaná ani lokálna konfigurácia klonu nepridá žiadne),
+- cez MCP sa nespustí ani pinnutý príkaz, kým má súbor záznamu alebo jeho riadené cesty necommitnuté zmeny; inde sa taký beh označí `[dirty: <cesty>]` v dôvode riadku denníka,
+- `output_tail` sa rediguje a skupina procesov sa zabije pri timeoute, keď stdout ostane otvorený 2 s po skončení shellu, a keď sa MCP požiadavka zruší alebo sa zatvorí stdin,
 - `ctx_verify` má anotácie `destructiveHint: true` a `openWorldHint: true`, takže hostitelia sa pred volaním pýtajú.
 
 Čo pin **nepokrýva**:
@@ -74,8 +75,8 @@ Súbory `.env` (okrem `.example`, `.sample`, `.template`, `.dist`), SSH kľúče
 
 - `ctx_read` vracia len súbory vnútri repozitára a odmietne `.git/`, `.git-credentials` a `.ssh`.
 - `ctx_threads` číta len `claude:`, `codex:`, `superset:`, `last` a cesty pod známymi koreňmi prepisov.
-- `dir` je obmedzený na tento repozitár, jeho worktrees a submoduly.
-- Nástroje, ktoré zapisujú (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`, `ctx_confirm`, `ctx_challenge`), menia len pracovný strom a git index, nikdy históriu, nikdy remote. `ctx_inbox drop` odstráni len tvojich vlastných kandidátov.
+- `dir` nástrojov `ctx_verify`, `ctx_inbox` a `ctx_prepare_commit` je obmedzený na tento repozitár, jeho worktrees a submoduly.
+- Nástroje, ktoré zapisujú (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`, `ctx_confirm`, `ctx_challenge`), menia len pracovný strom a git index, nikdy históriu, nikdy remote. `ctx_prepare_commit drop` odmietne kandidáta, ktorého zapísal iný worktree.
 - `ctx_verify` spúšťa pinnutý príkaz (pozri [vyššie](#verify)); hostitelia by sa pred ním mali pýtať.
 - Príkazy, ktoré spúšťajú adaptéry, dostávajú argumenty ako vektor argumentov, nikdy cez shell. Chybové hlášky adaptérov nenesú query string ani userinfo.
 

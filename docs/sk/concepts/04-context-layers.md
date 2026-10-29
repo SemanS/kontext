@@ -56,7 +56,7 @@ Sekcia má vlastný malý rozpočet a plný brief ju vypustí ako prvú; cache s
 
 Na záznam sa odkazuje plným id (`[2026-09-28-adapters-are-configuration]`) alebo číslom ADR. Kratšia predpona by prestala byť jednoznačná, keď pribudne dlhšie id, a agenti tieto odkazy kopírujú do `supersedes` a `[[odkazov]]`.
 
-Claude Code, Codex a Cursor môžu dostať brief automaticky na začiatku session a riadiace záznamy pred úpravou: pozri [Hooky](../guides/09-hooks.md). Hooky a `ctx_brief` čerpajú z jedného rozpočtu `[hooks] session_budget_tokens` na session.
+Claude Code, Codex a Cursor môžu dostať brief automaticky na začiatku session a riadiace záznamy pred úpravou: pozri [Hooky](../guides/09-hooks.md). To, čo v jednej session vložia hooky, a `ctx_brief`, keď pozná session, čerpá z jedného rozpočtu `[hooks] session_budget_tokens` (6000).
 
 ### Aktuálnosť {#freshness}
 
@@ -103,6 +103,6 @@ Každý výsledok nesie URI. `ctx_read` ho vráti v úrovni, o ktorú agent pož
 - `ctx_why` drží každú sekciu krátku: najviac `limit` položiek na sekciu.
 - `ctx_threads` vracia prepis po častiach veľkých `budget_chars` (predvolene 20000), aby sa každá zmestila do jedného výsledku nástroja.
 - Sekcie adaptérov v briefe dostanú každá najviac tretinu zvyšného rozpočtu.
-- Hooky hostiteľov zdieľajú jeden rozpočet `[hooks] session_budget_tokens` s `ctx_brief`; hook pri úprave zopakuje len záznamy, ktoré v session ešte nezazneli alebo ktorých blob sa zmenil.
+- Hooky hostiteľov čerpajú z jedného rozpočtu `[hooks] session_budget_tokens` na session (aj `ctx_brief`, keď dostane `session_id` alebo `CLAUDE_SESSION_ID`); hook pri úprave zopakuje len záznamy, ktoré v session ešte nezazneli alebo ktorých blob sa zmenil.
 
 Počty tokenov sa odhadujú na štyri znaky na token, zámerne jednoducho a konzervatívne.

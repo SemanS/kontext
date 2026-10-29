@@ -6,7 +6,7 @@ kontext [-C <dir>] <command> [options]
 
 `-C, --dir <dir>` spustí kontext tak, akoby bol spustený v `<dir>` (funguje so všetkými príkazmi). `kontext <command> --help` vypíše voľby uvedené nižšie.
 
-**Návratový kód.** 0 pri úspechu, 1 pri chybách, 2, keď `drift --fail` alebo `ci --strict` vypíše záznam, 64 pri chybe použitia (neznáma voľba alebo chýbajúci argument).
+**Návratový kód.** 0 pri úspechu, 1 pri chybách, 2, keď `drift --fail` alebo `ci --strict` vypíše záznam, 3, keď `drift --fail` alebo `ci --strict` nevyriešil žiadny základ. Chybu použitia (neznáma voľba alebo chýbajúci argument) hlási parser argumentov so stavom 2.
 
 ## Zavedenie
 
@@ -56,7 +56,7 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 ### `kontext read <uri>`
 
-`-l, --level <0|1|2>` (predvolene 2). URI: `kx:<id>`, `file:<path>[#section]`, `git:<sha>`, `inbox:<id>`, obyčajná cesta v repozitári alebo URI adaptéra.
+`-l, --level <0|1|2>` (predvolene 2). URI: `kx:<id>`, `file:<path>[#section]`, `git:<sha>`, `inbox:<id>`, obyčajná cesta v repozitári alebo URI adaptéra. Text dlhší ako 32 000 znakov príde po častiach: `--part <n>` (1 = prvá) alebo `--offset <znaky>`.
 
 ### `kontext why <target>`
 
@@ -95,9 +95,9 @@ Spustí scan → history → render → wire → deepen. Opakované spustenie je
 
 Povie, že záznam už neplatí, a prečo. Námietka čaká v lokálnom inboxe; `prepare-commit` ponúkne vyradenie záznamu alebo zaznamenanie náhrady, ktorá ho nahrádza.
 
-### `kontext confirm <id…> [--because <text>] [--kind read] | --repair | --migrate-legacy`
+### `kontext confirm <id…> [--because <text>] [--kind read|agent] | --repair | --migrate-legacy`
 
-Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na aktuálny čas v UTC (`YYYY-MM-DDTHH:MM:SSZ`) v súbore každého záznamu, nič iné nezmení, pridá za každý záznam riadok do [denníka overení](../concepts/03-capture-and-review.md#verifications) a oboje stagne. Riadok je `read`, keď sú stdin aj stdout terminál, inak `agent`, a `bulk`, keď je ID viac ako päť. `--kind read` vynúti `read` aj bez terminálu a vypíše varovanie; terminál nie je dôkaz, že záznam čítal človek. `--because` uloží do denníka jednoriadkový dôvod. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
+Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowledge-store.md#checked) na aktuálny čas v UTC (`YYYY-MM-DDTHH:MM:SSZ`) v súbore každého záznamu, nič iné nezmení, pridá za každý záznam riadok do [denníka overení](../concepts/03-capture-and-review.md#verifications) a oboje stagne. Riadok je `read`, keď sú stdin aj stderr terminál, inak `agent`, a `bulk`, keď je ID viac ako päť. `--kind agent` zapíše pečiatku agenta; `--kind read` vynúti `read` aj bez terminálu a vypíše varovanie; terminál nie je dôkaz, že záznam čítal človek. `--because` uloží do denníka jednoriadkový dôvod. Odmietne neznámy alebo neaktívny záznam, záznam, ktorý ešte nie je commitnutý, a súbor s nestagnutými úpravami. Keď niektoré ID zlyhá, skončí so stavom 1.
 
 `--repair` prepíše `checked` každého aktívneho záznamu, ktorého súbor zaostáva za jeho najnovším potvrdením v denníku (merge vzal staršiu stranu), a súbor stagne; keď niektorý prepísať nejde, skončí so stavom 1.
 
@@ -105,7 +105,7 @@ Potvrdí, že záznamy stále platia: nastaví [`checked`](../concepts/02-knowle
 
 ### `kontext verify <id…> [--because <text>] [--json]`
 
-Spustí príkaz [`verify`](../concepts/03-capture-and-review.md#verify) každého záznamu cez `sh -c` z koreňa repozitára, ale len keď je jeho text pinnutý cez `kontext trust --verify`; nepinnutý príkaz odmietne s `untrusted_verify`, príkazom, jeho hashom a riadkom na pin. Príkaz dostane povolený zoznam premenných prostredia (pozri [`[verify]`](./03-configuration.md#verify)) a po `KONTEXT_VERIFY_TIMEOUT_SECS` (predvolene 120) sa zastaví spolu so skupinou procesov. Do denníka ide riadok `verify` s výsledkom, commitom a značkou špinavého stromu a stagne sa. Vypíše výsledok a pri zlyhaní zamaskovaný koniec výstupu; `--json` vypíše výsledky `drafts.verify`. Odmietne záznam bez príkazu a neaktívny záznam. Keď príkaz zlyhá alebo je ID odmietnuté, skončí so stavom 1.
+Spustí príkaz [`verify`](../concepts/03-capture-and-review.md#verify) každého záznamu cez `sh -c` z koreňa repozitára, ale len keď je jeho text pinnutý cez `kontext trust --verify`; nepinnutý príkaz odmietne s `untrusted_verify`, príkazom, jeho SHA-256 a riadkom na pin; na termináli `kontext verify` príkaz ukáže a opýta sa, či ho pinnúť. Príkaz dostane povolený zoznam premenných prostredia (pozri [`[verify]`](./03-configuration.md#verify)) a po `KONTEXT_VERIFY_TIMEOUT_SECS` (predvolene 120) sa zastaví spolu so skupinou procesov. Do denníka ide riadok `verify` s výsledkom a commitom a stagne sa; keď mal súbor záznamu alebo jeho riadené cesty necommitnuté zmeny, jeho dôvod končí `[dirty: <cesty>]`. Vypíše výsledok a pri zlyhaní zamaskovaný koniec výstupu; `--json` vypíše výsledky `drafts.verify`. Odmietne záznam bez príkazu a neaktívny záznam. Keď príkaz zlyhá alebo je ID odmietnuté, skončí so stavom 1.
 
 ### `kontext drift`
 
@@ -113,11 +113,11 @@ Záznamy, ktoré rozsah commitov nechal za sebou: aktívne záznamy, ktorých `p
 
 | Voľba | Predvolene | Význam |
 | --- | --- | --- |
-| `--base <rev>` | merge base `HEAD` s `origin/HEAD` (`origin/main`, `origin/master`), inak `HEAD` | začiatok rozsahu |
+| `--base <rev>` | merge base `HEAD` s `origin/HEAD` (`origin/main`, `origin/master`), upstreamom alebo predvolenou vetvou `checkout.defaultRemote`, inak `HEAD` | začiatok rozsahu |
 | `--head <rev>` | pracovný strom | koniec rozsahu; bez neho sa počítajú aj necommitnuté a nesledované zmeny |
 | `-k, --kind <druh>` | decision, convention, learning, incident | druhy na kontrolu (opakovateľné) |
 | `--json` | | výsledok `entries.drift` ako JSON |
-| `--fail` | | skončí so stavom 2, keď je vypísaný nejaký záznam: brána pre tímový kontrolný skript alebo CI, ktorá pokryje aj commity bez hookov (jj). Bez základu drift povie prečo a skončí nenulou |
+| `--fail` | | skončí so stavom 2, keď je vypísaný nejaký záznam: brána pre tímový kontrolný skript alebo CI, ktorá pokryje aj commity bez hookov (jj). Keď sa nevyriešil žiadny základ (`base_source: fallback-none`), drift povie prečo a `--fail` skončí so stavom 3 |
 
 ### `kontext inbox [list | show <id> | drop <id…> | verify <id> <príkaz|--clear>]`
 
@@ -143,18 +143,19 @@ Vytiahne znalosti z vlákien agentov do inboxu; bez vlákna vypíše vlákna toh
 | `--jobs <n>` | 3 | súbežné volania modelu |
 | `--list` | | vlákna len vypíše |
 | `--dry-run` | | zistenia vypíše, nič nezachytí |
+| `--force` | | spracuje vlákno `--claude` alebo `--codex`, ktoré bežalo v inom repozitári (inak ho odmietne) |
 
 ### `kontext check [--staged]`
 
-Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich na tajné údaje. Neparsovateľný záznam, neplatný vzor `secrets.redact` a nejednoznačné `supersedes` sú chyby; jednostranné nahradenie, neparsovateľné alebo budúce riadky denníka a neznáme kľúče konfigurácie sú varovania. Pri chybách skončí so stavom 1.
+Zvaliduje všetky záznamy (alebo presne to, čo je stagnuté) a preskenuje ich na tajné údaje. Neparsovateľný záznam, nejednoznačný odkaz, duplicitné číslo ADR a jednostranné nahradenie (nástupca je aktívny, starý súbor stále tvrdí niečo iné) sú chyby; odkaz, ktorý je prefixom namiesto id, a neparsovateľné alebo budúce riadky denníka sú varovania. Pri chybách skončí so stavom 1.
 
 ### `kontext repair [--dry-run]`
 
-Dopíše chýbajúcu stranu jednostranných nahradení (`status` a `superseded_by` nahradeného záznamu, ako jednotlivé riadky) a stagne ju. `--dry-run` úpravy len vypíše.
+Dopíše chýbajúcu stranu jednostranných nahradení (`status` a `superseded_by` nahradeného záznamu, ako jednotlivé riadky) a stagne ju. `--dry-run` úpravy len vypíše. Stav 1, keď niektorý súbor preskočil alebo sa nedal naplánovať (nestagnuté úpravy, žiadne miesto pre status).
 
 ### `kontext ci [--base <rev>] [--format text|markdown] [--strict]`
 
-Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad commitnutým rozsahom `base..HEAD` (`--base` má rovnaké predvolenie ako pri `drift`). `--format markdown` sa hodí do súhrnu jobu na GitHube alebo do komentára k pull requestu. Pri chybách kontroly skončí so stavom 1; s `--strict` aj so stavom 2, keď drift vypíše nejaký záznam, inak je drift len varovanie (stav 0). Pozri [Validácia znalostí v CI](../guides/07-ci.md).
+Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad commitnutým rozsahom `base..HEAD` (`--base` má rovnaké predvolenie ako pri `drift`). `--format markdown` sa hodí do súhrnu jobu na GitHube alebo do komentára k pull requestu. Pri chybách kontroly skončí so stavom 1; s `--strict` aj so stavom 2, keď drift vypíše nejaký záznam, a 3, keď sa nevyriešil základ, inak je drift len varovanie (stav 0). Pozri [Validácia znalostí v CI](../guides/07-ci.md).
 
 ## Git hooky
 
@@ -164,7 +165,7 @@ Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad c
 | `kontext hooks uninstall [--hooks-dir <dir>]` | odstráni bloky kontextu, obnoví zreťazené originály |
 | `kontext hooks status` | ktoré hooky obsahujú blok |
 | `kontext hook <name> [args…]` | vstupný bod, ktorý volajú hooky (`pre-commit`, `prepare-commit-msg`, `post-commit`, `post-merge`, `post-rewrite`) |
-| `kontext hook --host claude\|codex\|cursor` | vstupný bod pre hooky hostiteľov agentov: číta hook JSON hostiteľa zo stdin a vypíše odpoveď v jeho tvare; fail-open (pri akejkoľvek chybe kód 0 bez výstupu). Pozri [Hooky](../guides/09-hooks.md) |
+| `kontext hook --host claude\|codex\|cursor` | vstupný bod pre hooky hostiteľov agentov: číta hook JSON hostiteľa zo stdin a vypíše odpoveď v jeho tvare; fail-open (pri akejkoľvek chybe kód 0 bez výstupu). `kontext hook <name>` bez `--host` ostáva vstupným bodom git hookov. Pozri [Hooky](../guides/09-hooks.md) |
 
 ## Adaptéry
 
@@ -175,8 +176,8 @@ Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad c
 | `kontext adapters inspect <name>` | nástroje MCP adaptéra a ich vstupné schémy |
 | `kontext adapters add <preset> [--scope user\|repo\|local] [--var k=v]… [--force]` | pripojí preset do vrstvy konfigurácie |
 | `kontext presets [<name>]` | vypíše presety alebo jeden z nich |
-| `kontext trust` | dôveruje adaptérom, `[vars]` a `project.name` deklarovaným v zdieľanej konfigurácii (najprv ich ukáže); len z terminálu; starý FNV pin nahradí, nikdy nepovýši |
-| `kontext trust --verify [<id>\|--all]` | pinne príkaz `verify` záznamu alebo všetkých záznamov, po vypísaní každého príkazu; len z terminálu |
+| `kontext trust [--yes]` | dôveruje adaptérom, `[vars]` a `project.name` deklarovaným v zdieľanej konfigurácii (najprv ich ukáže); len z terminálu (stdin a stderr), inak stav 1; starý FNV pin nahradí, nikdy nepovýši. `--yes` vynechá otázku, nie kontrolu terminálu |
+| `kontext trust --verify [<id>\|--all] [--yes]` | pinne príkazy `verify`, ktoré ešte nie sú pinnuté: každý vypíše a opýta sa, s `<id>` len jeden záznam, s `--all` všetky po jednom potvrdení; len z terminálu |
 | `kontext outbox [list \| flush [--quiet]]` | čakajúce doručenia; doruč hneď |
 | `kontext outbox retry` | vráti eventy z dead-letter súboru (`outbox.dead.jsonl`) do frontu |
 | `kontext sync [--all]` | zaradí udalosti `sync` pre znalosti v `HEAD` (`--all`: každý záznam raz) |
@@ -186,14 +187,14 @@ Pre CI job: `kontext check` nad všetkými záznamami plus `kontext drift` nad c
 | Príkaz | Význam |
 | --- | --- |
 | `kontext mcp` | spustí MCP server na stdio |
-| `kontext connect <target> [--write] [--hooks]` | `claude`, `claude-hooks`, `skills`, `codex`, `cursor`, `opencode`, `agents-md`; `--hooks` pridá hooky hostiteľa pre `claude`, `codex` a `cursor` |
+| `kontext connect <target> [--write] [--hooks] [--force]` | `claude`, `claude-hooks`, `skills`, `codex`, `cursor`, `opencode`, `agents-md`; `--hooks` pridá hooky hostiteľa pre `claude`, `codex` a `cursor`; `--force` nahradí skills, ktoré tím upravil |
 | `kontext call <tool> ['<json>']` | zavolá nástroj agenta lokálne, napr. `kontext call ctx_why '{"target":"src/api"}'` |
 
 ## Údržba
 
 | Príkaz | Význam |
 | --- | --- |
-| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, záznamy na prehodnotenie, záznamy po termíne `review_by`, inbox, postup initu, adaptéry, hooky, outbox a jeho dead letters, neplatné vzory redakcie |
+| `kontext status` | identita, vrstvy konfigurácie, úložisko, index, záznamy na prehodnotenie, záznamy po termíne `review_by`, inbox, postup initu, adaptéry, git hooky, outbox a jeho dead letters, varovania (medzi nimi neplatný vzor redakcie) |
 | `kontext reindex` | zostaví lokálny vyhľadávací index od nuly |
 
 ## Premenné prostredia

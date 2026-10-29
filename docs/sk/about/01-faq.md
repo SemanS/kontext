@@ -52,7 +52,7 @@ Binárka sa pre Windows zbuilduje a brief, vyhľadávanie, MCP server ani CLI sh
 
 | Kam | Čo | Kto zapisuje |
 | --- | --- | --- |
-| `.ai/` (commitnuté) | záznamy, `kontext.toml`, `README.md`, `.gitattributes`, `confirmations.log`, postup initu | `init`, zachytenia, ktoré povýšiš, `confirm`, `verify`, `repair` |
+| `.ai/` (commitnuté) | záznamy, `kontext.toml`, `README.md`, `.gitattributes`, `confirmations.log`, `init-covered.log` (commity, ktoré pokryli úlohy `dec:`) | `init`, zachytenia, ktoré povýšiš, `confirm`, `verify`, `repair` |
 | koreň repozitára (commitnuté) | označený blok v `AGENTS.md`, import `@AGENTS.md` v existujúcom `CLAUDE.md`, `.mcp.json`, `.cursor/mcp.json`, `opencode.json` | `kontext connect … --write` |
 | `.claude/`, `.agents/`, `.codex/`, `.cursor/` (commitnuté) | hooky v `settings.json` a zákaz pre `kontext trust`, `skills/kontext-*/SKILL.md`, `hooks.json` | `kontext connect … --write`, `connect skills`, `--hooks` |
 | git hooky (`.git/hooks` alebo `core.hooksPath`) | označený blok v `pre-commit`, `prepare-commit-msg`, `post-commit`, `post-merge`, `post-rewrite` | `init`, `kontext hooks install` |

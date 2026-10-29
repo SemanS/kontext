@@ -14,15 +14,16 @@ Later layers win. Tables are merged key by key; arrays are replaced.
 | 4 | `<repo>/.kontext.toml` or `<repo>/<store.dir>/kontext.toml` (default `.ai/kontext.toml`) | the team (committed) | only after `kontext trust` |
 | 5 | `<git-common-dir>/kontext/config.toml` | this clone | trusted |
 
-The user directory is `$KONTEXT_CONFIG_DIR`, else `$XDG_CONFIG_HOME/kontext`, else `~/.config/kontext`. `kontext status` lists the layers that were loaded. Unknown keys and a key that a later layer shadows are reported as warnings by `kontext status` and `kontext check`.
+The user directory is `$KONTEXT_CONFIG_DIR`, else `$XDG_CONFIG_HOME/kontext`, else `~/.config/kontext`. `kontext status` lists the layers that were loaded.
 
-A few keys take only your own layers (2, 3 and 5), so a cloned repository cannot set them: `[verify] pass_env`. Two lists are joined across layers instead of replaced: `secrets.redact` and `secrets.allow`. Shared `[vars]` never override the `vars` of an adapter declared in your own layers.
+One key is read only from your user layers (2 and 3), so a cloned repository cannot set it: `[verify] pass_env`. Two lists are joined across layers instead of replaced: `secrets.redact` and `secrets.allow`. Shared `[vars]` never override the `vars` of an adapter declared in your own layers.
 
 ## `[project]`
 
 | Key | Default | |
 | --- | --- | --- |
 | `name` | set by `kontext init` from the root manifest; otherwise the remote's repository name | shown in the brief; `{{project.name}}` in templates. In the shared config it must be a slug and is covered by the trust pin |
+| `description` | | |
 
 ## `[store]` {#store}
 
@@ -91,7 +92,8 @@ Globs follow git conventions: a pattern without `/` matches at any depth, a lead
 | --- | --- | --- |
 | `adapters` | `always` | when `ctx_search` and `kontext search` ask the adapters with a `search` op: `always`, or `fallback` — only when the local sources found fewer than `min_local_hits` hits. Naming an adapter in `sources`, or passing `adapters: true` (`--adapters`), always asks |
 | `min_local_hits` | `3` | the local hits that are enough in `fallback` mode |
-| `weights` | entries above doc chunks and commits | a table of multipliers per source (`entry`, `doc`, `commit`, or an adapter name) applied to the score; the defaults are set on the graded eval set (`tests/eval/qrels.tsv`), change them only with a measurement |
+
+The local sources are weighed before they are fused: entries 1.0, doc chunks 0.7, commits 0.6, a nested store's entries 0.95. These weights are built in and not configurable yet; the keys `weight_entries`, `weight_docs` and `weight_commits` are planned. Adapters keep their own `weight` ([adapter configuration](../adapters/02-configuration.md)).
 
 `fallback` saves an adapter's round trip when the local answer is already there (on the evaluation
 set, a hub with one second of latency added about a second to every search in `always` mode and nothing
@@ -112,11 +114,12 @@ why `always` stays the default.
 | `validate` | `true` | validate staged entries in pre-commit |
 | `trailers` | `true` | add trailers in prepare-commit-msg |
 | `remind_inbox` | `true` | mention inbox candidates touching staged paths |
-| `enabled` | `true` | agent host hooks (`kontext hook --host`) answer; `false` (or `KONTEXT_HOOKS=off`) makes them print nothing. They run only where `kontext connect <host> --hooks` installed them |
-| `session_budget_tokens` | built in (`kontext status` shows it) | one budget for everything kontext injects into a session: `ctx_brief` and the host hooks draw from it; not a second budget |
-| `stop_note` | `false` | a Stop hook that adds a one-line capture reminder as `additionalContext`; it never blocks |
+| `enabled` | `true` | agent host hooks (`kontext hook --host`) answer; `false` (or `KONTEXT_HOOKS=off`, also `0`, `false`, `no`) makes them print nothing. They run only where `kontext connect <host> --hooks` installed them |
+| `session_budget_tokens` | `6000` | the tokens kontext may inject into one session: every hook answer, and `ctx_brief` when it knows the session (`session_id`, `CLAUDE_SESSION_ID`) |
+| `edit_budget_tokens` | `900` | the most one edit answer carries (within what the session has left) |
+| `stop_note` | `false` | answer a Stop hook with one line: the governing entries told this session and the tokens spent. `kontext connect` does not install a Stop hook; it never blocks |
 
-The first three keys govern the git hooks; the last three the agent host hooks (see [Hooks](../guides/09-hooks.md)).
+The first three keys govern the git hooks; the last four the agent host hooks (see [Hooks](../guides/09-hooks.md)). Every layer may set them; later layers win.
 
 ## `[secrets]`
 
@@ -124,7 +127,7 @@ The first three keys govern the git hooks; the last three the agent host hooks (
 | --- | --- | --- |
 | `scan` | `store` | `store` (knowledge files), `staged` (every staged text file) or `off` |
 | `allow` | `[]` | regexes of lines to ignore; joined across layers |
-| `redact` | `[]` | regexes of values masked in agent threads and in what is distilled from them (a client's name, an integration id); keep them in a private layer (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`). Your patterns are joined with the repository's, never replaced by them. A pattern that does not compile is an error in `status` and `check`, and distill, threads and autopilot refuse to send anything to a model until it is fixed |
+| `redact` | `[]` | regexes of values masked in agent threads and in what is distilled from them (a client's name, an integration id); keep them in a private layer (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`). Your patterns are joined with the repository's, never replaced by them. A pattern that does not compile is a warning in `kontext status`, and distill, threads and autopilot refuse to send anything to a model until it is fixed |
 
 ## `[init]`
 
@@ -139,8 +142,8 @@ The first three keys govern the git hooks; the last three the agent host hooks (
 | `task_inline_chars` | `24000` | attached source per autopilot task |
 | `jobs` | `2` | autopilot parallelism; `--jobs` overrides it |
 | `llm` | | default autopilot adapter |
-| `decision_words` | `[]` | extra words that mark a decision-shaped commit, in your team's language (for example `rozhodli`, `namiesto`, `prechádzame`); added to the language-neutral signals |
-| `bot_authors` | `[]` | extra author names or emails left out of history scoring, besides the built-in bots (dependabot, renovate, `*[bot]`) |
+| `decision_words` | `{}` | a table of extra word stems that mark a decision-shaped commit: `strong`, `rationale` and `contrast` lists, added to English and to the bundled words of the detected language (Slovak, Czech), for example `decision_words = { strong = ["rozhodli"], contrast = ["namiesto"] }` |
+| `bot_authors` | `[]` | extra commit authors never mined for decisions (a substring of the author, any case), besides the built-in bots (`[bot]`, renovate, dependabot, github-actions, greenkeeper, snyk-bot) |
 
 ## `[vars]`
 

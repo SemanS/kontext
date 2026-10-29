@@ -52,7 +52,7 @@ The binary builds for Windows, and the brief, search, the MCP server and the CLI
 
 | Where | What | Written by |
 | --- | --- | --- |
-| `.ai/` (committed) | entries, `kontext.toml`, `README.md`, `.gitattributes`, `confirmations.log`, the init progress | `init`, captures you promote, `confirm`, `verify`, `repair` |
+| `.ai/` (committed) | entries, `kontext.toml`, `README.md`, `.gitattributes`, `confirmations.log`, `init-covered.log` (the commits `dec:` tasks covered) | `init`, captures you promote, `confirm`, `verify`, `repair` |
 | repository root (committed) | a marked block in `AGENTS.md`, an `@AGENTS.md` import in an existing `CLAUDE.md`, `.mcp.json`, `.cursor/mcp.json`, `opencode.json` | `kontext connect … --write` |
 | `.claude/`, `.agents/`, `.codex/`, `.cursor/` (committed) | `settings.json` hooks and the deny rule for `kontext trust`, `skills/kontext-*/SKILL.md`, `hooks.json` | `kontext connect … --write`, `connect skills`, `--hooks` |
 | git hooks (`.git/hooks` or `core.hooksPath`) | a marked block in `pre-commit`, `prepare-commit-msg`, `post-commit`, `post-merge`, `post-rewrite` | `init`, `kontext hooks install` |

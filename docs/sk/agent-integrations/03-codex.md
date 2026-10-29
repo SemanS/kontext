@@ -8,9 +8,15 @@ Codex načítava MCP servery z `~/.codex/config.toml` (z `$CODEX_HOME/config.tom
 [mcp_servers.kontext]
 command = "kontext"
 args = ["mcp"]
-# read tools run without asking; ctx_verify runs a shell command, ctx_init can write the store
-# skeleton, ctx_api reaches every operation: those ask
-default_tools_approval_mode = "approve"
+# Read tools and the tools that write only this clone's inbox and working tree are approved
+# below. ctx_verify runs the `verify:` command an entry names, ctx_init can bootstrap .ai/ and
+# ctx_api reaches every operation, so those ask, as do tools kontext exposes from adapters.
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.kontext.tools.ctx_brief]
+approval_mode = "approve"
+
+# … jedna tabuľka na každý nástroj kontextu: approve pre čítacie nástroje a inbox …
 
 [mcp_servers.kontext.tools.ctx_verify]
 approval_mode = "prompt"
@@ -23,11 +29,11 @@ approval_mode = "prompt"
 ```
 
 ```sh
-kontext connect codex            # prints the snippet
-kontext connect codex --write    # appends it, or adds the approval modes to an existing entry (a timestamped backup is kept)
+kontext connect codex            # vypíše úryvok
+kontext connect codex --write    # pripojí ho, alebo doplní chýbajúce tabuľky nástrojov do existujúcej položky (s časovo označenou zálohou)
 ```
 
-Nástroje, ktoré cez kontext vystavujú adaptéry, dostanú tiež `approval_mode = "prompt"`. Kde nainštalovaný Codex nevie nastaviť schvaľovanie po nástrojoch, `connect codex` to povie a rozhoduješ pri každom volaní.
+Predvolené pre server je `prompt`, takže nástroj bez vlastnej tabuľky, napríklad ten, ktorý cez kontext vystavuje adaptér, sa pýta. Existujúca položka si ponechá svoje `default_tools_approval_mode` aj tabuľky nástrojov, ktoré si zmenil; keď je v nej `approve`, `connect codex` upozorní, že vystavené nástroje, a v Codexe bez `approval_mode` po nástrojoch aj `ctx_verify`, `ctx_api` a `ctx_init`, by potom bežali bez opýtania.
 
 ## Schvaľovanie
 
@@ -60,7 +66,7 @@ Urob to v každom repozitári, kde má Codex kontext používať. Codex sa riadi
 
 ## Hooky
 
-Codex spúšťa hooky z `.codex/hooks.json`. `kontext connect codex --hooks --write` nainštaluje SessionStart a hook pred úpravou cez `apply_patch`, oba spúšťajú `kontext hook --host codex`; odpoveď ostane v rámci približne 2 500 tokenov a delí si rozpočet session s `ctx_brief`. Pridá aj pravidlo PreToolUse, ktoré zakáže `kontext trust` spustený cez shell. Opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md).
+Codex spúšťa hooky z `.codex/hooks.json`, a to len s `[features] codex_hooks = true` vo svojom `config.toml` (`connect` to vypíše a nezapíše). `kontext connect codex --hooks --write` nainštaluje `SessionStart` (matcher `startup|resume|clear|compact`) a `PreToolUse` s matcherom `apply_patch|Edit|Write`, oba spúšťajú `kontext hook --host codex`; odpoveď ostane v rámci približne 2 500 tokenov a rozpočtu session. Každé `--write` pridá aj hook `PreToolUse` na `Bash`, ktorý zamietne `kontext trust` spustený cez shell. Opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md).
 
 ## Skills
 

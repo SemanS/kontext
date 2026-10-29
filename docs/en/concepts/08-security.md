@@ -26,7 +26,7 @@ Adapters can start processes and call URLs. A repository you clone must not be a
 What trust covers:
 
 - **The declared text, not the scripts it starts.** If a trusted adapter runs `./scripts/sync.sh`, the pin covers the line that names the script, not the script. A later commit that changes the script is not caught. Review scripts an adapter starts from the repository as you would any code you run.
-- **Honour-based against a process that can edit `trust.toml`.** `kontext trust` refuses to run without a terminal, but an agent that can allocate a terminal or write your config can pin anything. `kontext connect` installs a host rule that denies `kontext trust` run by the agent (PreToolUse on Bash in Claude Code and Codex); it is a guard rail, not a boundary.
+- **Honour-based against a process that can edit `trust.toml`.** `kontext trust` refuses to run without a terminal, but an agent that can allocate a terminal or write your config can pin anything. `kontext connect` installs a host rule that denies `kontext trust` run by the agent (`PreToolUse` on `Bash` in Claude Code and Codex, `beforeShellExecution` in Cursor); it is a guard rail, not a boundary.
 
 ## Verify commands are a trust boundary {#verify}
 
@@ -34,10 +34,11 @@ An entry's `verify:` field is a shell command from the repository, and running i
 
 - a verify command runs only when `trust.toml` holds a pin of its text: `sha256(entry path, NUL, command)` under `[repos.<slug>.verify]`,
 - `kontext trust --verify <id>` (or `--all`) pins from an interactive terminal only and prints each command it pins. No MCP tool and no `ctx_api` operation pins,
-- without a pin, `kontext verify`, `drafts.verify` and `ctx_verify` run nothing and return `untrusted_verify` with the command, its hash and the line to pin it. Editing the command drops the pin,
+- without a pin, `kontext verify`, `drafts.verify` and `ctx_verify` run nothing and return `untrusted_verify` with the command, its SHA-256 (`command_sha256`) and the line to pin it (`hint`). Editing the command drops the pin,
 - over MCP an unpinned command is returned to the agent, which runs it in its own sandbox; the result is recorded as an `agent` stamp, not as a passed check,
-- the command runs with an environment allowlist: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM`, plus the names in `[verify] pass_env` from your user or local config (the shared config cannot add any),
-- `output_tail` is redacted, a dirty tree is recorded in the ledger, and the process group is killed at the timeout, when stdout stays open 2 s after the shell exits, and when the MCP request is cancelled or stdin closes,
+- the command runs with an environment allowlist: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM`, plus the names in `[verify] pass_env` from your user config (the shared and the clone-local config cannot add any),
+- over MCP a pinned command is not run either while the entry's file or governed paths have uncommitted changes; elsewhere such a run is marked `[dirty: <paths>]` in the ledger line's reason,
+- `output_tail` is redacted, and the process group is killed at the timeout, when stdout stays open 2 s after the shell exits, and when the MCP request is cancelled or stdin closes,
 - `ctx_verify` is annotated `destructiveHint: true` and `openWorldHint: true`, so hosts ask before calling it.
 
 What the pin does **not** cover:
@@ -74,8 +75,8 @@ Every staged knowledge file is scanned by the pre-commit hook; high-confidence f
 
 - `ctx_read` only returns files inside the repository, and refuses `.git/`, `.git-credentials` and `.ssh`.
 - `ctx_threads` reads only `claude:`, `codex:`, `superset:`, `last` and paths under known transcript roots.
-- `dir` is confined to this repository, its worktrees and its submodules.
-- Tools that write (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`, `ctx_confirm`, `ctx_challenge`) modify the working tree and the git index only, never history, never remotes. `ctx_inbox drop` removes only your own candidates.
+- `dir` of `ctx_verify`, `ctx_inbox` and `ctx_prepare_commit` is confined to this repository, its worktrees and its submodules.
+- Tools that write (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`, `ctx_confirm`, `ctx_challenge`) modify the working tree and the git index only, never history, never remotes. `ctx_prepare_commit drop` refuses a candidate another worktree wrote.
 - `ctx_verify` runs a pinned command (see [above](#verify)); hosts should ask before it.
 - Commands run by adapters receive arguments as an argument vector, never through a shell. Adapter error messages carry no query string or userinfo.
 

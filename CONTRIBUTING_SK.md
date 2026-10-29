@@ -44,10 +44,10 @@ Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/`. Oba stromy si sú
 
 | Cesta | Čo |
 | --- | --- |
-| `src/main.rs`, `src/cli.rs` | tenký vstup binárky a CLI (chyby použitia končia kódom 64) |
+| `src/main.rs`, `src/cli.rs` | tenký vstup binárky a CLI (kód 2 pri chybe použitia alebo vypísanom drifte, 3 pri drifte bez základu) |
 | `src/lib.rs`, `src/application.rs` | súkromné moduly enginu a stabilná fasáda na vloženie |
 | `src/app.rs` | kontext procesu: repozitár, konfigurácia, register adaptérov a vyhľadávací index |
-| `src/api.rs`, `src/api_read.rs`, `src/api_write.rs` | verzovaná aplikačná služba zdieľaná CLI, MCP a knižnicou |
+| `src/api.rs`, `src/api/schema.rs`, `src/api_read.rs`, `src/api_write.rs` | verzovaná aplikačná služba zdieľaná CLI, MCP a knižnicou; schémy vstupov pre `api.describe` |
 | `src/mcp.rs`, `src/tools.rs` | MCP server (obe éry protokolu) a nástroje pre agentov |
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | `src/model.rs` | výsledky z indexu a adaptérov, spojené a v rozpočte |
@@ -64,13 +64,14 @@ Anglické zdrojáky sú v `docs/en/`, slovenské v `docs/sk/`. Oba stromy si sú
 | `src/threads.rs`, `src/distill.rs` | prepisy agentov a destilácia znalostí z nich |
 | `src/connect.rs`, `src/skills.rs` | pripájanie klientov agentov, hooky hostiteľov a skills |
 | `src/adapters/` | register, drivery, MCP klient, mapovanie výsledkov |
-| `src/init/` | scan, history, render, deepen, symboly |
-| `src/hooks.rs`, `src/events.rs` | git hooky a hooky hostiteľov agentov; outbox |
+| `src/init/` | scan, history, render, deepen, symboly, log pokrytých commitov (`init-covered.log`) |
+| `src/hooks.rs`, `src/events.rs` | git hooky; outbox |
+| `src/hook.rs`, `src/lint.rs` | hooky hostiteľov agentov (`kontext hook --host`); lint inštrukcií, ktorý hooku zadrží text záznamu |
 | `src/config.rs`, `src/template.rs`, `src/jpath.rs` | konfigurácia, šablóny, JSON cesty |
 | `src/presets.rs`, `presets/` | presety adaptérov (obyčajné TOML) |
 | `src/util.rs` | drobné spoločné pomocníky |
 | `skills/` | recepty `SKILL.md` skompilované do binárky |
-| `tests/` | integračné testy: `cli.rs` (end to end), `api.rs`, `drift.rs`, `maintenance.rs`, `eval.rs` s `tests/eval/` |
+| `tests/` | integračné testy: `cli.rs` (end to end), `api.rs`, `api_contract.rs` (s `api_contract.snap`), `drift.rs`, `hooks.rs`, `init.rs`, `maintenance.rs`, `mcp.rs`, `eval.rs` s `tests/eval/`; spoločné pomocníky sandboxu v `tests/common/` |
 | `docs/` | dokumentačný web (VitePress) |
 
 Tabuľku pregeneruj, keď pridáš alebo odstrániš modul: `ls src src/*/` a riadok `//!` na začiatku každého súboru.
@@ -89,7 +90,7 @@ Tabuľku pregeneruj, keď pridáš alebo odstrániš modul: `ls src src/*/` a ri
 - **Najprv červený.** Prvý commit opravy je test alebo eval scenár, ktorý na súčasnom kóde zlyhá; jeho zlyhávajúci výstup vlož do pull requestu. Oprava príde v ďalšom commite.
 - **Očakávania evalu píše iná session.** Kto implementuje zmenu poradia, briefu alebo overenia, nepíše jej eval očakávania ani štítky qrels; napíše ich iná session (alebo človek), pred zmenou, a commitnú sa prvé.
 - **Jeden vlastník na horúci súbor.** `src/ops.rs`, `src/api_write.rs`, `src/store.rs`, `src/verification.rs` a `src/config.rs` mení naraz len jedna session alebo pull request. Disjunktné moduly sa dajú robiť paralelne.
-- **Brány vydania.** Tag sa publikuje až po prejdení fmt, clippy, testov na Linuxe a macOS, MSRV jobu (číta `rust-version`), buildu dokumentácie, parity EN/SK, `kontext ci` nad vlastným `.ai/` tohto repozitára a snapshotu API.
+- **Brány vydania.** Vydanie sa taguje len zo zeleného `main`: fmt, clippy, testy na Linuxe a macOS (medzi nimi snapshot kontraktu API), MSRV job (číta `rust-version`), eval sada, build dokumentácie, parita EN/SK, `kontext ci` nad vlastným `.ai/` tohto repozitára a cargo deny. Workflow vydania tag pred akýmkoľvek buildom znova otestuje na Linuxe a macOS. Pozri [RELEASE.md](RELEASE.md).
 
 ## Pridanie presetu
 

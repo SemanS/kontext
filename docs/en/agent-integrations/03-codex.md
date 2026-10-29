@@ -8,9 +8,15 @@ Codex reads MCP servers from `~/.codex/config.toml` (`$CODEX_HOME/config.toml` w
 [mcp_servers.kontext]
 command = "kontext"
 args = ["mcp"]
-# read tools run without asking; ctx_verify runs a shell command, ctx_init can write the store
-# skeleton, ctx_api reaches every operation: those ask
-default_tools_approval_mode = "approve"
+# Read tools and the tools that write only this clone's inbox and working tree are approved
+# below. ctx_verify runs the `verify:` command an entry names, ctx_init can bootstrap .ai/ and
+# ctx_api reaches every operation, so those ask, as do tools kontext exposes from adapters.
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.kontext.tools.ctx_brief]
+approval_mode = "approve"
+
+# … one table per kontext tool: approve for the read and inbox tools …
 
 [mcp_servers.kontext.tools.ctx_verify]
 approval_mode = "prompt"
@@ -24,10 +30,10 @@ approval_mode = "prompt"
 
 ```sh
 kontext connect codex            # prints the snippet
-kontext connect codex --write    # appends it, or adds the approval modes to an existing entry (a timestamped backup is kept)
+kontext connect codex --write    # appends it, or adds the missing tool tables to an existing entry (a timestamped backup is kept)
 ```
 
-Tools that adapters expose through kontext also get `approval_mode = "prompt"`. Where the installed Codex cannot set approval per tool, `connect codex` says so and you decide per call.
+The server default is `prompt`, so a tool without its own table, such as one an adapter exposes through kontext, asks. An existing entry keeps its `default_tools_approval_mode` and the tool tables you changed; when it says `approve`, `connect codex` warns that exposed tools, and a Codex without per-tool `approval_mode`, would then run `ctx_verify`, `ctx_api` and `ctx_init` without asking.
 
 ## Approvals
 
@@ -60,7 +66,7 @@ Do this in every repository where Codex should use kontext. Codex follows `AGENT
 
 ## Hooks
 
-Codex runs hooks from `.codex/hooks.json`. `kontext connect codex --hooks --write` installs SessionStart and a pre-edit hook on `apply_patch`, both running `kontext hook --host codex`; the answer stays within about 2 500 tokens and shares the session budget with `ctx_brief`. It also adds a PreToolUse rule that denies `kontext trust` run through the shell. Opt-in until the A/B report; see [Hooks](../guides/09-hooks.md).
+Codex runs hooks from `.codex/hooks.json`, and only with `[features] codex_hooks = true` in its `config.toml` (`connect` prints this and does not write it). `kontext connect codex --hooks --write` installs `SessionStart` (matcher `startup|resume|clear|compact`) and `PreToolUse` with matcher `apply_patch|Edit|Write`, both running `kontext hook --host codex`; an answer stays within about 2 500 tokens and the session budget. Any `--write` also adds a `PreToolUse` hook on `Bash` that denies `kontext trust` run through the shell. Opt-in until the A/B report; see [Hooks](../guides/09-hooks.md).
 
 ## Skills
 

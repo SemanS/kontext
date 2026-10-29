@@ -5,7 +5,7 @@ Releases are cut from `main` by pushing a version tag; CI tests the tag, builds 
 ## Checklist
 
 1. Make sure `main` is green (`ci` workflow: tests on Linux and macOS, MSRV, clippy, eval, cargo deny) and the docs build (`cd docs && npm run docs:build`).
-2. Update the version in `Cargo.toml` (`version = "0.2.1"`) and run `cargo build` so `Cargo.lock` follows.
+2. Update the version in `Cargo.toml` (`version = "0.2.1"`) and run `cargo build` so `Cargo.lock` follows. The plugin manifests (`.claude-plugin/`, `.codex-plugin/`, `.mcp.json`, `hooks/`) embed the version: regenerate them with `cargo run -- connect plugin --write` (or `KONTEXT_REGEN_PLUGINS=1 cargo test plugin_files`), or the plugin tests fail.
 3. Add the release to the changelog in both languages: `docs/en/about/02-changelog.md` and `docs/sk/about/02-changelog.md`.
 4. Run the release check against the candidate (see below) and read what it reports.
 5. Commit: `git commit -am "chore(release): v0.2.1"`.

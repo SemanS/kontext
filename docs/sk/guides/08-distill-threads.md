@@ -58,7 +58,7 @@ Pracovné vlákna nesú to, z čoho je projekt: mená a adresy ľudí, vložené
   redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
   ```
 
-Vzor, ktorý sa nedá skompilovať, zastaví distill, `ctx_threads` aj autopilota skôr, než sa čokoľvek odošle; `kontext status` a `kontext check` ho pomenujú. Chybný vzor sa nikdy ticho nezahodí.
+Vzor, ktorý sa nedá skompilovať, zastaví distill, `ctx_threads` aj autopilota skôr, než sa čokoľvek odošle; `kontext status` ho pomenuje. Chybný vzor sa nikdy ticho nezahodí.
 
 Čo sa **nemaskuje**: mená ľudí a firiem, ktorým nezodpovedá žiadny vzor, adresy ulíc, identifikátory vo voľnom texte a význam toho, čo zaznelo. Pridaj vzory pre to, čo tvoj klient považuje za citlivé, a pri pochybnosti si prompt najprv pozri cez `--dry-run`.
 

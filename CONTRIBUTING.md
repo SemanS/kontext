@@ -44,10 +44,10 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 
 | Path | What |
 | --- | --- |
-| `src/main.rs`, `src/cli.rs` | thin binary entry and CLI (usage errors exit 64) |
+| `src/main.rs`, `src/cli.rs` | thin binary entry and CLI (exit 2 for a usage error or listed drift, 3 for drift without a base) |
 | `src/lib.rs`, `src/application.rs` | private engine modules and the stable embedding facade |
 | `src/app.rs` | process-wide context: repository, configuration, adapter registry and search index |
-| `src/api.rs`, `src/api_read.rs`, `src/api_write.rs` | versioned application service shared by CLI, MCP and library |
+| `src/api.rs`, `src/api/schema.rs`, `src/api_read.rs`, `src/api_write.rs` | versioned application service shared by CLI, MCP and library; input schemas for `api.describe` |
 | `src/mcp.rs`, `src/tools.rs` | MCP server (both protocol eras) and the agent tool surface |
 | `src/ops.rs` | brief, search, read, why, log, capture, promote, prepare-commit, check |
 | `src/model.rs` | search hits from the index and adapters, merged and budgeted |
@@ -64,13 +64,14 @@ English sources are in `docs/en/`, Slovak in `docs/sk/`. The two trees mirror ea
 | `src/threads.rs`, `src/distill.rs` | agent transcripts and distilling knowledge from them |
 | `src/connect.rs`, `src/skills.rs` | wiring agent clients, host hooks and skills |
 | `src/adapters/` | registry, drivers, MCP client, result mapping |
-| `src/init/` | scan, history, render, deepen, symbols |
-| `src/hooks.rs`, `src/events.rs` | git hooks and agent host hooks; outbox |
+| `src/init/` | scan, history, render, deepen, symbols, the covered-commits log (`init-covered.log`) |
+| `src/hooks.rs`, `src/events.rs` | git hooks; outbox |
+| `src/hook.rs`, `src/lint.rs` | agent host hooks (`kontext hook --host`); the instruction lint that withholds an entry's text from a hook |
 | `src/config.rs`, `src/template.rs`, `src/jpath.rs` | configuration, templates, JSON paths |
 | `src/presets.rs`, `presets/` | adapter presets (plain TOML) |
 | `src/util.rs` | small shared helpers |
 | `skills/` | `SKILL.md` recipes compiled into the binary |
-| `tests/` | integration tests: `cli.rs` (end to end), `api.rs`, `drift.rs`, `maintenance.rs`, `eval.rs` with `tests/eval/` |
+| `tests/` | integration tests: `cli.rs` (end to end), `api.rs`, `api_contract.rs` (with `api_contract.snap`), `drift.rs`, `hooks.rs`, `init.rs`, `maintenance.rs`, `mcp.rs`, `eval.rs` with `tests/eval/`; shared sandbox helpers in `tests/common/` |
 | `docs/` | documentation site (VitePress) |
 
 Regenerate this table when you add or remove a module: `ls src src/*/` and the `//!` line at the top of each file.
@@ -89,7 +90,7 @@ Regenerate this table when you add or remove a module: `ls src src/*/` and the `
 - **Red first.** The first commit of a fix is a test or eval scenario that fails on the current code; paste its failing output into the pull request. The fix follows in the next commit.
 - **Eval expectations come from a different session.** Whoever implements a change to ranking, the brief or verification does not write its eval expectations or qrels labels; another session (or person) writes them, before the change, and they are committed first.
 - **One owner per hot file.** `src/ops.rs`, `src/api_write.rs`, `src/store.rs`, `src/verification.rs` and `src/config.rs` are changed by one session or pull request at a time. Disjoint modules can be worked on in parallel.
-- **Release gates.** A tag publishes only after fmt, clippy, tests on Linux and macOS, the MSRV job (reads `rust-version`), the docs build, EN/SK parity, `kontext ci` over this repository's own `.ai/` and the API snapshot pass.
+- **Release gates.** A release is tagged only from a green `main`: fmt, clippy, tests on Linux and macOS (the API contract snapshot among them), the MSRV job (reads `rust-version`), the eval set, the docs build, EN/SK parity, `kontext ci` over this repository's own `.ai/` and cargo deny. The release workflow tests the tag again on Linux and macOS before it builds anything. See [RELEASE.md](RELEASE.md).
 
 ## Adding a preset
 
