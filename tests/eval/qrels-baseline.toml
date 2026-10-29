@@ -1,0 +1,26 @@
+# Retrieval baseline for tests/eval.rs (retrieval_quality); regenerate with KONTEXT_UPDATE_QRELS_BASELINE=1.
+
+[slice."all"]
+ndcg5 = 0.9251
+recall10 = 0.9524
+mrr = 0.9206
+
+[slice."exact-identifier"]
+ndcg5 = 0.9879
+recall10 = 1.0000
+mrr = 1.0000
+
+[slice."paraphrase"]
+ndcg5 = 0.9000
+recall10 = 1.0000
+mrr = 0.8667
+
+[slice."plural"]
+ndcg5 = 1.0000
+recall10 = 1.0000
+mrr = 1.0000
+
+[slice."slovak"]
+ndcg5 = 0.7500
+recall10 = 0.7500
+mrr = 0.7500
