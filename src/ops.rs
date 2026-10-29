@@ -62,10 +62,45 @@ pub struct SearchReq {
     pub adapters: Option<bool>,
 }
 
+// Weighted reciprocal rank fusion of the local sources (decision 13: ranking changes need graded
+// evidence, tests/eval/qrels.tsv): reviewed entries first, doc chunks and commits after them at
+// equal rank. Future config keys: `[search] weight_entries`, `weight_docs`, `weight_commits`.
+pub(crate) const WEIGHT_ENTRIES: f32 = 1.0;
+pub(crate) const WEIGHT_DOCS: f32 = 0.7;
+pub(crate) const WEIGHT_COMMITS: f32 = 0.6;
+/// A nested store's sources count this much of the outer repository's.
+const WEIGHT_NESTED: f32 = 0.95;
+
+/// The local index searched as one group per source, so a doc chunk never outranks the team's
+/// reviewed entry for its own words. Digests of the hits' whole texts go into `digests`.
+fn local_groups(
+    idx: &crate::index::LocalIndex,
+    query: &str,
+    kinds: &[String],
+    limit: usize,
+    label: &str,
+    scale: f32,
+    digests: &mut std::collections::HashMap<String, String>,
+) -> Result<Vec<HitGroup>> {
+    let mut groups = Vec::new();
+    for (source, weight) in [("entry", WEIGHT_ENTRIES), ("doc", WEIGHT_DOCS), ("commit", WEIGHT_COMMITS)] {
+        let opts = SearchOpts { limit, kinds: kinds.to_vec(), sources: vec![source.to_string()] };
+        let found = idx.search_with_digests(query, &opts)?;
+        digests.extend(crate::index::digests_by_uri(&found));
+        let hits: Vec<Hit> = found.into_iter().map(|(h, _)| h).collect();
+        if !hits.is_empty() {
+            groups.push(HitGroup { source: label.to_string(), weight: weight * scale, hits });
+        }
+    }
+    Ok(groups)
+}
+
 pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
     let limit = req.limit.clamp(1, 50);
     let mut notes = Vec::new();
     let mut groups = Vec::new();
+    let mut digests = std::collections::HashMap::new();
+    let mut nested_apps = Vec::new();
     let want_local = req.sources.is_empty() || req.sources.iter().any(|s| s == "local");
     if want_local {
         let mut kinds = Vec::new();
@@ -79,21 +114,26 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
                 },
             }
         }
-        let opts = SearchOpts { limit, kinds: kinds.clone(), sources: Vec::new() };
-        let hits = app.with_index(|idx| idx.search(&req.query, &opts))?;
-        groups.push(HitGroup { source: "local".into(), weight: 1.0, hits });
+        groups.extend(app.with_index(|idx| local_groups(idx, &req.query, &kinds, limit, "local", 1.0, &mut digests))?);
         let mut local_notes = inbox_hits(app, &req.query, &kinds, limit);
         // a submodule's team knowledge belongs to the work done here too (camp-bot's `extractor/`),
         // and so do the notes captured into its inbox from here
         for n in crate::route::nested_stores(app).into_iter().take(3) {
             let label = format!("{}/", n.rel);
-            match n.app.with_index(|idx| idx.search(&req.query, &opts)) {
-                Ok(mut hits) => {
-                    for h in &mut hits {
-                        h.uri = crate::route::prefix_uri(&n.rel, &h.uri);
-                        h.source = label.clone();
+            let mut found = std::collections::HashMap::new();
+            match n.app.with_index(|idx| local_groups(idx, &req.query, &kinds, limit, &label, WEIGHT_NESTED, &mut found)) {
+                Ok(mut nested) => {
+                    for g in &mut nested {
+                        for h in &mut g.hits {
+                            let uri = crate::route::prefix_uri(&n.rel, &h.uri);
+                            if let Some(d) = found.get(&h.uri) {
+                                digests.insert(uri.clone(), d.clone());
+                            }
+                            h.uri = uri;
+                            h.source = label.clone();
+                        }
                     }
-                    groups.push(HitGroup { source: label.clone(), weight: 0.95, hits });
+                    groups.extend(nested);
                 }
                 Err(e) => notes.push(format!("{label}: {}", util::truncate_chars(&format!("{e:#}"), 200))),
             }
@@ -102,6 +142,7 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
                 h.status = h.status.map(|st| format!("{st} in {label}"));
                 local_notes.push(h);
             }
+            nested_apps.push((label, n.rel, n.app));
         }
         if !local_notes.is_empty() {
             local_notes.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
@@ -126,7 +167,11 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
         let results = reg.fanout("search", &external, Duration::from_secs(12), move |a| a.search(&q, limit));
         for (name, r) in results {
             match r {
-                Ok(hits) => {
+                Ok(mut hits) => {
+                    // an adapter's own relevance orders its hits, not the order its buckets came in
+                    // (`result.*[*]` walks an object's keys alphabetically); without mapped scores the
+                    // positional fallback keeps the source order
+                    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
                     let w = reg.get(&name).map(|a| a.weight()).unwrap_or(0.9);
                     groups.push(HitGroup { source: name, weight: w, hits });
                 }
@@ -134,21 +179,45 @@ pub fn search(app: &App, req: &SearchReq) -> Result<(Vec<Hit>, Vec<String>)> {
             }
         }
     }
-    let mut hits = model::merge(groups, limit);
-    if hits.iter().any(|h| h.source == "local" && h.uri.starts_with("kx:")) {
-        let (entries, _) = app.entries();
-        let marks = Marks::load(app, &entries);
-        for h in hits.iter_mut().filter(|h| h.source == "local") {
-            let Some(e) = h.uri.strip_prefix("kx:").and_then(|id| entries.iter().find(|e| e.id == id)) else { continue };
-            let flags = marks.flags(e);
-            if !flags.is_empty() {
-                let mut all: Vec<String> = h.status.iter().cloned().collect();
-                all.extend(flags);
-                h.status = Some(all.join(" · "));
-            }
-        }
+    let mut hits = model::merge_with(groups, limit, &digests);
+    mark_search_hits(app, &mut hits, "local", "kx:");
+    for (label, rel, nested) in &nested_apps {
+        mark_search_hits(nested, &mut hits, label, &format!("kx:{rel}/"));
     }
     Ok((hits, notes))
+}
+
+/// The marks a search hit carries besides its status: those the brief shows (local and unapproved,
+/// review due, challenged), the number of sources it rests on, and for an inactive entry the one that
+/// replaced it. `source` and `prefix` select the hits of `app`'s store (a nested store's hits carry
+/// its label and a prefixed URI).
+fn mark_search_hits(app: &App, hits: &mut [Hit], source: &str, prefix: &str) {
+    if !hits.iter().any(|h| h.source == source && h.uri.starts_with(prefix)) {
+        return;
+    }
+    let (entries, _) = app.entries();
+    let marks = Marks::load(app, &entries);
+    for h in hits.iter_mut().filter(|h| h.source == source) {
+        let Some(e) = h.uri.strip_prefix(prefix).and_then(|id| entries.iter().find(|e| e.id == id)) else { continue };
+        let mut flags = marks.flags(e);
+        let sources = e.extra.iter().find(|(k, _)| k == "external_refs").map(|(_, v)| v.as_list().len()).unwrap_or(0);
+        if sources > 0 {
+            flags.push(format!("{sources} source{}", if sources == 1 { "" } else { "s" }));
+        }
+        if model::is_inactive(e.status.as_deref()) {
+            for next in &e.superseded_by {
+                match Store::find(&entries, next) {
+                    Some(n) => flags.push(format!("→ superseded by [{}] {}", n.id, n.title)),
+                    None => flags.push(format!("→ superseded by [{next}]")),
+                }
+            }
+        }
+        if !flags.is_empty() {
+            let mut all: Vec<String> = h.status.iter().cloned().collect();
+            all.extend(flags);
+            h.status = Some(all.join(" · "));
+        }
+    }
 }
 
 /// What a short line says about an entry besides its text: anything short of accepted, approved

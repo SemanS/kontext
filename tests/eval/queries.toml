@@ -1,0 +1,114 @@
+# Graded retrieval queries over the `shop` fixture (tests/eval/fixtures/shop), judged in
+# tests/eval/qrels.tsv (TREC format: query_id 0 uri grade; grade 3 = the answer, 2 = also
+# answers, 1 = related). Decision 13: a ranking change lands with these numbers (nDCG@k, recall@k).
+#
+# Slices:
+#   exact-identifier  the query names the thing as it is written (title words, ids, identifiers)
+#   plural            the query uses another inflection than the text (retry / retries, key / keys)
+#   slovak            Slovak, typed without diacritics or in another case
+#   paraphrase        the query says it in other words (a semantic adapter's ground; BM25 baseline)
+
+[[query]]
+id = "q01"
+text = "idempotency key per checkout attempt"
+slice = "exact-identifier"
+
+[[query]]
+id = "q02"
+text = "client certificate expired"
+slice = "exact-identifier"
+
+[[query]]
+id = "q03"
+text = "retry payments with idempotency keys"
+slice = "exact-identifier"
+
+[[query]]
+id = "q04"
+text = "money-is-integer-cents"
+slice = "exact-identifier"
+
+[[query]]
+id = "q05"
+text = "orders postgresql"
+slice = "exact-identifier"
+
+[[query]]
+id = "q06"
+text = "export_orders_nightly"
+slice = "exact-identifier"
+
+[[query]]
+id = "q07"
+text = "webhook retry"
+slice = "plural"
+
+[[query]]
+id = "q08"
+text = "idempotency key expires"
+slice = "plural"
+
+[[query]]
+id = "q09"
+text = "round price"
+slice = "plural"
+
+[[query]]
+id = "q10"
+text = "outages"
+slice = "plural"
+
+[[query]]
+id = "q11"
+text = "request id in every log"
+slice = "plural"
+
+[[query]]
+id = "q12"
+text = "certificates"
+slice = "plural"
+
+[[query]]
+id = "q13"
+text = "namietka"
+slice = "slovak"
+
+[[query]]
+id = "q14"
+text = "namietky k rozhodnutiam"
+slice = "slovak"
+
+[[query]]
+id = "q15"
+text = "cas revizie"
+slice = "slovak"
+
+[[query]]
+id = "q16"
+text = "podat namietku"
+slice = "slovak"
+
+[[query]]
+id = "q17"
+text = "which database keeps our orders"
+slice = "paraphrase"
+
+[[query]]
+id = "q18"
+text = "never store money as floating point numbers"
+slice = "paraphrase"
+
+[[query]]
+id = "q19"
+text = "duplicate webhook events"
+slice = "paraphrase"
+
+[[query]]
+id = "q20"
+text = "how long are product pages cached"
+slice = "paraphrase"
+
+[[query]]
+id = "q21"
+text = "search engine for products"
+slice = "paraphrase"
