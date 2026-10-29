@@ -323,6 +323,26 @@ pub struct FocusSplit {
     pub words: Vec<String>,
 }
 
+/// The path of a focus item without a `:line` (or `:line:col`, `:from-to`) suffix. Only a `:` followed
+/// by digits is cut, so a Windows drive letter (`C:\repo\src`) stays whole.
+pub fn focus_path(item: &str) -> &str {
+    let mut t = item;
+    for _ in 0..2 {
+        match t.rsplit_once(':') {
+            Some((head, tail))
+                if !head.is_empty()
+                    && !tail.is_empty()
+                    && tail.chars().all(|c| c.is_ascii_digit() || c == '-')
+                    && tail.starts_with(|c: char| c.is_ascii_digit()) =>
+            {
+                t = head
+            }
+            _ => break,
+        }
+    }
+    t
+}
+
 pub fn split_focus(app: &App, focus: &[String]) -> FocusSplit {
     let mut s = FocusSplit { here: Vec::new(), here_paths: 0, elsewhere: Vec::new(), words: Vec::new() };
     for item in focus {
@@ -330,7 +350,7 @@ pub fn split_focus(app: &App, focus: &[String]) -> FocusSplit {
         if t.is_empty() {
             continue;
         }
-        let path = t.split(':').next().unwrap_or(t);
+        let path = focus_path(t);
         match locate(app, path) {
             Place::Here(rel) => {
                 s.here.push(if rel.is_empty() { ".".into() } else { rel });
@@ -369,6 +389,17 @@ mod tests {
         assert_eq!(literal_prefix("*.md"), "");
         assert_eq!(literal_prefix("plugins/youtube/core/src/lib.rs"), "plugins/youtube/core/src/lib.rs");
         assert_eq!(literal_prefix("docs/"), "docs");
+    }
+
+    #[test]
+    fn a_focus_keeps_drive_letters_and_drops_line_numbers() {
+        assert_eq!(focus_path("src/ops.rs:120"), "src/ops.rs");
+        assert_eq!(focus_path("src/ops.rs:120:4"), "src/ops.rs");
+        assert_eq!(focus_path("src/ops.rs:10-20"), "src/ops.rs");
+        assert_eq!(focus_path("C:\\repo\\src\\ops.rs"), "C:\\repo\\src\\ops.rs");
+        assert_eq!(focus_path("C:\\repo\\src\\ops.rs:7"), "C:\\repo\\src\\ops.rs");
+        assert_eq!(focus_path("src/adapters"), "src/adapters");
+        assert_eq!(focus_path("topic:words"), "topic:words");
     }
 
     #[test]
