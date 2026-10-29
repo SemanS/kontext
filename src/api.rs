@@ -4,6 +4,8 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::fmt;
 
+mod schema;
+
 pub const OPERATIONS: &[&str] = &[
     "status",
     "setup",
@@ -29,12 +31,20 @@ pub const OPERATIONS: &[&str] = &[
     "drafts.extend",
     "guidance.propose",
     "operations.get",
+    "api.describe",
 ];
 
 /// Inputs an operation gained after it shipped, named `<operation>.<input>`, so a client can tell
 /// an older binary that would ignore or refuse them. `status.capabilities` lists them after the
 /// operations.
-pub const FEATURES: &[&str] = &["drafts.stage.amends", "drafts.stage.extends"];
+pub const FEATURES: &[&str] = &[
+    "drafts.stage.amends",
+    "drafts.stage.extends",
+    // amends takes only dated additions after the current body; anything else is amend_not_additive
+    "drafts.stage.amends.additive",
+    "drafts.capture.extends",
+    "drafts.confirm.operation_id",
+];
 
 /// The operations and the later inputs this binary supports.
 pub fn capabilities() -> Vec<&'static str> {
@@ -45,6 +55,8 @@ pub fn capabilities() -> Vec<&'static str> {
 struct ApiError {
     code: String,
     message: String,
+    /// Older codes a client may still branch on for the same condition.
+    aliases: Vec<String>,
 }
 
 impl fmt::Display for ApiError {
@@ -60,12 +72,22 @@ pub fn error_code(err: &anyhow::Error) -> Option<&str> {
 }
 
 pub fn error(code: &str, message: impl Into<String>) -> anyhow::Error {
-    ApiError { code: code.into(), message: message.into() }.into()
+    ApiError { code: code.into(), message: message.into(), aliases: Vec::new() }.into()
+}
+
+/// An error under `code` that an older binary reported as `alias`: the failure lists the alias in
+/// `error.aliases`, so a client branching on the old code keeps working.
+pub fn error_with_alias(code: &str, alias: &str, message: impl Into<String>) -> anyhow::Error {
+    ApiError { code: code.into(), message: message.into(), aliases: vec![alias.into()] }.into()
 }
 
 pub fn failure(err: anyhow::Error) -> Value {
     let code = err.downcast_ref::<ApiError>().map(|e| e.code.as_str()).unwrap_or("operation_failed");
-    json!({"schema_version": 1, "ok": false, "error": {"code": code, "message": format!("{err:#}")}})
+    let mut error = json!({"code": code, "message": format!("{err:#}")});
+    if let Some(e) = err.downcast_ref::<ApiError>().filter(|e| !e.aliases.is_empty()) {
+        error["aliases"] = json!(e.aliases);
+    }
+    json!({"schema_version": 1, "ok": false, "error": error})
 }
 
 fn dispatch(app: &App, operation: &str, input: &Value) -> Result<Value> {
@@ -83,7 +105,18 @@ fn dispatch(app: &App, operation: &str, input: &Value) -> Result<Value> {
         rest.as_object_mut().unwrap().remove("dir");
         return dispatch(&target, operation, &rest);
     }
-    if matches!(operation, "drafts.capture" | "drafts.stage") && input.pointer("/entry/paths").is_some() {
+    // a routed write left a forwarding receipt here: its lookup and resume go to the owner
+    // (a request with entry paths is routed again below, so its fingerprint stays the original's)
+    if matches!(operation, "operations.get" | "drafts.capture" | "drafts.stage")
+        && input.pointer("/entry/paths").is_none()
+        && let Some(owner) = crate::api_write::forwarded(app, input)?
+        && let Ok(target) = App::open(&owner)
+    {
+        return call_in(&target, operation, input);
+    }
+    // an amendment goes to the repository of the entry it amends, whatever paths the draft carries
+    let amends = input.get("amends").is_some_and(|v| !v.is_null());
+    if matches!(operation, "drafts.capture" | "drafts.stage") && !amends && input.pointer("/entry/paths").is_some() {
         let paths = input
             .pointer("/entry/paths")
             .and_then(Value::as_array)
@@ -98,6 +131,9 @@ fn dispatch(app: &App, operation: &str, input: &Value) -> Result<Value> {
         }
         let mut input = input.clone();
         input["entry"]["paths"] = json!(routed.paths);
+        if let Some(owner) = routed.owner.as_deref() {
+            crate::api_write::write_forward(app, &owner.repo.root, &input)?;
+        }
         let mut result = call_in(routed.owner.as_deref().unwrap_or(app), operation, &input)?;
         if !routed.notes.is_empty() {
             result["routing_notes"] = json!(routed.notes);
@@ -108,7 +144,9 @@ fn dispatch(app: &App, operation: &str, input: &Value) -> Result<Value> {
 }
 
 fn call_in(app: &App, operation: &str, input: &Value) -> Result<Value> {
-    let mut result = if operation == "status" || operation.starts_with("entries.") {
+    let mut result = if operation == "api.describe" {
+        schema::describe(input)?
+    } else if operation == "status" || operation.starts_with("entries.") {
         crate::api_read::call(app, operation, input)?
     } else {
         crate::api_write::call(app, operation, input)?

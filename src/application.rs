@@ -21,7 +21,28 @@ pub struct CommittedEntry {
     pub paths: Vec<String>,
     pub tags: Vec<String>,
     pub file: String,
+    /// Unknown metadata keys; the typed fields below are not repeated here.
     pub extra: BTreeMap<String, serde_json::Value>,
+    /// The entry's date (`YYYY-MM-DD`).
+    #[serde(default)]
+    pub date: Option<String>,
+    /// The command that proves it, run from the repository root.
+    #[serde(default)]
+    pub verify: Option<String>,
+    /// When someone should look at it again (`YYYY-MM-DD`).
+    #[serde(default)]
+    pub review_by: Option<String>,
+    /// Ids of the entries it replaces.
+    #[serde(default)]
+    pub supersedes: Vec<String>,
+    /// Ids of the entries that replace it.
+    #[serde(default)]
+    pub superseded_by: Vec<String>,
+    /// Commits it came from.
+    #[serde(default)]
+    pub commits: Vec<String>,
+    #[serde(default)]
+    pub author: Option<String>,
 }
 
 /// Knowledge format policy from defaults and reviewed repository configuration.
@@ -127,6 +148,13 @@ impl KnowledgePolicy {
             tags: entry.tags,
             file: path.into(),
             extra,
+            date: entry.date,
+            verify: entry.verify,
+            review_by: entry.review_by,
+            supersedes: entry.supersedes,
+            superseded_by: entry.superseded_by,
+            commits: entry.commits,
+            author: entry.author,
         })
     }
 }
@@ -165,6 +193,23 @@ mod tests {
             policy.inspect("docs/adr/0001-reviewed.md", &text.replace("accepted\n", "accepted\n**Checked:** 2026-10-20\n")).unwrap();
         assert_eq!(confirmed.checked.as_deref(), Some("2026-10-20"));
         assert!(!confirmed.extra.contains_key("checked"), "a field of its own, not extra");
+    }
+    #[test]
+    fn inspect_carries_the_typed_metadata_of_the_entry() {
+        let policy = KnowledgePolicy::from_config(".ai", None).unwrap();
+        let text = "---\nid: queue\nkind: decision\ntitle: Use the queue\nstatus: accepted\ndate: 2026-10-01\nreview_by: 2027-04-01\nverify: cargo test queue\nsupersedes: [cron]\ncommits: [abc1234]\nauthor: Ada\n---\nUse the queue.\n";
+        let entry = policy.inspect(".ai/decisions/queue.md", text).unwrap();
+        assert_eq!(entry.date.as_deref(), Some("2026-10-01"));
+        assert_eq!(entry.review_by.as_deref(), Some("2027-04-01"));
+        assert_eq!(entry.verify.as_deref(), Some("cargo test queue"));
+        assert_eq!(entry.supersedes, vec!["cron"]);
+        assert_eq!(entry.commits, vec!["abc1234"]);
+        assert_eq!(entry.author.as_deref(), Some("Ada"));
+        assert!(entry.extra.is_empty(), "{:?}", entry.extra);
+        // an older serialization without these fields still reads
+        let old = serde_json::json!({"id":"a","kind":"learning","title":"A","body":"B","summary":null,"status":null,"paths":[],"tags":[],"file":".ai/learnings/a.md","extra":{}});
+        let parsed: CommittedEntry = serde_json::from_value(old).unwrap();
+        assert!(parsed.supersedes.is_empty() && parsed.date.is_none());
     }
     #[test]
     fn malformed_configuration_and_private_entries_are_rejected() {

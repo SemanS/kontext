@@ -83,12 +83,12 @@ fn pick_llm(app: &App, explicit: Option<&str>) -> Result<String> {
 
 /// Invoke a configured LLM without capturing or staging anything. Both directions are redacted.
 pub fn generate_json(app: &App, explicit: Option<&str>, prompt: &str) -> Result<serde_json::Value> {
-    let name = pick_llm(app, explicit).map_err(|e| crate::api::error("llm_unavailable", e.to_string()))?;
-    let adapter = app
-        .registry()
-        .get(&name)
-        .filter(|a| a.has_op("llm"))
-        .ok_or_else(|| crate::api::error("llm_unavailable", format!("no active llm adapter '{name}'")))?;
+    // one code for "no model": `model_unavailable` (older binaries said `llm_unavailable`)
+    let name = pick_llm(app, explicit).map_err(|e| crate::api::error_with_alias("model_unavailable", "llm_unavailable", e.to_string()))?;
+    let adapter =
+        app.registry().get(&name).filter(|a| a.has_op("llm")).ok_or_else(|| {
+            crate::api::error_with_alias("model_unavailable", "llm_unavailable", format!("no active llm adapter '{name}'"))
+        })?;
     let output = adapter.llm(&mask_text(app, prompt))?;
     crate::init::deepen::extract_json_object(&mask_text(app, &output))
         .ok_or_else(|| crate::api::error("invalid_model_output", "LLM response must contain a JSON object"))

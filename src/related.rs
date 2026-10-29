@@ -30,7 +30,8 @@ pub struct Candidate {
     pub status: Option<String>,
     pub reason: String,
     pub label: &'static str,
-    /// What a client sends back as `entry_revision` / `amends.revision`: a short hash of the entry's Markdown.
+    /// What a client sends back as `entry_revision` / `amends.revision`: the blob id of the entry's
+    /// file, the revision every operation exposes (a short hash of its Markdown when git has none).
     pub revision: String,
 }
 
@@ -118,7 +119,15 @@ pub fn candidates(app: &App, entries: &[Entry], text: &str, paths: &[String], ex
         ));
     }
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.id.cmp(&b.1.id)));
-    scored.into_iter().take(MAX_CANDIDATES).map(|(_, c)| c).collect()
+    let mut out: Vec<Candidate> = scored.into_iter().take(MAX_CANDIDATES).map(|(_, c)| c).collect();
+    for c in &mut out {
+        if let Some(file) = entries.iter().find(|e| e.id == c.id).map(|e| e.rel_path.clone())
+            && let Some(blob) = app.repo.git_opt(&["hash-object", "--", &file]).filter(|b| !b.is_empty())
+        {
+            c.revision = blob;
+        }
+    }
+    out
 }
 
 fn cache_key(text: &str, candidates: &[Candidate]) -> String {
@@ -175,6 +184,7 @@ New text:\n{text}\n\nRecorded entries:\n{}",
 
 /// No configured model is an answer of its own, not a failure of the operation.
 pub fn model_unavailable(e: anyhow::Error) -> anyhow::Error {
+    // `llm_unavailable` is what older binaries raised; there is one code now
     if crate::api::error_code(&e) == Some("llm_unavailable") { crate::api::error("model_unavailable", format!("{e:#}")) } else { e }
 }
 
