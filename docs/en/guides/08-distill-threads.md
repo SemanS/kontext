@@ -27,7 +27,7 @@ Distilling 1 thread(s)…
 
 What happens:
 
-1. The thread is read into a compact transcript: what the developer asked, what the agent answered, what it edited and ran (`→ edit src/cache.ts`, `→ $ git commit …`). Tool output, reasoning and injected instructions (AGENTS.md, environment, hooks) are left out. A harness notification, such as Claude Code's `<task-notification>` for a finished background agent, becomes one line (`→ Agent "…" finished: <the start of its result>`). Paths are made relative to the repository, an agent's per-session temp dirs are shortened to `<tmp>/`, and secrets are redacted.
+1. The thread is read into a compact transcript: what the developer asked, what the agent answered, what it edited and ran (`→ edit src/cache.ts`, `→ $ git commit …`). Tool output, reasoning, injected instructions (AGENTS.md, environment, hooks), Claude Code bash-mode output (`!` commands and what they printed) and compaction summaries are left out. A harness notification, such as Claude Code's `<task-notification>` for a finished background agent, becomes one line (`→ Agent "…" finished: <the start of its result>`). Paths are made relative to the repository, an agent's per-session temp dirs are shortened to `<tmp>/`, and secrets are redacted.
 2. The transcript is split into parts of about 45,000 characters (`--max-parts`, default 12, spread over a longer thread) and sent to your LLM adapter, several at a time (`--jobs`).
 3. The model names the decisions, conventions, pitfalls and incidents the team should still know later, at most `--max` per thread (5), and is shown what is recorded already, so it does not repeat it. Findings similar to an existing entry or inbox candidate are dropped.
 4. Each finding becomes an inbox candidate with its paths, the commits the thread made it in, `origin: thread` and its source (`claude:4f1c2a9b`, shown by `kontext inbox`, dropped on promotion).
@@ -47,15 +47,22 @@ Review them with `kontext inbox`, promote each with the change it belongs to (`k
 
 Work threads carry what a project is made of: people's names and addresses, pasted emails and logs, hosts, customer data. Measured on a real client thread: of 52 MB of transcript, 240 KB reach the model (0.5 %). Tool output and file contents never do, and what is left is masked further:
 
-- secrets, as everywhere in kontext;
-- email addresses, phone numbers, IBANs, card numbers and IP addresses (`127.0.0.1` stays);
-- your own patterns, e.g. a client's integration ids or customer names:
+- secrets, as everywhere in kontext: a private key is masked as a whole PEM block, from `BEGIN` to `END`, not only its first line;
+- email addresses; phone numbers with a `+` and national numbers written with separators (at least nine digits); IBANs; card numbers; IPv4 and IPv6 addresses (`127.0.0.1` and `::1` stay);
+- every match on a line, not only the first;
+- your own patterns, e.g. a client's integration ids or customer names, joined with any the repository declares:
 
   ```toml
   # .git/kontext/config.toml (this clone only) or ~/.config/kontext/repos/<slug>.toml
   [secrets]
   redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
   ```
+
+A pattern that does not compile stops distill, `ctx_threads` and the autopilot before anything is sent; `kontext status` names it. A wrong pattern is never dropped silently.
+
+What is **not** masked: names of people and companies that match no pattern, street addresses, free-text identifiers, and the meaning of what was said. Add patterns for what your client considers sensitive, and read the prompt with `--dry-run` first when in doubt.
+
+What a prompt sends: the masked transcript part, the repository's name, the list of entries already recorded (titles and ids, so the model does not repeat them) and the instructions. The repository's remote URL, host and organisation are not sent.
 
 The model is asked to write for the team (roles instead of people's names, no contact data, records, credentials or hosts), and what it writes is masked again. Nothing is shared before you review it in the inbox.
 
@@ -69,7 +76,7 @@ For a client's repository, also decide:
 The `kontext-distill` prompt (`/mcp__kontext__kontext-distill` in Claude Code), or simply asking "distill the durable knowledge from thread claude:4f1c2a9b", lets the connected agent do it with its own model, no LLM adapter needed:
 
 1. `ctx_threads` without arguments lists this repository's recent threads and the current Superset workspace;
-2. `ctx_threads thread="claude:4f1c2a9b"` returns the transcript, in parts (`part=2`, … when it says there are more);
+2. `ctx_threads thread="claude:4f1c2a9b"` returns the transcript, in parts (`part=2`, … when it says there are more). It reads only `claude:`, `codex:`, `superset:`, `last` and files under known transcript roots;
 3. the agent checks `ctx_search`, then records each finding with `ctx_capture` (with `source` and `commits`).
 
 ## Superset

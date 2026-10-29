@@ -1,13 +1,17 @@
 //! Knowledge drift: recorded entries whose governed code changed in a range of commits (and, without
-//! a head, in the working tree) while nobody looked at the entry — its own file was not edited,
-//! retired or confirmed in the same range. Deterministic and model-free. It reads the working tree
-//! the way `git status` does, so a jj working copy (uncommitted in git's terms) counts as well.
+//! a head, in the working tree) while nobody looked at the entry afterwards — no edit, retirement,
+//! confirmation or passed verify of it in the range reaches the change. Deterministic and
+//! model-free. It reads the working tree the way `git status` does, so a jj working copy
+//! (uncommitted in git's terms) counts as well. Without a base it says so instead of reporting an
+//! empty range as clean.
 use crate::app::App;
+use crate::freshness::{History, Reach};
 use crate::glob::path_matches;
+use crate::ledger::Line;
 use crate::store::Entry;
 use anyhow::Result;
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write;
 
 /// Kinds checked unless asked otherwise. Module maps are refreshed by init, not confirmed.
@@ -26,14 +30,25 @@ pub struct Report {
     pub base: String,
     /// The head commit, or None for the working tree.
     pub head: Option<String>,
+    /// Where the base came from: `explicit`, `origin-head`, `origin-main`, `upstream`,
+    /// `default-remote`, or `fallback-none` when nothing resolved and the base is HEAD itself.
+    pub base_source: &'static str,
     pub entries: Vec<Drifted>,
 }
+
+/// What a report without a base says, and why `--fail` fails.
+pub const NO_BASE: &str = "No base found: no origin/HEAD, origin/main, upstream branch or default remote resolved (a shallow clone or no remote), so the range is empty and committed changes were not compared. Pass --base <rev>, or fetch the default branch with history.";
 
 impl Report {
     /// `base..head` (or `base..working tree`) with short commit ids.
     pub fn range(&self) -> String {
         let short = |s: &str| s.chars().take(8).collect::<String>();
         format!("{}..{}", short(&self.base), self.head.as_deref().map(short).unwrap_or_else(|| "working tree".into()))
+    }
+
+    /// No base resolved: the committed range is empty, whatever changed.
+    pub fn without_base(&self) -> bool {
+        self.base_source == "fallback-none"
     }
 
     pub fn to_json(&self) -> Value {
@@ -52,7 +67,12 @@ impl Report {
                 v
             })
             .collect();
-        json!({"base":self.base,"head":self.head.as_deref().unwrap_or("working"),"entries":entries})
+        let mut v =
+            json!({"base":self.base,"head":self.head.as_deref().unwrap_or("working"),"base_source":self.base_source,"entries":entries});
+        if self.without_base() {
+            v["warning"] = json!(NO_BASE);
+        }
+        v
     }
 }
 
@@ -72,42 +92,98 @@ pub fn resolve(app: &App, rev: &str) -> Result<String> {
         .ok_or_else(|| invalid(format!("unknown revision '{rev}'")))
 }
 
-/// Where this branch left the remote's default branch: the merge base of HEAD with origin/HEAD
-/// (else origin/main, else origin/master), else HEAD itself.
-pub fn default_base(app: &App) -> Result<String> {
+/// Where this branch left the remote's default branch, and where that came from: the merge base
+/// of HEAD with origin/HEAD (else origin/main, else origin/master), else with the branch's
+/// upstream, else with `checkout.defaultRemote`'s default branch; HEAD itself (`fallback-none`)
+/// when none resolves or has a merge base with HEAD (a shallow clone).
+pub fn default_base_with_source(app: &App) -> Result<(String, &'static str)> {
     let head = app.repo.head().ok_or_else(|| crate::api::error("no_commits", "the repository has no commits yet"))?;
-    let remote = app
-        .repo
-        .git_opt(&["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])
-        .filter(|r| !r.is_empty())
-        .into_iter()
-        .chain(["refs/remotes/origin/main".to_string(), "refs/remotes/origin/master".to_string()])
-        .find(|r| app.repo.git_status_ok(&["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]));
-    Ok(remote.and_then(|r| app.repo.git_opt(&["merge-base", "HEAD", &r])).filter(|s| !s.is_empty()).unwrap_or(head))
+    let is_commit = |r: &str| app.repo.git_status_ok(&["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")]);
+    let fork = |r: &str| app.repo.git_opt(&["merge-base", "HEAD", r]).filter(|s| !s.is_empty());
+    let remote_default = |remote: &str| -> Option<String> {
+        app.repo
+            .git_opt(&["symbolic-ref", "--quiet", &format!("refs/remotes/{remote}/HEAD")])
+            .filter(|r| !r.is_empty())
+            .into_iter()
+            .chain([format!("refs/remotes/{remote}/main"), format!("refs/remotes/{remote}/master")])
+            .find(|r| is_commit(r))
+    };
+    let mut candidates: Vec<(String, &'static str)> = Vec::new();
+    if let Some(r) = app.repo.git_opt(&["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).filter(|r| !r.is_empty() && is_commit(r)) {
+        candidates.push((r, "origin-head"));
+    }
+    for r in ["refs/remotes/origin/main", "refs/remotes/origin/master"] {
+        if is_commit(r) {
+            candidates.push((r.to_string(), "origin-main"));
+        }
+    }
+    if let Some(u) = app.repo.git_opt(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).filter(|u| !u.is_empty()) {
+        candidates.push((u, "upstream"));
+    }
+    if let Some(remote) = app.repo.git_opt(&["config", "--get", "checkout.defaultRemote"]).filter(|r| !r.is_empty() && !r.starts_with('-'))
+        && let Some(r) = remote_default(&remote)
+    {
+        candidates.push((r, "default-remote"));
+    }
+    Ok(candidates.into_iter().find_map(|(r, source)| fork(&r).map(|b| (b, source))).unwrap_or((head, "fallback-none")))
 }
 
-/// Non-merge commits of `base..head`, newest first, with the files each changed (a rename as both
-/// of its ends).
-fn commits(app: &App, base: &str, head: &str) -> Result<Vec<(String, String, Vec<String>)>> {
+/// The commits of `base..head` with their parents (merges kept in the graph, never counted), the
+/// files each changed (a rename as both of its ends).
+fn range_history(app: &App, base: &str, head: &str) -> Result<History> {
     let range = format!("{base}..{head}");
-    let log = app.repo.git(&[
+    let log = app.repo.git(&["log", "--no-show-signature", "--no-renames", "--name-only", "-z", crate::freshness::FORMAT, &range, "--"])?;
+    Ok(History::parse(&log))
+}
+
+/// By entry id, the commits of the range that landed a ledger line looking at it (a read, a stamp
+/// or a passed verify; a failed verify is not a look).
+fn ledger_looks_in(app: &App, base: &str, head: &str, history: &History) -> HashMap<String, Vec<usize>> {
+    let rel = crate::ledger::rel_path(app);
+    let range = format!("{base}..{head}");
+    let Some(log) = app.repo.git_opt(&[
         "log",
-        "--no-merges",
-        "--no-show-signature",
-        "--no-renames",
-        "--name-only",
-        "-z",
-        "--format=%x00%H %s",
+        "-p",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--format=%x00%H",
         &range,
         "--",
-    ])?;
-    Ok(crate::freshness::parse_log(&log)
-        .into_iter()
-        .map(|(header, paths)| {
-            let (sha, subject) = header.split_once(' ').unwrap_or((header, ""));
-            (sha.to_string(), subject.to_string(), paths.into_iter().map(String::from).collect())
-        })
-        .collect())
+        &rel,
+    ]) else {
+        return HashMap::new();
+    };
+    let mut out: HashMap<String, Vec<usize>> = HashMap::new();
+    for chunk in log.split('\0').filter(|c| !c.trim().is_empty()) {
+        let mut lines = chunk.lines();
+        let Some(i) = lines.next().map(str::trim).and_then(|sha| history.position(sha)) else { continue };
+        for line in lines.filter(|l| !l.starts_with("+++")).filter_map(|l| l.strip_prefix('+')).filter_map(Line::parse) {
+            if line.is_look() {
+                out.entry(line.id).or_default().push(i);
+            }
+        }
+    }
+    out
+}
+
+/// Entry ids the working tree looked at through the ledger: lines it has that HEAD's ledger has not.
+fn ledger_looks_in_working_tree(app: &App) -> BTreeSet<String> {
+    let rel = crate::ledger::rel_path(app);
+    let committed: BTreeSet<String> = app
+        .repo
+        .git_opt(&["show", &format!("HEAD:{rel}")])
+        .map(|t| t.lines().map(|l| l.trim_end().to_string()).collect())
+        .unwrap_or_default();
+    std::fs::read_to_string(app.repo.abs(&rel))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !committed.contains(l.trim_end()))
+        .filter_map(Line::parse)
+        .filter(|l| l.is_look())
+        .map(|l| l.id)
+        .collect()
 }
 
 /// The entries as committed at `rev`, under the current configuration's kind directories.
@@ -128,53 +204,60 @@ pub(crate) fn entries_at(app: &App, rev: &str) -> Result<Vec<Entry>> {
         .collect())
 }
 
-/// The drift of `base..head` (default base: [`default_base`]; no head: the working tree on top of
-/// `base..HEAD`), for entries of `kinds` (default [`DEFAULT_KINDS`]), ordered by id.
+/// The drift of `base..head` (default base: [`default_base_with_source`]; no head: the working tree on top of
+/// `base..HEAD`), for entries of `kinds` (default [`DEFAULT_KINDS`]), ordered by id. An entry is
+/// covered when every commit of the range that changed its governed paths is reached by a look
+/// at it in the range: a commit that changed its file (an edit, a retirement, a confirmation) or
+/// landed a ledger line for it (a passed verify included). The working tree is newer than every
+/// commit: a look there covers everything, and a change there needs one.
 pub fn drift(app: &App, base: Option<&str>, head: Option<&str>, kinds: &[String]) -> Result<Report> {
-    let base = match base {
-        Some(b) => resolve(app, b)?,
-        None => default_base(app)?,
+    let (base, base_source) = match base {
+        Some(b) => (resolve(app, b)?, "explicit"),
+        None => default_base_with_source(app)?,
     };
     let head = head.map(|h| resolve(app, h)).transpose()?;
     let tip = match &head {
         Some(h) => h.clone(),
         None => app.repo.head().ok_or_else(|| crate::api::error("no_commits", "the repository has no commits yet"))?,
     };
-    let commits = commits(app, &base, &tip)?;
-    let mut touched: BTreeSet<String> = commits.iter().flat_map(|(_, _, paths)| paths.iter().cloned()).collect();
-    let entries = match &head {
-        Some(h) => entries_at(app, h)?,
+    let history = range_history(app, &base, &tip)?;
+    let landed_looks = ledger_looks_in(app, &base, &tip, &history);
+    let (entries, working, working_looks) = match &head {
+        Some(h) => (entries_at(app, h)?, BTreeSet::new(), BTreeSet::new()),
         None => {
-            touched.extend(app.repo.changed_paths()?.into_iter().map(|(_, p)| p));
-            app.entries().0
+            let working: BTreeSet<String> = app.repo.changed_paths()?.into_iter().map(|(_, p)| p).collect();
+            (app.entries().0, working, ledger_looks_in_working_tree(app))
         }
     };
     let store = app.store();
-    // knowledge files are what an entry is checked against, not the code it governs
-    let code: Vec<&String> = touched.iter().filter(|p| !store.is_store_path(p)).collect();
     let kinds: Vec<&str> = if kinds.is_empty() { DEFAULT_KINDS.to_vec() } else { kinds.iter().map(String::as_str).collect() };
+    let mut reach = Reach::new(&history);
     let mut out: Vec<Drifted> = Vec::new();
     for entry in entries {
         let patterns: Vec<&str> = entry.paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()).collect();
-        if !entry.is_active() || patterns.is_empty() || !kinds.contains(&entry.kind.as_str()) || touched.contains(&entry.rel_path) {
+        if !entry.is_active() || patterns.is_empty() || !kinds.contains(&entry.kind.as_str()) {
             continue;
         }
-        let governed = |f: &str| patterns.iter().any(|p| path_matches(p, f));
-        let changed: Vec<String> = code.iter().filter(|f| governed(f)).map(|f| f.to_string()).collect();
+        // a look in the working tree comes after every commit of the range
+        if working.contains(&entry.rel_path) || working_looks.contains(&entry.id) {
+            continue;
+        }
+        // knowledge files are what an entry is checked against, not the code it governs
+        let governed = |f: &str| !store.is_store_path(f) && patterns.iter().any(|p| path_matches(p, f));
+        let mut sources: Vec<usize> = history.touching(&entry.rel_path).to_vec();
+        sources.extend(landed_looks.get(&entry.id).into_iter().flatten().copied());
+        let looked = reach.of(sources);
+        let unseen = history.count(looked.as_deref().map(Vec::as_slice), i64::MIN, &governed, usize::MAX);
+        let mut changed = unseen.paths;
+        changed.extend(working.iter().filter(|f| governed(f)).cloned());
         if changed.is_empty() {
             continue;
         }
-        let commits = commits
-            .iter()
-            .filter(|(_, _, paths)| paths.iter().any(|f| !store.is_store_path(f) && governed(f)))
-            .map(|(sha, subject, _)| (sha.clone(), subject.clone()))
-            .collect();
-        out.push(Drifted { entry, changed, commits });
+        out.push(Drifted { entry, changed: changed.into_iter().collect(), commits: unseen.recent });
     }
     out.sort_by(|a, b| a.entry.id.cmp(&b.entry.id).then(a.entry.rel_path.cmp(&b.entry.rel_path)));
-    Ok(Report { base, head, entries: out })
+    Ok(Report { base, head, base_source, entries: out })
 }
-
 /// What to do about each listed entry, for people (`kontext …`) or agents (`ctx_…`).
 fn advice(agent: bool) -> &'static str {
     if agent {
@@ -196,17 +279,20 @@ fn list(items: &[String], max: usize) -> String {
 pub fn render_text(report: &Report, agent: bool) -> String {
     let mut out = String::new();
     let n = report.entries.len();
+    if report.without_base() {
+        let _ = writeln!(out, "{NO_BASE}\n");
+    }
     if n == 0 {
         let _ = writeln!(
             out,
-            "No knowledge drift in {}: every entry that governs a changed file was edited or confirmed with it.",
+            "No knowledge drift in {}: every entry that governs a changed file was edited, confirmed or verified after the change.",
             report.range()
         );
         return out;
     }
     let _ = writeln!(
         out,
-        "Knowledge drift in {}: {n} entr{} govern{} changed files but {} not edited or confirmed in the range.\n",
+        "Knowledge drift in {}: {n} entr{} govern{} changed files but {} not edited, confirmed or verified after the change.\n",
         report.range(),
         if n == 1 { "y" } else { "ies" },
         if n == 1 { "s" } else { "" },
@@ -229,6 +315,9 @@ pub fn render_markdown(report: &Report) -> String {
     let mut out = String::new();
     let n = report.entries.len();
     let _ = writeln!(out, "### Knowledge drift (`{}`)\n", report.range());
+    if report.without_base() {
+        let _ = writeln!(out, "> {NO_BASE}\n");
+    }
     if n == 0 {
         let _ = writeln!(out, "No drift: every entry that governs a changed file was edited or confirmed in this range.");
         return out;
@@ -373,7 +462,7 @@ mod tests {
         f.write("README.md", "later\n");
         f.commit("docs: readme");
         let app = f.app();
-        assert_eq!(default_base(&app).unwrap(), base);
+        assert_eq!(default_base_with_source(&app).unwrap(), (base.clone(), "origin-main"));
         assert!(drift(&app, None, None, &[]).unwrap().entries.is_empty());
         f.write("src/billing/untracked.rs", "u\n");
         let r = drift(&app, None, None, &[]).unwrap();
@@ -392,6 +481,6 @@ mod tests {
         );
         assert!(drift(&app, None, None, &[]).unwrap().entries.is_empty());
         f.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
-        assert_eq!(default_base(&app).unwrap(), f.git(&["rev-parse", "HEAD"]), "no remote: HEAD");
+        assert_eq!(default_base_with_source(&app).unwrap(), (f.git(&["rev-parse", "HEAD"]), "fallback-none"), "no remote: HEAD");
     }
 }

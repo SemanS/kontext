@@ -22,6 +22,8 @@ kontext answers from the repository that owns the paths it is given:
 
 `dir` names the repository outright, for every tool: `ctx_search` with `dir: "pricing"`, `ctx_prepare_commit` with `dir: "/work/shop-checkout"`. An answer from another repository starts with a line that says where it came from.
 
+`dir` of the tools that run commands or change local state (`ctx_verify`, `ctx_inbox`, `ctx_prepare_commit`) is confined: it must lie in this repository, one of its worktrees or its submodules, and a path anywhere else is refused, so a prompt cannot point them at an unrelated checkout. The read tools still reach sibling repositories. Contexts opened through `dir` are kept in a bounded cache. Outside any git repository the server says so in its instructions, and calls with `dir` still work.
+
 ## What the outer repository shows
 
 - A submodule with its own knowledge gets a section of the brief. It comes first when focus paths lie in it, and it fills the brief when the outer repository has no store. Otherwise one line points to it.

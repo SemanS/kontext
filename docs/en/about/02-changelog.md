@@ -2,6 +2,90 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.10.0 (2026-10-29)
+
+**Promises hold again: trust-pinned verify commands, honest verification, a brief that keeps every governing entry, a fresh index, additive amendments, and a 2026 MCP surface.**
+
+### Security
+
+- **`verify:` runs only after a pin.** A command in an entry's `verify:` field is code from the repository. It runs only when `trust.toml` holds a SHA-256 pin of the entry path and the command text (`[repos.<slug>.verify]`). Without one nothing runs: `kontext verify` and `drafts.verify` fail with `untrusted_verify`, whose error carries `id`, `command`, `command_sha256` and `hint` (`kontext trust --verify <id>`). Editing the command drops the pin. Capability `drafts.verify.pinned`.
+- **`kontext trust --verify [<id>|--all]`** pins verify commands from an interactive terminal only and prints what it pins. No MCP tool and no `ctx_api` operation pins.
+- **Over MCP an unpinned command is returned, not run**, and so is a pinned one while the entry's file or governed paths have uncommitted changes (`ran: false`, `reason: untrusted_verify | dirty_tree`). The agent runs it in its own sandbox; the result is recorded as an `agent` stamp, not as `verify`.
+- **The runner** passes an environment allowlist (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM`, plus `[verify] pass_env` from your own config only), redacts `output_tail`, names uncommitted governed paths in the ledger line (`[dirty: <paths>]`, and `dirty`, `dirty_paths` in the result), stops reading stdout 2 s after the shell exits and kills the process group. The MCP server kills a running check when stdin closes or the request is cancelled.
+- **`ctx_verify`** is annotated `destructiveHint: true`, `openWorldHint: true`. The `dir` of `ctx_verify`, `ctx_inbox` and `ctx_prepare_commit` is confined to this repository, its worktrees and submodules.
+- **Adapter trust pins are SHA-256** over the canonical TOML of the shared `adapters`, `vars` and `project.name`. A legacy 12-hex FNV pin is refused with a message, never upgraded silently. Shared `[vars]` never override the vars of a user or local adapter; a shared `project.name` must be a slug; `{{repo.remote}}` carries no userinfo. `kontext trust` runs from a terminal only.
+- `ctx_threads` takes only `claude:`, `codex:`, `superset:`, `last` and paths under known transcript roots, and refuses `-` over MCP. `ctx_read file:` refuses `.git/`, `.git-credentials` and `.ssh`. `ctx_prepare_commit drop` checks every id first and refuses a candidate another worktree wrote.
+
+### What the agent is told
+
+- **A focused brief keeps every governing entry.** A reserved *Governs &lt;focus&gt; (N)* section comes first: one compact line per entry (full id, title, marks, commits since), ordered by path specificity (file, directory, glob, `**`), then oldest first. What does not fit is named on one always-printed `also governing:` line; below the section's size only ids are printed. Other kinds trim line by line and end with `… N more (K govern your focus)`. The footer counts against the budget.
+- **Paths stay paths.** A focus item with `/`, a glob character or a known extension is a path even before the file exists. Overlap works in both directions, including leading wildcards and a leading slash. `[slug]` matches literally first, then as a glob.
+- **Honest currency lines.** The brief says `read by <who>`, `stamped by agent`, `bulk stamp`, `check passed` or `CHECK FAILING`; "verified" appears only where the verification holds. A brief line uses `rule_text` when the summary lacks the rule.
+- **The MCP server sees other processes.** The index reloads when another process (a CLI capture, `kontext status`, a second session) refreshed it; a new schema is built in a temporary directory and renamed. The branch is read per request; a config parse error comes back as a warning.
+- **Visible from the first turn.** `ctx_brief` carries `_meta["anthropic/alwaysLoad"]`; the first 512 characters of the server instructions stand alone and the whole stays under 4 096 characters.
+
+### Supersession and parsing
+
+- **Supersession follows active successors.** An entry named in the `supersedes` of an active entry is superseded, and `superseded_by` is filled in. The adr-tools `## Status` section is read and written in its own style. References are written as full ids; an ambiguous target is refused. `kontext check` reports a one-sided supersede and `kontext repair [--dry-run]` writes the missing side.
+- **Entries parse the way people and formatters write them:** multi-line flow lists, block lists, trailing comments, a BOM. An unparsable entry is a `check` error. `retired`, `archived` or emoji statuses read as `deprecated` with a warning; non-Latin titles get a short hash id.
+- **Amendments only add.** `drafts.stage amends` accepts a body only when the old body is its byte prefix and the rest are `## Added <YYYY-MM-DD>` sections; otherwise `amend_not_additive`, pointing to supersede. The title and every field outside the body must stay the same. `drafts.extend` with `llm` no longer folds: it adds the finding as written (`as_written: true`). `extends` passes through `ctx_capture`, the inbox and promotion.
+- **Challenges stay resolving** until the entry's new blob lands in `HEAD`.
+- **`since` counts by ancestry.** `since` and freshness count non-merge commits on governed paths reachable from `HEAD` and not from the commit of the look, so a branch merged after a confirmation is counted. A failed check is shown but is not a look.
+- **What counts as verified:** a read by a person or a passed check. A `checked:` date without a ledger line is kind `cache` and reports `verified: false`; `kontext confirm --migrate-legacy` writes bulk lines for such entries. The CLI writes `read` only on a terminal (otherwise `agent`; `--kind read` forces it with a warning); MCP never writes `read`; `kontext api` records `by: application:<name>`.
+- **Drift needs a baseline** and a look at or after the last governed change in the range; without a baseline it says why, and `--fail` exits 3.
+
+### Redaction and outbox
+
+- **Redaction masks what it promises and fails closed:** whole PEM blocks, national phone numbers, IPv6 and every match on a line. An invalid `secrets.redact` pattern is reported by `status`, and distill, threads and autopilot refuse to send anything to a model. Your own `redact` and `allow` lists are joined with the repository's, not replaced. Adapter errors drop query strings and userinfo. Bash-mode output and compaction summaries of Claude threads are dropped.
+- **The outbox loses nothing silently.** An attempt counts only for the adapter that was tried; after repeated failures events move to `outbox.dead.jsonl`, which `status` shows, and `kontext outbox retry` requeues them. Events for an adapter skipped by `when` stay queued.
+
+### Init
+
+- `kontext init skip mod:<module>` takes effect. `dec:` clusters whose commits an entry or a `Decision:` trailer already cites are not planned again; `dec:` task state is derived from git and from `<store>/init-covered.log` (committed, union-merged), so a colleague and a fresh clone agree. `dec:` ids are `dec:<module>-<sha7>` of the cluster's oldest commit.
+- Re-rendering a module doc keeps hand-edited `paths`, `tags` and `summary`. Module choice and cluster ids are deterministic.
+- Bot authors are left out of scoring; Slovak and Czech decision words are bundled, `[init] decision_words = { strong, rationale, contrast }` adds stems in your language and `[init] bot_authors` names more bots. Only an explicit `--no-hooks` records a hooks opt-out. `init.jobs` is honoured.
+
+### Search and eval
+
+- **Shadow fields.** Folded and English-stemmed `title_f` and `body_f` are searched at a lower boost, so `namietka` finds `námietka` and `adapter` finds "Adapters". The index schema version is bumped; the index rebuilds on first use.
+- **Reviewed knowledge first.** Local sources are weighed before they are fused (entries 1.0, doc chunks 0.7, commits 0.6; built in, `[search]` keys are planned); superseded hits are weighed down and read `→ superseded by [id] Title`, never hidden; copies are found by a digest of title and text; deduplication never keeps a superseded twin over its active successor; adapter hits sort by mapped score.
+- **Graded eval.** `tests/eval/qrels.tsv` with nDCG@5, recall@10 and MRR per slice (identifiers, plurals, Slovak with and without diacritics, paraphrase, focused briefs from 200 to 1 400 tokens). Expectations are written by a different session than the one that implements the change.
+
+### API v1 policy
+
+- **The compatibility policy is written down.** Within version 1, operations, optional inputs, fields, error codes, enum values and capability strings may be added, and clients ignore what they do not know. Narrowing an input is allowed only where the old behaviour contradicted a recorded decision or a security promise, and is announced with a capability string and a migration note. See [Compatibility](../reference/05-application-api.md#compatibility).
+- **`api.describe`** returns the JSON Schema of every operation's input.
+- **One notion of revision:** the blob id. A moved revision is `stale_entry` everywhere, with the old `operation_conflict` in `error.aliases`; `model_unavailable` lists `llm_unavailable`. The guard takes a blob id, a full commit hash or an older 12-hex revision; `HEAD` or a branch name is `invalid_input`.
+- **Verification fields** `last_verified`, `since_verified`, `failing` and `amended_since` sit beside the existing ones. `entries.changed` carries `status` and reads each revision's committed config; committed entries carry `date`, `verify`, `review_by`, `supersedes`, `commits` and `author`. A replay returns the stored receipt even after a later edit; `operations.get` finds routed receipts.
+- **New error codes:** `untrusted_verify`, `amend_not_additive`; `stale_entry` everywhere.
+- **`drift.ordered`:** `entries.drift` carries `base_source` (`explicit`, `origin-head`, `origin-main`, `upstream`, `default-remote`, `fallback-none`) and, without a base, `warning`; `kontext drift --fail` and `kontext ci --strict` exit 3 then.
+- **`drafts.confirm` takes `operation_id`**, so a retry does not append a second ledger line; `drafts.capture` keeps `extends`.
+- **New capability strings:** `api.describe`, `drafts.stage.amends.additive`, `drafts.capture.extends`, `drafts.confirm.operation_id`, `drafts.verify.pinned`, `verification.last_verified`, `drift.ordered`.
+
+### MCP, hooks, structured results, skills and plugins
+
+- **Dual-era MCP.** Capabilities no longer include `logging`. The server answers the stateless 2026-07-28 revision (`server/discover`, `_meta` on requests without `initialize`, `resultType`, `ttlMs`/`cacheScope`) and legacy `initialize`, which falls back to 2025-11-25. An unknown version is `-32022`, an unknown tool `-32602`; `resources/list` pages with a cursor; `tools.listChanged` may be true: it is when adapters expose tools.
+- **Structured results.** `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_inbox` and `ctx_drift` return `structuredContent` with an `outputSchema` beside the text, and `resource_link` blocks to `kontext://entry/{id}`. `kontext brief --format json` returns the same structure.
+- **Hooks.** `kontext hook --host claude|codex|cursor` reads the host's hook JSON on stdin and answers in its shape. SessionStart (startup, resume, clear, compact) and SubagentStart get the brief; PreToolUse on `Edit|Write|MultiEdit` (Codex: `apply_patch|Edit|Write`; Cursor: `postToolUse`) gets the governing entries for the edited files, only those not yet told in the session. One budget per session, shared with `ctx_brief` when it knows the session (`session_id`, `CLAUDE_SESSION_ID`): `[hooks] session_budget_tokens` (6000), `edit_budget_tokens` (900). Fail-open; kill switch `KONTEXT_HOOKS=off` or `[hooks] enabled = false`. Installed only by `kontext connect <host> --hooks`; any `--write` also installs a shell guard that denies an agent's `kontext trust`. See [Hooks](../guides/09-hooks.md).
+- **Honest approvals.** Exposed adapter tools keep their upstream annotations; missing ones default to `readOnlyHint: false`, `openWorldHint: true`. `kontext connect codex --write` writes `default_tools_approval_mode = "prompt"` and a `[mcp_servers.kontext.tools.<tool>]` table per tool: `approval_mode = "approve"` for the read and inbox tools, `"prompt"` for `ctx_verify`, `ctx_api` and `ctx_init`.
+- **Skills and plugins.** Skills go to `.claude/skills` and `.agents/skills`; a `kontext-skill-hash` marker keeps team edits, and `connect skills --write --force` replaces them. A Claude Code plugin (`.claude-plugin/plugin.json`) and a Codex plugin are built from the same sources as `connect`. Parameters gained aliases (`id`/`uri`, `focus`/`paths`, `kind`/`kinds` (also a string), `limit`/`max`, `budget_tokens`, `reason`/`why`/`because`); nothing was renamed. `ctx_read` pages a long text (`part`, `offset`).
+- **A sturdier server.** A panic in one request answers `-32603` and the server keeps running; the HTTP MCP client re-initialises after a 404; outside a git repository the server says so and `dir` still works.
+- **New commands and flags:** `kontext repair [--dry-run]`, `kontext trust [--yes]` and `--verify [<id>|--all]`, `kontext confirm --kind read|agent` and `--migrate-legacy`, `kontext distill --force`, `kontext outbox retry`, `kontext hook --host`, `kontext connect <target> [--write] [--hooks] [--force]`.
+
+**Migration.**
+
+- Rust 1.90 is the minimum (`rust-version` in `Cargo.toml`).
+- Legacy FNV adapter pins are refused: run `kontext trust` again in every repository with shared adapters.
+- Verify commands do not run until pinned: `kontext trust --verify <id>` or `--all`, in a terminal.
+- Peer: `drift.ts` must map `untrusted_verify` to "not verified, show the command".
+- An entry whose only evidence is a `checked:` date now reports `verified: false` (kind `cache`); `kontext confirm --migrate-legacy` records bulk lines for them.
+- `since` counts may grow: commits merged after a look are now counted.
+- `drafts.extend` never folds a finding into the body: with or without `llm` it is added as written and `as_written` is always true.
+- `entries.export` without a committed configuration reports `config_source.kind: "defaults"` (store `.ai`), not `local_configuration`.
+- A challenge stays listed as *resolving* (`resolving` in `inbox.list`) until the entry's new blob lands in `HEAD`, not when `prepare_commit` stages the change.
+- API fields are additive and the API version stays 1. A client that passed `HEAD` as a revision gets `invalid_input`, a non-additive `amends` body `amend_not_additive`.
+- The search index rebuilds once (schema version bump).
+
 ## 0.9.0 (2026-10-29)
 
 **Additions amend entries in place, new entries link what they build on, and changes between commits are listed.**
@@ -10,6 +94,8 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 - **`drafts.stage`** takes `amends: {id, revision}` to write that body into the entry's own file, with the front matter kept byte for byte (exclusive with `supersedes`), and `entry.extends: [ids]` to link a new entry to the entries it builds on (`unknown_entry` for an id the store lacks). See [Amending and linking](../reference/05-application-api.md#amend).
 - **`entries.changed {base, head}`** lists the committed entries added, revised, superseded (with `superseded_by`) or deprecated between two commits, without a model. See [Changed entries](../reference/05-application-api.md#changed).
 - `entries.related` candidates carry their `revision`, the value the two operations above take. `status.capabilities` lists `drafts.extend`, `entries.changed`, `drafts.stage.amends` and `drafts.stage.extends`. API version stays 1.
+
+**Known issues** (fixed in 0.10.0): a `verify:` command runs through `sh` without a trust gate, so do not call `ctx_verify`, `drafts.verify` or `kontext verify` in a repository you do not trust; `drafts.extend` with `llm` and `amends` with an arbitrary body rewrite an entry in place, against the 2026-10-27 decision.
 
 ## 0.8.0 (2026-10-28)
 

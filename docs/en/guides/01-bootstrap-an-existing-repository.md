@@ -11,7 +11,7 @@ git status -- .ai              # what was written
 kontext brief --no-adapters    # what an agent will see
 ```
 
-Nothing is committed and nothing leaves the machine. If you do not like the result, delete `.ai/` (and `kontext hooks uninstall`). There is no other state to clean up.
+Nothing is committed and nothing leaves the machine. If you do not like the result, delete `.ai/` and run `kontext hooks uninstall`. The local index, inbox and caches in `.git/kontext/` go with the clone; the [FAQ](../about/01-faq.md#what-kontext-writes-where) lists everything kontext writes.
 
 ## Review the detection
 
@@ -40,7 +40,21 @@ numbering = "sequential"
 trailer = "Decision"
 ```
 
-Existing ADRs appear in `kontext log`, the brief and search right away, and new decisions get the next number in the same format. Commits that only touch ADRs are not mined again.
+Existing ADRs appear in `kontext log`, the brief and search right away, and new decisions get the next number in the same format. ADRs written with adr-tools keep their status in a `## Status` section; kontext reads it and writes it in the same style, so a superseded ADR is not shown as active. A duplicate ADR number is reported with both file names. Commits that only touch ADRs are not mined again.
+
+## History in another language, and bots
+
+The history phase looks for decision-shaped commits. Its word signals are English, plus bundled Slovak and Czech words when the commit subjects are in one of those languages. For another language, or words your team uses, add stems before the first run:
+
+```toml
+[init]
+decision_words = { strong = ["rozhodli", "prechádzame"], rationale = ["lebo"], contrast = ["namiesto"] }
+bot_authors = ["release-bot"]
+```
+
+Dependency swaps, Conventional-Commit types, breaking markers and `Decision:` trailers count in any language. Bot commits (`[bot]`, renovate, dependabot, github-actions, greenkeeper, snyk-bot, and `bot_authors` as a substring of the author) are left out. Commits an existing entry already cites are not planned as `dec:` tasks again, and a skipped task, `mod:` included, stays skipped for the whole team.
+
+Re-running `kontext init` after you edited a module doc's `paths`, `tags` or `summary` keeps your edits; only the generated facts block is rewritten.
 
 ## Hooks in repositories that already have hooks
 

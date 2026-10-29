@@ -4,22 +4,162 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Actions are pinned by commit SHA; the comment names the tag or branch it was taken from.
 jobs:
   test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # the jj colocated smoke test in tests/cli.rs runs where jj is installed, and skips elsewhere
+      - name: Install jj
+        if: runner.os == 'macOS'
+        run: brew install jj
+      # the evaluation set runs in its own job below
+      - run: cargo test --locked -- --skip evaluation_set --skip retrieval_quality
+
+  msrv:
+    name: msrv, fmt and clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          v=$(sed -n 's/^rust-version *= *"\([^"]*\)".*/\1/p' Cargo.toml)
+          test -n "$v" || { echo "::error::no rust-version in Cargo.toml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: ${{ steps.msrv.outputs.version }}
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-  windows-build:
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo +${{ steps.msrv.outputs.version }} check --locked --all-targets
+      - run: cargo +${{ steps.msrv.outputs.version }} fmt --check
+      # clippy is pinned to the MSRV toolchain: a new stable lint cannot turn main red on its own
+      - run: cargo +${{ steps.msrv.outputs.version }} clippy --locked --all-targets -- -D warnings
+
+  clippy-latest:
+    name: clippy (latest stable, early warning)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  windows:
+    name: windows (build tests)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --locked --lib --bin kontext
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # the tests assume a Unix shell and paths; compiling them keeps the Windows build honest
+      - run: cargo test --locked --no-run
+
+  eval:
+    name: evaluation set
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --locked --test eval -- --nocapture
+      - name: Job summary
+        if: always()
+        run: |
+          for f in target/tmp/eval-report.md target/tmp/eval-retrieval.md; do
+            if [ -f "$f" ]; then
+              { echo "### $(basename "$f")"; echo; cat "$f"; echo; } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: eval-report
+          path: target/tmp/eval-*.md
+          if-no-files-found: warn
+
+  knowledge:
+    name: kontext ci on .ai
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # check errors in the project's own knowledge fail the job; drift is a warning in the summary
+      - run: cargo run --locked -- ci --base "origin/${{ github.base_ref }}" --format markdown >> "$GITHUB_STEP_SUMMARY"
+
+  docs-build:
+    name: docs build
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      # the build fails on dead links; deploying stays with docs.yml on main
+      - run: npm ci && npm run docs:build
+        working-directory: docs
+
+  docs-parity:
+    name: docs en/sk parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: docs/en and docs/sk hold the same files
+        run: |
+          diff <(cd docs/en && find . -type f | sort) <(cd docs/sk && find . -type f | sort) \
+            || { echo "::error::docs/en and docs/sk differ (lines with < are only in en, > only in sk)"; exit 1; }
+
+  deny:
+    name: cargo deny (${{ matrix.checks }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        checks: [advisories, bans licenses sources]
+    # a new RustSec advisory turns red without a change here: reported, not blocking
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check ${{ matrix.checks }}

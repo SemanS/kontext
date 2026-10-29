@@ -17,7 +17,7 @@ English / [Slovenčina](README_SK.md)
   <a href="https://github.com/SemanS/kontext"><img src="https://img.shields.io/github/stars/SemanS/kontext?labelColor=black&style=flat-square&color=ffcb47" alt="stars"></a>
   <a href="https://github.com/SemanS/kontext/issues"><img src="https://img.shields.io/github/issues/SemanS/kontext?labelColor=black&style=flat-square&color=ff80eb" alt="issues"></a>
   <a href="https://github.com/SemanS/kontext/commits/main"><img src="https://img.shields.io/github/last-commit/SemanS/kontext?color=0d9488&labelColor=black&style=flat-square" alt="last commit"></a>
-  <img src="https://img.shields.io/badge/rust-1.88%2B-orange?labelColor=black&style=flat-square&logo=rust" alt="rust 1.88+">
+  <img src="https://img.shields.io/badge/rust-1.90%2B-orange?labelColor=black&style=flat-square&logo=rust" alt="rust 1.90+">
   <img src="https://img.shields.io/badge/MCP-stdio-0d9488?labelColor=black&style=flat-square" alt="MCP">
 </p>
 
@@ -57,23 +57,25 @@ It is one Rust binary with three faces: an **MCP server** (`kontext mcp`), a **C
 
 ## Why not Claude Code's memory or CLAUDE.md?
 
-| | CLAUDE.md, AGENTS.md | Claude Code auto memory | Memory services | kontext |
+| | CLAUDE.md, AGENTS.md, `.claude/rules` | Claude Code auto memory | Memory services | kontext |
 | --- | --- | --- | --- | --- |
 | Written by | people, as prose | the model, on its own | the model, from sessions | agents propose, people approve |
 | Shared and reviewed | in pull requests | no: one user, one machine | per deployment, no review | in the pull request of the change |
-| Reaches the agent | the whole file, every session | the first 200 lines of its index, every session | by similarity to the query | ranked for the paths it names, within a budget |
-| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author |
+| Reaches the agent | the root file every session; a nested `CLAUDE.md` when the agent reads files in its directory; a `.claude/rules` file with `paths:` when matching files are touched | the first 200 lines of its index, every session | by similarity to the query | ranked for the paths it names, within a budget; with hooks, the governing entries right before an edit |
+| An entry records | paths at most (`.claude/rules`); no status, date or owner | when it was written | depends on the store | paths, status, date, author, how and when it was last verified |
 | When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after N commits on its paths (20 by default) |
-| Works with | Claude Code; others read AGENTS.md | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
+| Works with | Claude Code reads `AGENTS.md` natively, as do Codex, Cursor and OpenCode; `.claude/rules` is Claude Code only | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
 
-kontext does not replace CLAUDE.md: keep the few instructions every session needs there. Decisions are too many to load whole and too important to leave unreviewed. → [Why not something else?](https://semans.github.io/kontext/getting-started/01-introduction#why-not)
+What still differs: rule files are loaded by path pattern and have no status, so a replaced rule stays until someone deletes it, nothing says which rule a change left behind, and only Claude Code reads `.claude/rules`. kontext adds supersession with history, a review step for what agents propose, drift and freshness on governed paths, and the same answer for every client.
+
+kontext does not replace CLAUDE.md or `AGENTS.md`: keep the few instructions every session needs there. Decisions are too many to load whole and too important to leave unreviewed. → [Why not something else?](https://semans.github.io/kontext/getting-started/01-introduction#why-not)
 
 ## Under your control
 
 - **Approval.** Knowledge changes only through commits. With `/.ai/ @acme/architects` in CODEOWNERS and code-owner review required, no agent changes what every agent follows without that team's approval.
 - **Audit trail.** `git log -- .ai` and `kontext log --all` show who decided what, when, and what replaced it. With kontext's hooks installed, `git log --grep "Decision: <id>"` finds the commit that shipped a decision.
 - **Policy in CI.** `kontext check` fails a pull request on malformed entries, duplicate ids or high-confidence secrets. → [Validate knowledge in CI](https://semans.github.io/kontext/guides/07-ci)
-- **Local and private.** No account and no server; briefs in ~50 ms, hooks in ~0.1 s. Nothing leaves the machine unless you configure it. → [Security](https://semans.github.io/kontext/concepts/08-security)
+- **Local and private.** No account and no server; briefs in ~50 ms, hooks in ~0.1 s. Nothing leaves the machine unless you configure it. A cloned repository runs nothing until you trust it: shared adapters need `kontext trust`, and an entry's `verify` command runs only after `kontext trust --verify` pins its text. → [Security](https://semans.github.io/kontext/concepts/08-security)
 - **No lock-in.** The store is plain Markdown and stays readable without kontext.
 
 ## Quick start
@@ -107,14 +109,14 @@ Full walkthrough: [Quick start](https://semans.github.io/kontext/getting-started
 
 | Agent | Connect | Guide |
 | --- | --- | --- |
-| **Claude Code** | `kontext connect claude --write` (+ `claude-hooks` for a brief at session start) | [Claude Code](https://semans.github.io/kontext/agent-integrations/02-claude-code) |
+| **Claude Code** | `kontext connect claude --write` (+ `--hooks` for the brief at session start and governing entries before an edit, opt-in) | [Claude Code](https://semans.github.io/kontext/agent-integrations/02-claude-code) |
 | **Codex** | `kontext connect codex --write` (+ `agents-md`: Codex follows `AGENTS.md`) | [Codex](https://semans.github.io/kontext/agent-integrations/03-codex) |
 | **Cursor** | `kontext connect cursor --write` | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients) |
 | **OpenCode** | `kontext connect opencode --write` | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients) |
 | **Superset & orchestrators** | nothing extra: worktrees share inbox and progress | [Other clients](https://semans.github.io/kontext/agent-integrations/04-other-clients#superset-and-other-orchestrators) |
 | **Any MCP client** | command `kontext`, args `["mcp"]` | [MCP reference](https://semans.github.io/kontext/reference/02-mcp) |
 
-Agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
+Sixteen agent tools: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_drift` · `ctx_threads` · `ctx_capture` · `ctx_challenge` · `ctx_confirm` · `ctx_verify` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` · `ctx_api`, plus prompts `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`. `ctx_verify` runs a pinned shell command, so hosts ask before it.
 
 Applications use the [versioned application API](docs/en/reference/05-application-api.md): `kontext api`
 or structured MCP `ctx_api` for queries, extraction, safe retries, staging and reviewed Git exports.

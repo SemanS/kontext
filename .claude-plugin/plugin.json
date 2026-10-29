@@ -1,0 +1,18 @@
+{
+  "author": {
+    "name": "SemanS"
+  },
+  "description": "Team context bridge for coding agents: git-native decision memory, one MCP server, pluggable adapters",
+  "homepage": "https://semans.github.io/kontext/",
+  "keywords": [
+    "mcp",
+    "agents",
+    "adr",
+    "git",
+    "knowledge"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "name": "kontext",
+  "repository": "https://github.com/SemanS/kontext",
+  "version": "0.10.0"
+}

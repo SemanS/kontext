@@ -1,5 +1,26 @@
 # Nápady pre kontext a Peer Hub
 
+> **Stav k 2026-10-29 (v0.10.0).** Etapy 1 až 3.3 sú hotové; nižšie je pôvodný zoznam bez úprav.
+>
+> | položka | stav |
+> | --- | --- |
+> | 1.1 autorita v krátkom výstupe | hotové v 0.3.0 (značky); 0.10.0 poctivé riadky overenia |
+> | 1.2 deduplikácia | hotové v 0.3.0; 0.10.0 nikdy nenechá nahradené dvojča nad aktívnym |
+> | 1.3 doručovanie podľa verzie | strana kontextu hotová v 0.3.0 (`publication.blob_hash`), 0.10.0 revízia = blob id; doručovanie je v Peeri |
+> | 1.4 jeden rozpočet na session | hotové v 0.10.0 (`[hooks] session_budget_tokens`, 6000; `ctx_brief` doň čerpá, keď pozná session cez `session_id` alebo `CLAUDE_SESSION_ID`); či pokryje aj Peerove injekcie, je otvorená otázka 6 analýzy |
+> | 1.5 evaluačná sada | hotové v 0.3.0; graded qrels (nDCG@5, recall@10, MRR) v 0.10.0 |
+> | 2.1 evidencia | hotové v 0.3.0 |
+> | 2.2 termín kontroly | hotové v 0.3.0 |
+> | 2.3 námietky | hotové v 0.3.0; 0.10.0 námietka ostáva resolving, kým nepristane v `HEAD` |
+> | 2.4 čerstvosť fronty kandidátov | strana Hubu (`api.rs::list` a web UI Peeru) |
+> | 2.5 čo sa zmenilo od briefu | hotové v 0.3.0 |
+> | 3.1 vzťah k existujúcim záznamom | hotové v 0.3.0 (`entries.related`) |
+> | 3.2 `drafts.revise` | hotové v 0.3.0 |
+> | 3.3 frázový bonus | hotové v 0.3.0; 0.10.0 z vyčistených slov bez expanzií |
+> | 3.4 odložené | ostáva odložené |
+>
+> Ďalší plán (vlny 0 až 4 a horizont 1.0) je v analýze z 2026-10-29, `tasks/analyza-kontext-2026-10-29.md` ([odkaz](analyza-kontext-2026-10-29.md)); zoznam zmien je v [docs/en/about/02-changelog.md](../docs/en/about/02-changelog.md).
+
 Cieľ: systém, ktorý agentovi povie presne to, čo v danej chvíli potrebuje, nič navyše, a ktorý
 sa o znalosti stará aj potom, čo vzniknú: nehromadí duplikáty, nenecháva zastarané veci tiché a
 pri každom zázname vie, odkiaľ pochádza. Najprv v kontexte, potom v Peeri.

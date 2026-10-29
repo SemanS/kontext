@@ -1,0 +1,14 @@
+{
+  "name": "kontext",
+  "owner": {
+    "name": "SemanS"
+  },
+  "plugins": [
+    {
+      "description": "Team context bridge for coding agents: git-native decision memory, one MCP server, pluggable adapters",
+      "name": "kontext",
+      "source": "./",
+      "version": "0.10.0"
+    }
+  ]
+}

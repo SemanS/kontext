@@ -1,0 +1,5 @@
+[project]
+name = "dense"
+
+[freshness]
+threshold_commits = 50

@@ -2,11 +2,12 @@
 id: 2026-09-28-repository-declared-adapters-run-only-after-kontext-trust
 kind: decision
 title: Repository-declared adapters run only after kontext trust
-status: accepted
+status: superseded
 date: 2026-09-28
 paths: [src/config.rs]
 author: SemanS
 origin: cli
+superseded_by: [2026-10-29-trust-pins-are-sha-256-over-everything-shared-that-reaches]
 ---
 
 ## Context

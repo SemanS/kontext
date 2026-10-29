@@ -211,17 +211,36 @@ pub fn in_roots(roots: &[String], limit: usize) -> Vec<Found> {
     let mut seen = HashSet::new();
     for root in roots {
         let slug = claude_slug(root.trim_end_matches('/'));
-        let mut copies: Vec<PathBuf> = Vec::new();
+        // the root's own project dir, and those of its subdirectories (`<slug>-apps-web`), whose
+        // threads are confirmed by the directory they ran in
+        let mut copies: Vec<(PathBuf, bool)> = Vec::new();
         for d in claude_dirs() {
-            let Ok(files) = std::fs::read_dir(d.join("projects").join(&slug)) else { continue };
-            copies.extend(files.flatten().map(|f| f.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")));
+            let Ok(projects) = std::fs::read_dir(d.join("projects")) else { continue };
+            for proj in projects.flatten() {
+                let name = proj.file_name().to_string_lossy().to_string();
+                let exact = name == slug;
+                if !exact && !name.starts_with(&format!("{slug}-")) {
+                    continue;
+                }
+                let Ok(files) = std::fs::read_dir(proj.path()) else { continue };
+                copies
+                    .extend(files.flatten().map(|f| f.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).map(|p| (p, exact)));
+            }
         }
         // a session copied between accounts: keep its largest copy
-        copies.sort_by_key(|p| std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)));
-        for p in copies {
+        copies.sort_by_key(|(p, _)| std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)));
+        for (p, exact) in copies {
             let id = p.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-            if seen.insert(format!("claude:{id}")) {
-                out.push((mtime(&p), Found { agent: Agent::Claude, id, path: p, cwd: Some(root.clone()), workspace: None }));
+            let mut found = Found { agent: Agent::Claude, id, path: p, cwd: Some(root.clone()), workspace: None };
+            if !exact {
+                // `<slug>-x` is also the slug of a sibling such as `<root>-x`: the thread's cwd decides
+                match thread_cwd(&found) {
+                    Some(cwd) if within(&cwd, roots) => found.cwd = Some(cwd),
+                    _ => continue,
+                }
+            }
+            if seen.insert(format!("claude:{}", found.id)) {
+                out.push((mtime(&found.path), found));
             }
         }
     }
@@ -273,6 +292,142 @@ pub fn resolve(agent: Option<Agent>, spec: &str, roots: &[String]) -> Result<Fou
     };
     found
         .ok_or_else(|| anyhow!("no thread '{spec}' on this machine (Claude Code: {}; Codex: {})", claude_dirs().len(), codex_roots().len()))
+}
+
+/// A thread named by id or file must have run in this repository (one of `roots`), or its
+/// knowledge would land in the wrong inbox and its transcript go to this repository's model;
+/// `force` takes it anyway. A thread that does not say where it ran passes.
+pub fn check_belongs(f: &Found, roots: &[String], force: bool) -> Result<()> {
+    let Some(cwd) = f.cwd.clone().or_else(|| thread_cwd(f)) else { return Ok(()) };
+    if force || within(&cwd, roots) {
+        return Ok(());
+    }
+    bail!("thread {} ran in {cwd}, outside this repository: distill it there, or pass --force to take it here", f.label())
+}
+
+/// The redaction patterns for text about to leave this machine, from every config layer; an error
+/// when any of them does not compile (nothing is sent until it is fixed).
+pub fn redaction(loaded: &crate::config::LoadedConfig) -> Result<Vec<regex::Regex>> {
+    crate::secrets::redaction(loaded)
+}
+
+/// [`render`] with the configuration's redaction patterns, refusing when one does not compile:
+/// what ctx_threads, distill and autopilot call.
+pub fn render_checked(t: &Thread, repo_root: &Path, loaded: &crate::config::LoadedConfig) -> Result<String> {
+    Ok(render(t, repo_root, &redaction(loaded)?))
+}
+
+// ------------------------------------------------------------------- what distill has seen
+// wired into distill.rs by the integrator
+
+/// Per clone, what `kontext distill` already sent to a model: by thread (`claude:<id>`), the size
+/// it had and the hashes of the parts processed. Kept in `.git/kontext/distilled.json`, never
+/// committed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Distilled {
+    #[serde(default)]
+    pub threads: std::collections::BTreeMap<String, DistilledThread>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DistilledThread {
+    /// The transcript's size in bytes when it was last distilled.
+    pub size: u64,
+    /// Hashes of the rendered parts processed.
+    pub parts: Vec<String>,
+    pub at: String,
+}
+
+/// The key a thread is recorded under.
+pub fn distilled_key(f: &Found) -> String {
+    format!("{}:{}", f.agent.as_str(), f.id)
+}
+
+/// The hash a rendered part is recorded under.
+pub fn part_hash(part: &str) -> String {
+    util::short_hash(part)
+}
+
+fn distilled_path(repo: &crate::repo::Repo) -> PathBuf {
+    repo.state_dir().join("distilled.json")
+}
+
+impl Distilled {
+    /// This clone's record (empty when there is none or it does not parse).
+    pub fn load(repo: &crate::repo::Repo) -> Distilled {
+        std::fs::read_to_string(distilled_path(repo)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    pub fn save(&self, repo: &crate::repo::Repo) -> Result<()> {
+        let path = distilled_path(repo);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        util::write_atomic(&path, &serde_json::to_string_pretty(self)?)
+    }
+
+    /// The thread has not grown since it was distilled: nothing new to send.
+    pub fn unchanged(&self, key: &str, size: u64) -> bool {
+        self.threads.get(key).is_some_and(|t| t.size == size)
+    }
+
+    /// Whether this part of the thread was processed already.
+    pub fn seen(&self, key: &str, part: &str) -> bool {
+        let h = part_hash(part);
+        self.threads.get(key).is_some_and(|t| t.parts.contains(&h))
+    }
+
+    /// Record parts of a thread as processed, at its current size.
+    pub fn record(&mut self, key: &str, size: u64, parts: &[String]) {
+        let t = self.threads.entry(key.to_string()).or_default();
+        t.size = size;
+        t.at = util::now_iso();
+        for h in parts.iter().map(|p| part_hash(p)) {
+            if !t.parts.contains(&h) {
+                t.parts.push(h);
+            }
+        }
+    }
+}
+
+/// How a prompt names the repository: its path without the host (`team/app` for
+/// `gitlab.client.internal/team/app`), so an internal git host does not leave the machine.
+pub fn prompt_repo_name(repo_id: &str) -> String {
+    let id = repo_id.trim_matches('/');
+    match id.split_once('/') {
+        Some((host, rest)) if host.contains('.') || host.contains(':') || host == "local" => rest.to_string(),
+        _ => id.to_string(),
+    }
+}
+
+/// The `k` titles of `known` that share the most words with `text`: what a prompt needs to avoid
+/// duplicates, instead of the whole index.
+pub fn relevant_titles(known: &[String], text: &str, k: usize) -> Vec<String> {
+    let words = |s: &str| -> HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() > 3).map(|w| w.to_lowercase()).collect()
+    };
+    let have = words(text);
+    let mut scored: Vec<(usize, &String)> =
+        known.iter().map(|t| (words(t).intersection(&have).count(), t)).filter(|(n, _)| *n > 0).collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+    scored.into_iter().take(k).map(|(_, t)| t.clone()).collect()
+}
+
+/// Titles of the candidates someone dropped from the inbox, for distill's `known` list: what was
+/// dismissed is not proposed again.
+pub fn dismissed_titles(repo: &crate::repo::Repo) -> Vec<String> {
+    let dir = crate::inbox::Inbox::open(repo).dir.join(".dismissed");
+    let Ok(files) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<String> = files
+        .flatten()
+        .filter(|f| f.path().extension().is_some_and(|x| x == "md"))
+        .filter_map(|f| std::fs::read_to_string(f.path()).ok())
+        .map(|text| crate::store::Entry::parse("inbox/dismissed.md", &text, "learning").title)
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn file_id(p: &Path) -> String {
@@ -386,15 +541,30 @@ fn claude_user_text(turns: &mut Vec<Turn>, text: &str) {
     for n in notes {
         push(turns, Role::Tool, n);
     }
+    // a `!` command the user ran: the command is a tool line, its output is dropped
+    if let Some(cmd) = tag(&rest, "bash-input") {
+        push(turns, Role::Tool, format!("$ {}", util::truncate_chars(&util::one_line(cmd), 200)));
+        let (open, close) = ("<bash-input>", "</bash-input>");
+        if let (Some(a), Some(b)) = (rest.find(open), rest.find(close)) {
+            let mut rest = rest.clone();
+            rest.replace_range(a..b + close.len(), "");
+            if !injected(&rest) {
+                push(turns, Role::User, strip_blocks(&rest));
+            }
+            return;
+        }
+    }
     if !injected(&rest) {
         push(turns, Role::User, strip_blocks(&rest));
     }
 }
 
-/// Drop `<system-reminder>…</system-reminder>` and similar blocks from a message.
+/// Drop `<system-reminder>…</system-reminder>` and similar blocks from a message, and the output of
+/// shell commands the user ran with `!` (`<bash-stdout>`, `<bash-stderr>`): tool output never reaches
+/// the model.
 fn strip_blocks(text: &str) -> String {
     let mut s = text.to_string();
-    for tag in ["system-reminder", "local-command-stdout", "local-command-stderr"] {
+    for tag in ["system-reminder", "local-command-stdout", "local-command-stderr", "bash-stdout", "bash-stderr"] {
         let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
         while let Some(a) = s.find(&open) {
             let Some(b) = s[a..].find(&close) else { break };
@@ -440,7 +610,8 @@ pub fn parse_claude(text: &str) -> Thread {
         if t.started.is_none() {
             t.started = e["timestamp"].as_str().map(str::to_string);
         }
-        if e["isSidechain"] == true || e["isMeta"] == true {
+        // a /compact summary repeats earlier turns and nobody typed it
+        if e["isSidechain"] == true || e["isMeta"] == true || e["isCompactSummary"] == true || e["isVisibleInTranscriptOnly"] == true {
             continue;
         }
         let msg = &e["message"];
@@ -815,6 +986,83 @@ pub fn workspace_threads(ws: &Workspace) -> (Vec<Found>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn loaded(redact: &[&str]) -> crate::config::LoadedConfig {
+        let mut cfg = crate::config::Config::default();
+        cfg.secrets.redact = redact.iter().map(|s| s.to_string()).collect();
+        crate::config::LoadedConfig { cfg, warnings: Vec::new(), shared_path: None, untrusted_adapters: None, layers: Vec::new() }
+    }
+
+    #[test]
+    fn shell_output_and_compaction_summaries_never_reach_the_model() {
+        let jsonl = [
+            r#"{"type":"user","sessionId":"s1","cwd":"/r/app","message":{"role":"user","content":"<bash-input>env | grep DB</bash-input>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<bash-stdout>DB_URL=postgres://u:hunter2pass@db/prod</bash-stdout><bash-stderr></bash-stderr>"}}"#,
+            r#"{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation. Summary: the customer Jane Roe…"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"Use the read replica for reports."}}"#,
+        ]
+        .join("\n");
+        let t = parse_claude(&jsonl);
+        let turns: Vec<(Role, &str)> = t.turns.iter().map(|x| (x.role, x.text.as_str())).collect();
+        assert_eq!(turns, vec![(Role::Tool, "$ env | grep DB"), (Role::User, "Use the read replica for reports.")]);
+    }
+
+    #[test]
+    fn threads_refuses_invalid_redact_pattern() {
+        let t = Thread {
+            agent: Agent::Text,
+            id: "x".into(),
+            cwd: None,
+            branch: None,
+            title: None,
+            started: None,
+            turns: vec![Turn { role: Role::User, text: "Meeting with Acme Corp about INTEG-42.".into() }],
+        };
+        let err = render_checked(&t, Path::new("/r"), &loaded(&["\\bAcme Corp(\\b", "INTEG-\\d+"])).unwrap_err();
+        assert!(format!("{err:#}").contains("does not compile"), "{err:#}");
+        let ok = render_checked(&t, Path::new("/r"), &loaded(&["\\bAcme Corp\\b", "INTEG-\\d+"])).unwrap();
+        assert!(!ok.contains("Acme") && !ok.contains("INTEG-42"), "{ok}");
+    }
+
+    #[test]
+    fn a_thread_from_another_repository_needs_force() {
+        let roots = vec!["/r/app".to_string()];
+        let here =
+            Found { agent: Agent::Claude, id: "a".into(), path: PathBuf::from("/nope"), cwd: Some("/r/app/web".into()), workspace: None };
+        let there = Found { cwd: Some("/r/other".into()), ..here.clone() };
+        assert!(check_belongs(&here, &roots, false).is_ok());
+        let err = check_belongs(&there, &roots, false).unwrap_err().to_string();
+        assert!(err.contains("ran in /r/other") && err.contains("--force"), "{err}");
+        assert!(check_belongs(&there, &roots, true).is_ok());
+        let unknown = Found { cwd: None, agent: Agent::Text, ..here };
+        assert!(check_belongs(&unknown, &roots, false).is_ok(), "a file that does not say where it ran");
+    }
+
+    #[test]
+    fn prompts_name_the_repository_without_its_host_and_only_related_titles() {
+        assert_eq!(prompt_repo_name("gitlab.client.internal/team/app"), "team/app");
+        assert_eq!(prompt_repo_name("local/app-1234abcd"), "app-1234abcd");
+        assert_eq!(prompt_repo_name("app"), "app");
+        let known = vec!["Money is integer cents".to_string(), "Routes live in one file".to_string(), "Cents round half-even".to_string()];
+        assert_eq!(
+            relevant_titles(&known, "We store money as cents everywhere", 5),
+            vec!["Money is integer cents", "Cents round half-even"]
+        );
+        assert!(relevant_titles(&known, "nothing in common", 5).is_empty());
+    }
+
+    #[test]
+    fn distill_remembers_threads_and_parts() {
+        let mut d = Distilled::default();
+        assert!(!d.unchanged("claude:a", 10) && !d.seen("claude:a", "part one"));
+        d.record("claude:a", 10, &["part one".to_string()]);
+        assert!(d.unchanged("claude:a", 10) && !d.unchanged("claude:a", 20));
+        assert!(d.seen("claude:a", "part one") && !d.seen("claude:a", "part two"));
+        d.record("claude:a", 20, &["part one".to_string(), "part two".to_string()]);
+        assert_eq!(d.threads["claude:a"].parts.len(), 2, "a part is recorded once");
+        let back: Distilled = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back, d);
+    }
 
     #[test]
     fn claude_transcripts() {

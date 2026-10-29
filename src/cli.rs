@@ -85,6 +85,12 @@ enum Cmd {
         /// 0 = one line, 1 = overview, 2 = full
         #[arg(long, short, default_value_t = 2)]
         level: u8,
+        /// Page of a long text (1 = first)
+        #[arg(long)]
+        part: Option<usize>,
+        /// Start at this character of a long text
+        #[arg(long)]
+        offset: Option<usize>,
     },
     /// Record a decision, convention, learning or incident (local inbox unless --promote)
     Capture(CaptureArgs),
@@ -132,6 +138,9 @@ enum Cmd {
         /// Print what would be captured instead of capturing it
         #[arg(long)]
         dry_run: bool,
+        /// Distill a --claude or --codex thread that ran in another repository
+        #[arg(long)]
+        force: bool,
     },
     /// Decision timeline (or another kind)
     Log {
@@ -192,7 +201,7 @@ enum Cmd {
         /// Print the result as JSON (the entries.drift result)
         #[arg(long)]
         json: bool,
-        /// Exit with status 2 when an entry is listed
+        /// Exit with status 2 when an entry is listed, 3 when no base resolved
         #[arg(long)]
         fail: bool,
     },
@@ -204,21 +213,27 @@ enum Cmd {
         /// text | markdown (for a job summary or a pull request comment)
         #[arg(long, default_value = "text")]
         format: String,
-        /// Also fail (exit 2) when drift lists an entry; otherwise drift is a warning
+        /// Also fail when drift lists an entry (exit 2) or no base resolved (exit 3); otherwise drift is a warning
         #[arg(long)]
         strict: bool,
     },
     /// Confirm that entries still hold: sets `checked` to now (UTC) in each entry's file, appends a line to the verification ledger and stages both
     Confirm {
         /// The entries: kx:<id>, ids or unique prefixes (more than five in one call are recorded as a bulk stamp)
-        #[arg(required_unless_present = "repair")]
+        #[arg(required_unless_present_any = ["repair", "migrate_legacy"])]
         ids: Vec<String>,
         /// Why it still holds, in one line (kept in the ledger)
         #[arg(long, value_name = "TEXT")]
         because: Option<String>,
+        /// read | agent (default: read at an interactive terminal, agent otherwise)
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
         /// Rewrite the `checked` date of entries whose file is behind their ledger (a merge took the older side) and stage them
-        #[arg(long, conflicts_with_all = ["ids", "because"])]
+        #[arg(long, conflicts_with_all = ["ids", "because", "kind", "migrate_legacy"])]
         repair: bool,
+        /// Record every `checked` date with no ledger line as a bulk stamp in the ledger (once, staged)
+        #[arg(long, conflicts_with_all = ["ids", "because", "kind"])]
+        migrate_legacy: bool,
     },
     /// Run entries' `verify` commands from the repository root and record pass or fail in the verification ledger
     Verify {
@@ -238,10 +253,20 @@ enum Cmd {
         #[arg(long)]
         staged: bool,
     },
+    /// Hook entry point: git hooks by name, agent-host hooks with --host (JSON on stdin)
+    /// Write the missing side of one-sided supersessions (status and superseded_by), staged for review
+    Repair {
+        /// List the edits without writing them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Git hook entry point (called by the installed hooks)
     Hook {
+        /// Agent-host hook: claude, codex or cursor (reads the host's hook JSON on stdin, prints its answer, exits 0)
+        #[arg(long)]
+        host: Option<String>,
         /// pre-commit, prepare-commit-msg, post-commit, post-merge or post-rewrite
-        name: String,
+        name: Option<String>,
         /// Arguments git passed to the hook
         args: Vec<String>,
     },
@@ -267,9 +292,28 @@ enum Cmd {
         /// Write the config (default: print what to add)
         #[arg(long)]
         write: bool,
+        /// Also install the agent-host hooks (claude, codex, cursor): the brief on session start, governing entries on edits
+        #[arg(long)]
+        hooks: bool,
+        /// Replace skills the team edited (skills)
+        #[arg(long)]
+        force: bool,
     },
-    /// Trust the adapters declared in this repository's shared config (after reviewing them)
-    Trust,
+    /// Trust the adapters declared in this repository's shared config, or pin entries' verify commands (interactive terminal only)
+    Trust {
+        /// Pin entries' `verify` commands instead: lists every unpinned one and asks for each
+        #[arg(long)]
+        verify: bool,
+        /// With --verify: only this entry (kx:<id>, id or unique prefix)
+        #[arg(requires = "verify", conflicts_with = "all")]
+        id: Option<String>,
+        /// With --verify: pin every listed command after one confirmation
+        #[arg(long, requires = "verify")]
+        all: bool,
+        /// Skip the confirmation (still needs an interactive terminal)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Repository identity, config layers, store, index, inbox, init progress, adapters, hooks
     Status,
     /// Rebuild the local search index from scratch
@@ -472,6 +516,8 @@ enum OutboxCmd {
         #[arg(long)]
         quiet: bool,
     },
+    /// Queue the events that ran out of attempts again, and deliver them
+    Retry,
 }
 
 pub(crate) fn main() {
@@ -484,6 +530,37 @@ pub(crate) fn main() {
         }
     };
     std::process::exit(code);
+}
+
+/// The ledger kind of a CLI confirmation: `read` only at an interactive terminal (stdin and stderr),
+/// `agent` otherwise. A terminal is not proof of a person; it keeps agents driving the CLI through a
+/// shell from recording reads by default. `--kind read` without one is recorded, with a warning.
+fn confirm_kind(asked: Option<&str>, tty: bool) -> Result<&'static str> {
+    match asked {
+        Some("read") => {
+            if !tty {
+                eprintln!("kontext: warning: --kind read without an interactive terminal; recorded as a person's read");
+            }
+            Ok("read")
+        }
+        Some("agent") => Ok("agent"),
+        Some(other) => bail!("--kind must be read or agent, not '{other}'"),
+        None => Ok(if tty { "read" } else { "agent" }),
+    }
+}
+
+/// What a flush did, for `kontext outbox flush` and `retry`.
+fn print_flush(rep: &events::FlushReport) {
+    for d in &rep.delivered {
+        println!("delivered {d}");
+    }
+    for f in &rep.failed {
+        println!("failed {f}");
+    }
+    for d in &rep.dead {
+        println!("dead {d} (ran out of attempts; kontext outbox retry)");
+    }
+    println!("{} delivered, {} failed, {} remaining", rep.delivered.len(), rep.failed.len(), rep.remaining);
 }
 
 fn run_distill(
@@ -662,13 +739,13 @@ fn run(cli: Cli) -> Result<i32> {
                 Some(InitCmd::Submit { file }) => {
                     let text = if file == "-" {
                         let mut s = String::new();
-                        std::io::stdin().read_to_string(&mut s)?;
+                        std::io::stdin().read_to_string(&mut s).context("cannot read the submission from stdin")?;
                         s
                     } else {
-                        std::fs::read_to_string(&file)?
+                        std::fs::read_to_string(&file).with_context(|| format!("cannot read the submission file {file}"))?
                     };
                     let v = init::deepen::extract_json_object(&text).ok_or_else(|| anyhow!("input is not a JSON object"))?;
-                    let sub: init::deepen::Submission = serde_json::from_value(v)?;
+                    let sub: init::deepen::Submission = serde_json::from_value(v).map_err(|e| anyhow!("invalid submission: {e}"))?;
                     println!("{}", init::deepen::submit(&app, sub)?);
                 }
                 Some(InitCmd::Skip { task_id, reason }) => {
@@ -680,6 +757,7 @@ fn run(cli: Cli) -> Result<i32> {
                     drop(app);
                     let opts = init::InitOpts {
                         hooks: !a.no_hooks,
+                        opt_out: a.no_hooks,
                         connect: a.connect,
                         deepen: a.deepen,
                         llm: a.llm,
@@ -722,9 +800,9 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
         }
-        Cmd::Read { uri, level } => {
+        Cmd::Read { uri, level, part, offset } => {
             let app = open(&dir)?;
-            println!("{}", ops::read(&app, &uri, level.min(2))?);
+            println!("{}", ops::read_paged(&app, &uri, level.min(2), ops::Paging { offset, part })?);
         }
         Cmd::Capture(a) => {
             let home = open(&dir)?;
@@ -820,8 +898,15 @@ fn run(cli: Cli) -> Result<i32> {
                 print!("{}", ops::render_log(&rows));
             }
         }
-        Cmd::Distill { files, claude, codex, superset, list, llm, max, max_parts, jobs, dry_run } => {
+        Cmd::Distill { files, claude, codex, superset, list, llm, max, max_parts, jobs, dry_run, force } => {
             let app = open(&dir)?;
+            // a thread named by id may come from another repository: its knowledge belongs there
+            let roots = app.repo.worktree_roots();
+            for (agent, ids) in [(threads::Agent::Claude, &claude), (threads::Agent::Codex, &codex)] {
+                for id in ids.iter().filter(|id| id.trim() != "last") {
+                    threads::check_belongs(&threads::resolve(Some(agent), id, &roots)?, &roots, force)?;
+                }
+            }
             run_distill(
                 &app,
                 files,
@@ -860,6 +945,10 @@ fn run(cli: Cli) -> Result<i32> {
             if fail && !report.entries.is_empty() {
                 return Ok(2);
             }
+            if fail && report.without_base() {
+                eprintln!("kontext: drift --fail needs a base: {}", crate::drift::NO_BASE);
+                return Ok(3);
+            }
         }
         Cmd::Ci { base, format, strict } => {
             let markdown = match format.as_str() {
@@ -878,9 +967,24 @@ fn run(cli: Cli) -> Result<i32> {
             if strict && !report.entries.is_empty() {
                 return Ok(2);
             }
+            if strict && report.without_base() {
+                eprintln!("kontext: ci --strict needs a base: {}", crate::drift::NO_BASE);
+                return Ok(3);
+            }
         }
-        Cmd::Confirm { ids, because, repair } => {
+        Cmd::Confirm { ids, because, kind, repair, migrate_legacy } => {
             let app = open(&dir)?;
+            if migrate_legacy {
+                let lines = crate::verification::migrate_legacy(&app)?;
+                for l in &lines {
+                    println!("migrated {} — bulk stamp dated {} in {} (staged)", l.id, l.at, crate::ledger::rel_path(&app));
+                }
+                if lines.is_empty() {
+                    println!("nothing to migrate: every checked date has a ledger line");
+                }
+                return Ok(0);
+            }
+            let kind = confirm_kind(kind.as_deref(), std::io::stdin().is_terminal() && std::io::stderr().is_terminal())?;
             if repair {
                 let out = crate::api_write::confirm(&app, &json!({"repair": true}))?;
                 let repaired = out["repaired"].as_array().cloned().unwrap_or_default();
@@ -904,7 +1008,7 @@ fn run(cli: Cli) -> Result<i32> {
             }
             let mut failed = 0;
             let mut ledger: Option<Value> = None;
-            for (id, r) in ids.iter().zip(crate::api_write::confirm_ids(&app, &ids, "read", because.as_deref())) {
+            for (id, r) in ids.iter().zip(crate::api_write::confirm_ids(&app, &ids, kind, because.as_deref())) {
                 match r {
                     Ok(out) => {
                         println!(
@@ -939,7 +1043,17 @@ fn run(cli: Cli) -> Result<i32> {
             let mut failed = 0;
             let mut results = Vec::new();
             for id in &ids {
-                match crate::api_write::verify(&app, &json!({"id": id, "because": because})) {
+                let req = json!({"id": id, "because": because});
+                let run_it = || crate::api_write::verify_with_transport(&app, &req, crate::api_write::Transport::Cli);
+                // an unpinned command: a person at a terminal sees it and decides; nothing else runs it
+                let result = match run_it() {
+                    Err(e) if api::error_code(&e) == Some("untrusted_verify") && interactive() => match pin_from_prompt(&app, &e)? {
+                        true => run_it(),
+                        false => Err(e),
+                    },
+                    other => other,
+                };
+                match result {
                     Ok(out) => {
                         if out["passed"] != json!(true) {
                             failed += 1;
@@ -957,6 +1071,10 @@ fn run(cli: Cli) -> Result<i32> {
                                 },
                                 out["commit"].as_str().map(|c| &c[..c.len().min(8)]).unwrap_or("no commit")
                             );
+                            if let Some(dirty) = out["dirty_paths"].as_array().filter(|d| !d.is_empty()) {
+                                let dirty: Vec<&str> = dirty.iter().filter_map(Value::as_str).collect();
+                                println!("  ran on uncommitted changes to {} (noted in the ledger)", dirty.join(", "));
+                            }
                             if out["passed"] != json!(true) {
                                 let tail = out["output_tail"].as_str().unwrap_or("");
                                 let lines: Vec<&str> = tail.lines().collect();
@@ -990,7 +1108,42 @@ fn run(cli: Cli) -> Result<i32> {
                 return Ok(1);
             }
         }
-        Cmd::Hook { name, args } => {
+        Cmd::Repair { dry_run } => {
+            let app = open(&dir)?;
+            let (edits, problems) = app.store().repair(dry_run)?;
+            for e in &edits {
+                println!("{} {} — {} in {}", if dry_run { "would repair" } else { "repaired" }, e.id, e.what, e.path);
+                if dry_run {
+                    // the changed lines: what lies between the common head and the common tail
+                    let (b, a): (Vec<&str>, Vec<&str>) = (e.before.lines().collect(), e.after.lines().collect());
+                    let head = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
+                    let tail = b[head..].iter().rev().zip(a[head..].iter().rev()).take_while(|(x, y)| x == y).count();
+                    for old in &b[head..b.len() - tail] {
+                        println!("  - {old}");
+                    }
+                    for new in &a[head..a.len() - tail] {
+                        println!("  + {new}");
+                    }
+                }
+            }
+            for p in &problems {
+                eprintln!("kontext: {p}");
+            }
+            if edits.is_empty() && problems.is_empty() {
+                println!("nothing to repair: every supersession is written on both sides");
+            } else if !dry_run && !edits.is_empty() {
+                println!("{} file(s) repaired (staged)", edits.len());
+            }
+            if !problems.is_empty() {
+                return Ok(1);
+            }
+        }
+        Cmd::Hook { host, name, args } => {
+            if let Some(host) = host {
+                // an agent host's hook never fails the host: no answer and exit 0 on any error
+                return Ok(crate::hook::main(dir.clone(), &host));
+            }
+            let Some(name) = name else { bail!("give a git hook name, or --host claude|codex|cursor") };
             let app = match open(&dir) {
                 Ok(a) => a,
                 Err(e) => {
@@ -1046,24 +1199,19 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("\nAdd one with `kontext adapters add <preset>` (user scope) — or copy it into any config layer.");
             }
         },
-        Cmd::Connect { target, write } => {
+        Cmd::Connect { target, write, hooks, force } => {
             let app = open(&dir)?;
-            println!("{}", connect::connect(&app, &target, write)?);
+            println!("{}", connect::connect_with(&app, &target, connect::Opts { write, hooks, force })?);
         }
-        Cmd::Trust => {
-            let app = open(&dir)?;
-            match (&app.loaded.untrusted_adapters, &app.loaded.shared_path) {
-                (Some(hash), Some(path)) => {
-                    let text = std::fs::read_to_string(path)?;
-                    let t: toml::Table = text.parse()?;
-                    if let Some(a) = t.get("adapters") {
-                        println!("Adapters declared in {}:\n\n{}", path.display(), toml::to_string_pretty(a)?);
-                    }
-                    let p = config::trust(&app.repo, hash)?;
-                    println!("Trusted (recorded in {}). They run on this machine until the table changes.", p.display());
-                }
-                _ => println!("Nothing to trust: the shared config declares no untrusted adapters."),
+        Cmd::Trust { verify, id, all, yes } => {
+            if !interactive() {
+                eprintln!(
+                    "kontext: trust pins only from an interactive terminal (stdin and stderr): a person reviews what it pins. Run it yourself."
+                );
+                return Ok(1);
             }
+            let app = open(&dir)?;
+            return if verify { trust_verify_cmd(&app, id.as_deref(), all, yes) } else { trust_adapters_cmd(&app, yes) };
         }
         Cmd::Status => {
             let app = open(&dir)?;
@@ -1095,17 +1243,32 @@ fn run(cli: Cli) -> Result<i32> {
                             e.last_error.unwrap_or_default()
                         );
                     }
+                    let dead = ob.dead();
+                    if !dead.is_empty() {
+                        println!("\n{} event(s) ran out of attempts (kontext outbox retry queues them again):", dead.len());
+                    }
+                    for e in dead {
+                        println!(
+                            "dead {} {} {} attempts={} {}",
+                            e.dead_at.as_deref().unwrap_or(&e.at),
+                            e.event,
+                            e.payload.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                            e.attempts,
+                            e.last_error.unwrap_or_default()
+                        );
+                    }
                 }
                 OutboxCmd::Flush { quiet } => {
-                    let rep = ob.flush(app.registry())?;
+                    let rep = ob.flush_with(app.registry(), Some(app.cfg()))?;
                     if !quiet {
-                        for d in &rep.delivered {
-                            println!("delivered {d}");
-                        }
-                        for f in &rep.failed {
-                            println!("failed {f}");
-                        }
-                        println!("{} delivered, {} failed, {} remaining", rep.delivered.len(), rep.failed.len(), rep.remaining);
+                        print_flush(&rep);
+                    }
+                }
+                OutboxCmd::Retry => {
+                    let n = ob.retry()?;
+                    println!("queued {n} dead event(s) again");
+                    if n > 0 {
+                        print_flush(&ob.flush_with(app.registry(), Some(app.cfg()))?);
                     }
                 }
             }
@@ -1115,7 +1278,7 @@ fn run(cli: Cli) -> Result<i32> {
             let n = hooks::sync_events(&app, all)?;
             println!("queued {n} sync event(s)");
             if n > 0 {
-                let rep = events::Outbox::open(&app.repo).flush(app.registry())?;
+                let rep = events::Outbox::open(&app.repo).flush_with(app.registry(), Some(app.cfg()))?;
                 println!("{} delivered, {} failed, {} remaining", rep.delivered.len(), rep.failed.len(), rep.remaining);
             }
         }
@@ -1349,9 +1512,123 @@ fn status(app: &App) -> Result<()> {
         println!("nested    {} (submodules with their own team knowledge; tools take `dir`)", nested.join(", "));
     }
     print!("hooks     {}", hooks::status(app).unwrap_or_default().replace('\n', "\n          "));
-    println!("\noutbox    {} queued", events::Outbox::open(&app.repo).list().len());
+    let outbox = events::Outbox::open(&app.repo);
+    let dead = outbox.dead().len();
+    println!(
+        "\noutbox    {} queued{}",
+        outbox.list().len(),
+        if dead > 0 { format!(", {dead} ran out of attempts (`kontext outbox`, `kontext outbox retry`)") } else { String::new() }
+    );
     for w in app.warnings() {
         println!("warning   {w}");
     }
     Ok(())
+}
+
+/// A person can answer: stdin and stderr are both terminals. Not proof of a person, but an agent's
+/// tool call does not pass it by accident.
+fn interactive() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+/// Ask on stderr, read one line from stdin: only `y` or `yes` agrees.
+fn confirm(question: &str) -> bool {
+    use std::io::Write;
+    eprint!("{question} [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// `kontext trust`: show everything the pin covers (the shared adapters, vars and project name), then pin it.
+fn trust_adapters_cmd(app: &App, yes: bool) -> Result<i32> {
+    let (Some(hash), Some(path)) = (&app.loaded.untrusted_adapters, &app.loaded.shared_path) else {
+        println!("Nothing to trust: the shared config declares no untrusted adapters.");
+        return Ok(0);
+    };
+    let t: toml::Table = std::fs::read_to_string(path)?.parse()?;
+    println!("The pin covers these parts of {}:\n", path.display());
+    for key in ["adapters", "vars"] {
+        if let Some(v) = t.get(key) {
+            let mut one = toml::Table::new();
+            one.insert(key.into(), v.clone());
+            println!("{}", toml::to_string_pretty(&one)?);
+        }
+    }
+    if let Some(name) = t.get("project").and_then(|p| p.get("name")) {
+        println!("[project]\nname = {name}\n");
+    }
+    println!("{hash}");
+    if !yes && !confirm("Trust them? They may start processes and call URLs on this machine.") {
+        println!("Not trusted.");
+        return Ok(1);
+    }
+    let p = config::trust(&app.repo, hash)?;
+    println!("Trusted (recorded in {}). They run on this machine until any of the above changes.", p.display());
+    Ok(0)
+}
+
+fn print_verify_pin(p: &config::VerifyPin) {
+    println!("{}  ({})\n  verify: {}\n  sha256: {}", p.id, p.rel_path, p.command, config::verify_pin_hash(&p.rel_path, &p.command));
+}
+
+/// `kontext trust --verify [<id>|--all]`: list every unpinned verify command and pin the ones the person approves.
+fn trust_verify_cmd(app: &App, id: Option<&str>, all: bool, yes: bool) -> Result<i32> {
+    let list = crate::verification::unpinned(app, id);
+    if list.is_empty() {
+        println!(
+            "{}",
+            match id {
+                Some(id) => format!("Nothing to pin: {id} has no unpinned verify command on an active entry."),
+                None => "Nothing to pin: every active entry's verify command is pinned on this machine.".into(),
+            }
+        );
+        return Ok(0);
+    }
+    println!(
+        "Unpinned verify commands ({}). A pinned command runs with your user's rights through sh; the pin covers its text, not the code it runs:\n",
+        list.len()
+    );
+    let mut chosen = Vec::new();
+    if all || id.is_some() {
+        for p in &list {
+            print_verify_pin(p);
+        }
+        if yes || confirm(&format!("\nPin {}?", if list.len() == 1 { "it".to_string() } else { format!("all {}", list.len()) })) {
+            chosen = list;
+        }
+    } else {
+        for p in list {
+            print_verify_pin(&p);
+            if yes || confirm("Pin it?") {
+                chosen.push(p);
+            }
+            println!();
+        }
+    }
+    if chosen.is_empty() {
+        println!("Nothing pinned.");
+        return Ok(1);
+    }
+    let path = config::pin_verify(&app.repo, &chosen)?;
+    println!("Pinned {} command(s) in {}. Editing a command revokes its pin.", chosen.len(), path.display());
+    Ok(0)
+}
+
+/// `kontext verify` on a terminal, for an `untrusted_verify` refusal: show the command, ask, pin.
+fn pin_from_prompt(app: &App, err: &anyhow::Error) -> Result<bool> {
+    let details = api::error_details(err).cloned().unwrap_or_default();
+    let (Some(id), Some(command)) = (details["id"].as_str(), details["command"].as_str()) else { return Ok(false) };
+    let Some(p) = crate::verification::unpinned(app, Some(id)).into_iter().find(|p| p.command == command) else { return Ok(false) };
+    eprintln!("{id} has a verify command that is not pinned on this machine:");
+    eprintln!("  {}  ({})\n  verify: {command}", p.id, p.rel_path);
+    if !confirm("Run it, and pin it for next time?") {
+        return Ok(false);
+    }
+    let path = config::pin_verify(&app.repo, &[p])?;
+    eprintln!("Pinned in {}.", path.display());
+    Ok(true)
 }

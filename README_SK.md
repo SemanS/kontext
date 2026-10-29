@@ -17,7 +17,7 @@
   <a href="https://github.com/SemanS/kontext"><img src="https://img.shields.io/github/stars/SemanS/kontext?labelColor=black&style=flat-square&color=ffcb47" alt="stars"></a>
   <a href="https://github.com/SemanS/kontext/issues"><img src="https://img.shields.io/github/issues/SemanS/kontext?labelColor=black&style=flat-square&color=ff80eb" alt="issues"></a>
   <a href="https://github.com/SemanS/kontext/commits/main"><img src="https://img.shields.io/github/last-commit/SemanS/kontext?color=0d9488&labelColor=black&style=flat-square" alt="last commit"></a>
-  <img src="https://img.shields.io/badge/rust-1.88%2B-orange?labelColor=black&style=flat-square&logo=rust" alt="rust 1.88+">
+  <img src="https://img.shields.io/badge/rust-1.90%2B-orange?labelColor=black&style=flat-square&logo=rust" alt="rust 1.90+">
   <img src="https://img.shields.io/badge/MCP-stdio-0d9488?labelColor=black&style=flat-square" alt="MCP">
 </p>
 
@@ -57,23 +57,25 @@ Je to jedna Rust binárka s tromi tvárami: **MCP server** (`kontext mcp`), **CL
 
 ## Prečo nie pamäť Claude Code alebo CLAUDE.md?
 
-| | CLAUDE.md, AGENTS.md | Automatická pamäť Claude Code | Služby pamäte | kontext |
+| | CLAUDE.md, AGENTS.md, `.claude/rules` | Automatická pamäť Claude Code | Služby pamäte | kontext |
 | --- | --- | --- | --- | --- |
 | Píše ju | ľudia, ako prózu | model, sám od seba | model, zo sessions | agenti navrhujú, ľudia schvaľujú |
 | Zdieľaná a posúdená | v pull requestoch | nie: jeden používateľ, jeden stroj | podľa nasadenia, bez review | v pull requeste danej zmeny |
-| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | zoradená pre cesty, ktoré agent pomenuje, v rámci rozpočtu |
-| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora |
+| K agentovi sa dostane | koreňový súbor každú session; vnorený `CLAUDE.md`, keď agent číta súbory v jeho adresári; súbor `.claude/rules` s `paths:`, keď sa dotkne zodpovedajúcich súborov | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | zoradená pre cesty, ktoré agent pomenuje, v rámci rozpočtu; s hookmi riadiace záznamy tesne pred úpravou |
+| Záznam nesie | najviac cesty (`.claude/rules`); žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora, ako a kedy bol naposledy overený |
 | Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po N commitoch na jeho cestách (predvolene 20) |
-| Funguje s | Claude Code; ostatní čítajú AGENTS.md | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
+| Funguje s | Claude Code číta `AGENTS.md` natívne, rovnako Codex, Cursor a OpenCode; `.claude/rules` len Claude Code | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
 
-kontext CLAUDE.md nenahrádza: nechaj v ňom pár pokynov, ktoré potrebuje každá session. Rozhodnutí je priveľa na to, aby sa načítavali celé, a sú pridôležité na to, aby zostali neposúdené. → [Prečo nie niečo iné?](https://semans.github.io/kontext/sk/getting-started/01-introduction#why-not)
+Čo sa stále líši: súbory s pravidlami sa načítavajú podľa vzoru cesty a nemajú stav, takže nahradené pravidlo ostane, kým ho niekto nezmaže, nič nepovie, ktoré pravidlo zmena nechala za sebou, a `.claude/rules` číta len Claude Code. kontext pridáva nahrádzanie s históriou, review toho, čo agenti navrhnú, drift a aktuálnosť na riadených cestách a rovnakú odpoveď pre každého klienta.
+
+kontext CLAUDE.md ani `AGENTS.md` nenahrádza: nechaj v nich pár pokynov, ktoré potrebuje každá session. Rozhodnutí je priveľa na to, aby sa načítavali celé, a sú pridôležité na to, aby zostali neposúdené. → [Prečo nie niečo iné?](https://semans.github.io/kontext/sk/getting-started/01-introduction#why-not)
 
 ## Pod tvojou kontrolou
 
 - **Schvaľovanie.** Znalosti sa menia len cez commity. S `/.ai/ @acme/architects` v CODEOWNERS a povinným review od vlastníkov kódu žiadny agent nezmení to, čím sa riadia všetci agenti, bez súhlasu tohto tímu.
 - **Auditná stopa.** `git log -- .ai` a `kontext log --all` ukážu, kto čo rozhodol, kedy a čo to nahradilo. S nainštalovanými hookmi kontextu `git log --grep "Decision: <id>"` nájde commit, ktorý rozhodnutie priniesol.
 - **Pravidlá v CI.** `kontext check` zastaví pull request s chybným záznamom, duplicitným id alebo tajným údajom s vysokou istotou. → [Validácia znalostí v CI](https://semans.github.io/kontext/sk/guides/07-ci)
-- **Lokálny a súkromný.** Žiadny účet ani server; brief za ~50 ms, hooky za ~0,1 s. Nič neopustí počítač, kým to nenastavíš. → [Bezpečnosť](https://semans.github.io/kontext/sk/concepts/08-security)
+- **Lokálny a súkromný.** Žiadny účet ani server; brief za ~50 ms, hooky za ~0,1 s. Nič neopustí počítač, kým to nenastavíš. Naklonovaný repozitár nič nespustí, kým mu nedôveruješ: zdieľané adaptéry potrebujú `kontext trust` a príkaz `verify` záznamu beží, až keď jeho text pinne `kontext trust --verify`. → [Bezpečnosť](https://semans.github.io/kontext/sk/concepts/08-security)
 - **Bez uzamknutia.** Úložisko je obyčajný Markdown a dá sa čítať aj bez kontextu.
 
 ## Rýchly štart
@@ -107,14 +109,14 @@ Celý postup: [Rýchly štart](https://semans.github.io/kontext/sk/getting-start
 
 | Agent | Pripojenie | Návod |
 | --- | --- | --- |
-| **Claude Code** | `kontext connect claude --write` (+ `claude-hooks` pre brief na začiatku session) | [Claude Code](https://semans.github.io/kontext/sk/agent-integrations/02-claude-code) |
+| **Claude Code** | `kontext connect claude --write` (+ `--hooks` pre brief na začiatku session a riadiace záznamy pred úpravou, opt-in) | [Claude Code](https://semans.github.io/kontext/sk/agent-integrations/02-claude-code) |
 | **Codex** | `kontext connect codex --write` (+ `agents-md`: Codex sa riadi `AGENTS.md`) | [Codex](https://semans.github.io/kontext/sk/agent-integrations/03-codex) |
 | **Cursor** | `kontext connect cursor --write` | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients) |
 | **OpenCode** | `kontext connect opencode --write` | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients) |
 | **Superset a orchestrátory** | nič navyše: worktree zdieľajú inbox aj postup | [Ďalší klienti](https://semans.github.io/kontext/sk/agent-integrations/04-other-clients#superset-and-other-orchestrators) |
 | **Akýkoľvek MCP klient** | príkaz `kontext`, argumenty `["mcp"]` | [Referencia MCP](https://semans.github.io/kontext/sk/reference/02-mcp) |
 
-Nástroje agenta: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_threads` · `ctx_capture` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit`, plus prompty `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`.
+Šestnásť nástrojov agenta: `ctx_brief` · `ctx_search` · `ctx_read` · `ctx_why` · `ctx_log` · `ctx_drift` · `ctx_threads` · `ctx_capture` · `ctx_challenge` · `ctx_confirm` · `ctx_verify` · `ctx_inbox` · `ctx_prepare_commit` · `ctx_init` · `ctx_init_submit` · `ctx_api`, plus prompty `kontext-init`, `kontext-commit`, `kontext-reflect`, `kontext-distill`. `ctx_verify` spúšťa pinnutý shellový príkaz, preto sa hostitelia pred ním pýtajú.
 
 Aplikácie používajú [verzované aplikačné API](docs/sk/reference/05-application-api.md): `kontext api`
 alebo štruktúrované MCP `ctx_api` pre dotazy, extrakciu, bezpečné opakovanie, staging a overené Git exporty.

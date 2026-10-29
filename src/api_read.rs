@@ -143,6 +143,18 @@ impl WorkingView {
         // the blob is the file's content only while the working tree matches the index
         let blob = (!untracked && !modified).then(|| self.blobs.get(file)).flatten();
         entry["publication"] = json!({"state":state,"revision":self.revision,"blob_hash":blob,"staged":staged,"modified":modified});
+        // the one revision notion: the blob of the entry's file, what every write takes back
+        entry["revision"] = json!(blob);
+    }
+}
+
+/// `revision` for an entry whose file differs from the index: the blob of what the working tree holds.
+fn fill_revision(app: &App, entry: &mut Value) {
+    if entry.get("revision").is_some_and(Value::is_string) {
+        return;
+    }
+    if let Some(file) = entry.get("file").and_then(Value::as_str).map(String::from) {
+        entry["revision"] = json!(app.repo.git_opt(&["hash-object", "--", &file]).filter(|b| !b.is_empty()));
     }
 }
 
@@ -159,6 +171,7 @@ pub(crate) fn is_unapproved(files: &[String], file: &str) -> bool {
 pub fn entry_json_in(app: &App, entry: &Entry) -> Result<Value> {
     let mut value = entry_json(entry);
     WorkingView::with_blobs(app)?.annotate(&mut value);
+    fill_revision(app, &mut value);
     Ok(value)
 }
 
@@ -166,16 +179,19 @@ fn working_result(app: &App, mut result: Value) -> Result<Value> {
     let view = WorkingView::with_blobs(app)?;
     if let Some(entry) = result.get_mut("entry") {
         view.annotate(entry);
+        fill_revision(app, entry);
     }
     if let Some(entries) = result.get_mut("entries").and_then(Value::as_array_mut) {
         for entry in entries {
             view.annotate(entry);
+            fill_revision(app, entry);
         }
     }
     if let Some(matches) = result.get_mut("matches").and_then(Value::as_array_mut) {
         for item in matches {
             if let Some(entry) = item.get_mut("entry") {
                 view.annotate(entry);
+                fill_revision(app, entry);
             }
         }
     }
@@ -305,25 +321,22 @@ fn search(app: &App, input: &Value) -> Result<Value> {
     if eligible.is_empty() {
         return Ok(json!({"entries":[],"total":0}));
     }
-    if let Some(entry) = Store::find(&eligible, query) {
+    // only an exact id or path answers alone; an id prefix ranks first and the other hits follow
+    let key = query.trim().trim_start_matches("kx:");
+    if let Some(entry) = eligible.iter().find(|e| e.id == key || e.rel_path == key || e.short_id() == key) {
         return Ok(json!({"entries":[entry_json(entry)],"total":1}));
     }
-    let wanted = fold(query.trim());
+    let wanted = fold(key);
     let folded: Vec<(&Entry, String)> = eligible.iter().map(|e| (e, fold(&e.id))).collect();
     let exact: Vec<&Entry> = folded.iter().filter(|(_, id)| *id == wanted).map(|(e, _)| *e).collect();
-    let prefixed: Vec<&Entry> = folded.iter().filter(|(_, id)| id.starts_with(&wanted)).map(|(e, _)| *e).collect();
-    let selected = if !exact.is_empty() {
-        exact
-    } else if prefixed.len() == 1 {
-        prefixed
-    } else {
-        Vec::new()
-    };
-    if !selected.is_empty() {
-        let total = selected.len();
-        let entries: Vec<Value> = selected.into_iter().take(limit).map(entry_json).collect();
+    if !exact.is_empty() {
+        let total = exact.len();
+        let entries: Vec<Value> = exact.into_iter().take(limit).map(entry_json).collect();
         return Ok(json!({"entries":entries,"total":total}));
     }
+    let mut prefixed: Vec<&Entry> =
+        if wanted.is_empty() { Vec::new() } else { folded.iter().filter(|(_, id)| id.starts_with(&wanted)).map(|(e, _)| *e).collect() };
+    prefixed.sort_by(|a, b| a.id.len().cmp(&b.id.len()).then(a.id.cmp(&b.id)));
     let words: Vec<&str> = wanted.split_whitespace().collect();
     let mut selected: Vec<&Entry> = if words.is_empty() {
         Vec::new()
@@ -345,6 +358,9 @@ fn search(app: &App, input: &Value) -> Result<Value> {
             .collect()
     };
     selected.sort_by(|a, b| b.date.cmp(&a.date).then(a.rel_path.cmp(&b.rel_path)));
+    selected.retain(|e| !prefixed.iter().any(|p| p.id == e.id));
+    prefixed.extend(selected);
+    let mut selected = prefixed;
     let hits = app.with_index(|index| {
         // The application helper throttles refreshes; machine queries promise current entries.
         index.refresh(&app.repo, app.cfg(), &all)?;
@@ -371,11 +387,10 @@ fn related(app: &App, input: &Value) -> Result<Value> {
         .ok_or_else(|| crate::api::error("invalid_input", "text must be a non-empty string of at most 20000 bytes"))?;
     let paths = strings(input, "paths")?;
     let exclude = strings(input, "exclude_ids")?;
-    let model = match input.get("llm") {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => crate::related::Model::CachedOnly,
-        Some(Value::Bool(true)) => crate::related::Model::Ask(None),
-        Some(Value::String(name)) if !name.trim().is_empty() => crate::related::Model::Ask(Some(name.as_str())),
-        _ => return Err(crate::api::error("invalid_input", "llm must be a boolean or an adapter name")),
+    let model = match crate::api_write::llm_input(input)? {
+        crate::api_write::Llm::Unset | crate::api_write::Llm::Off => crate::related::Model::CachedOnly,
+        crate::api_write::Llm::Default => crate::related::Model::Ask(None),
+        crate::api_write::Llm::Named(name) => crate::related::Model::Ask(Some(name)),
     };
     crate::related::related(app, text, &paths, &exclude, model)
 }
@@ -400,17 +415,20 @@ fn changed(app: &App, input: &Value) -> Result<Value> {
     let wanted = |e: &Entry| {
         if kinds.is_empty() { crate::drift::DEFAULT_KINDS.contains(&e.kind.as_str()) } else { kinds.contains(&e.kind) }
     };
-    let before: Vec<Entry> = crate::drift::entries_at(app, &base)?.into_iter().filter(|e| wanted(e)).collect();
-    let after: Vec<Entry> = crate::drift::entries_at(app, &head)?.into_iter().filter(|e| wanted(e)).collect();
+    let before: Vec<Entry> = committed_entries_at(app, &base)?.into_iter().filter(&wanted).collect();
+    let after: Vec<Entry> = committed_entries_at(app, &head)?.into_iter().filter(&wanted).collect();
     let content = |e: &Entry| {
         let mut e = e.clone();
         e.checked = None;
         e.markdown()
     };
     let gone = |e: &Entry| matches!(e.status.as_deref(), Some("superseded" | "deprecated" | "rejected" | "retired"));
+    // `revision` is the entry's blob at head (at base for a removed entry), as everywhere else
+    let blob = |rev: &str, e: &Entry| app.repo.git_opt(&["rev-parse", "--verify", "--quiet", &format!("{rev}:{}", e.rel_path)]);
     let row = |e: &Entry, change: &str| {
-        json!({"id":e.id,"kind":e.kind,"title":e.title,"file":e.rel_path,"paths":e.paths,
-            "revision":crate::util::short_hash(&e.markdown()),"change":change})
+        let at = if change == "deprecated" && !after.iter().any(|n| n.id == e.id) { &base } else { &head };
+        json!({"id":e.id,"kind":e.kind,"title":e.title,"status":e.status,"file":e.rel_path,"paths":e.paths,
+            "revision":blob(at, e),"change":change})
     };
     let mut changes: Vec<Value> = Vec::new();
     for e in &after {
@@ -435,7 +453,11 @@ fn changed(app: &App, input: &Value) -> Result<Value> {
             }
             (false, _) if gone(e) => changes.push(row(e, "deprecated")),
             (true, _) if gone(e) => {}
-            _ => changes.push(row(e, "revised")),
+            _ => {
+                let mut v = row(e, "revised");
+                v["base_revision"] = json!(blob(&base, old));
+                changes.push(v);
+            }
         }
     }
     for old in before.iter().filter(|o| !gone(o) && !after.iter().any(|e| e.id == o.id)) {
@@ -445,6 +467,29 @@ fn changed(app: &App, input: &Value) -> Result<Value> {
     }
     changes.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
     Ok(json!({"base":base,"head":head,"changes":changes}))
+}
+
+/// The entries as committed at `rev`, under the configuration committed at `rev` (built-in
+/// defaults when none is): a local or user layer never decides what a revision held.
+fn committed_entries_at(app: &App, rev: &str) -> Result<Vec<Entry>> {
+    let (cfg, _) = committed_config(app, rev)?;
+    let store = Store::new(&app.repo, &cfg);
+    let mut dirs: Vec<String> = cfg.kind_names().iter().map(|k| cfg.kind_path(k)).collect();
+    dirs.sort();
+    dirs.dedup();
+    if dirs.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(app
+        .repo
+        .files_at(rev, &dirs)?
+        .into_iter()
+        .filter(|(path, _)| store.is_entry_path(path))
+        .map(|(path, bytes)| {
+            let kind = store.kind_for_path(&path).unwrap_or_default();
+            Entry::parse(&path, &String::from_utf8_lossy(&bytes), &kind)
+        })
+        .collect())
 }
 
 fn validate_path(path: &str) -> Result<String> {
@@ -528,8 +573,13 @@ fn git_bounded(app: &App, args: &[&str], max: usize) -> Result<Vec<u8>> {
     Ok(data)
 }
 
+/// The configuration committed at `revision` over the built-in defaults. Only committed bytes
+/// count: the candidates are the default locations (`.kontext.toml`, `.ai/kontext.toml`), never one
+/// a local or user layer points at, and without a committed file the defaults alone apply
+/// (`config_source.kind` `defaults`).
 fn committed_config(app: &App, revision: &str) -> Result<(crate::config::Config, Value)> {
-    let candidates = crate::application::KnowledgePolicy::config_candidates(&app.store().dir())
+    const DEFAULT_STORE: &str = ".ai";
+    let candidates = crate::application::KnowledgePolicy::config_candidates(DEFAULT_STORE)
         .map_err(|message| crate::api::error("invalid_config", message))?;
     for candidate in candidates {
         let Ok(path) = validate_path(&candidate) else { continue };
@@ -554,16 +604,17 @@ fn committed_config(app: &App, revision: &str) -> Result<(crate::config::Config,
         let blob = fields.get(2).ok_or_else(|| crate::api::error("invalid_config", "committed configuration has no blob"))?;
         let bytes = git_bounded(app, &["cat-file", "blob", blob], MAX_BLOB_BYTES)?;
         let text = std::str::from_utf8(&bytes)?;
-        let cfg = crate::application::KnowledgePolicy::from_config(&app.store().dir(), Some(text))
+        let cfg = crate::application::KnowledgePolicy::from_config(DEFAULT_STORE, Some(text))
             .map_err(|message| crate::api::error("invalid_config", message))?
             .cfg;
         return Ok((cfg, json!({"kind":"committed","file":path,"revision":revision})));
     }
-    // Locally configured stores are supported, but that boundary is not evidence of review.
-    // Its source is explicit so callers can require committed configuration in their policy.
-    let mut cfg: crate::config::Config = toml::from_str(crate::config::DEFAULTS)?;
-    cfg.store = app.cfg().store.clone();
-    Ok((cfg, json!({"kind":"local_configuration"})))
+    // Nothing committed: the built-in defaults, the same on every machine for the same revision.
+    let cfg = crate::application::KnowledgePolicy::from_config(DEFAULT_STORE, None)
+        .map_err(|message| crate::api::error("invalid_config", message))?
+        .cfg;
+    let _ = app;
+    Ok((cfg, json!({"kind":"defaults"})))
 }
 
 fn export(app: &App, input: &Value) -> Result<Value> {
@@ -814,14 +865,31 @@ mod tests {
         );
         let app = f.app();
         let prefix = call(&app, "entries.search", &json!({"query":"2026-pric"})).unwrap();
-        assert_eq!(prefix["total"], 1);
         assert_eq!(prefix["entries"][0]["id"], "2026-pricing-rule");
+        let exact = call(&app, "entries.search", &json!({"query":"2026-pricing-rule"})).unwrap();
+        assert_eq!(exact["total"], 1);
         for query in ["ZAOKRUHLOVANIE platby", "zaokruhl\u{030c}ovanie platby", "zaokruhlovanie src/pricing"] {
             let out = call(&app, "entries.search", &json!({"query":query})).unwrap();
             assert_eq!(out["entries"][0]["id"], "2026-pricing-rule", "{query}");
         }
         let fallback = call(&app, "entries.search", &json!({"query":"details"})).unwrap();
         assert_eq!(fallback["entries"][0]["id"], "body");
+    }
+
+    #[test]
+    fn search_ranks_an_id_prefix_first_and_keeps_the_other_hits() {
+        let f = Fixture::new();
+        f.write(".ai/conventions/cache-rules.md", "---\nid: cache-rules\nkind: convention\ntitle: Rules\n---\nKeep them short.\n");
+        f.write(
+            ".ai/learnings/flush.md",
+            "---\nid: flush\nkind: learning\ntitle: Flush on deploy\n---\nThe cache keeps stale prices until a flush.\n",
+        );
+        let app = f.app();
+        let out = call(&app, "entries.search", &json!({"query":"cache"})).unwrap();
+        let ids: Vec<&str> = out["entries"].as_array().unwrap().iter().filter_map(|e| e["id"].as_str()).collect();
+        assert_eq!(ids.first(), Some(&"cache-rules"), "{out}");
+        assert!(ids.contains(&"flush"), "a body match is not hidden by the id prefix: {out}");
+        assert!(out["entries"][0]["revision"].as_str().is_some_and(|r| r.len() == 40), "the file's blob: {out}");
     }
 
     #[test]
@@ -906,7 +974,7 @@ mod tests {
         let out = call(&app, "entries.export", &json!({"revision":revision,"review_ref":"refs/heads/main"})).unwrap();
         assert_eq!(out["entries"].as_array().unwrap().len(), 1);
         assert_eq!(out["entries"][0]["entry"]["id"], "team");
-        assert_eq!(out["config_source"]["kind"], "local_configuration");
+        assert_eq!(out["config_source"]["kind"], "defaults");
     }
 
     #[test]
@@ -954,8 +1022,10 @@ mod tests {
         assert_eq!(by["grows"]["kind"], "learning");
         assert_eq!(by["grows"]["file"], ".ai/learnings/grows.md");
         assert_eq!(by["grows"]["paths"], json!(["src/grows/**"]));
-        let grows = crate::drift::entries_at(&app, &head).unwrap().into_iter().find(|e| e.id == "grows").unwrap();
-        assert_eq!(by["grows"]["revision"], crate::util::short_hash(&grows.markdown()));
+        assert_eq!(by["grows"]["revision"], f.git(&["rev-parse", &format!("{head}:.ai/learnings/grows.md")]));
+        assert_eq!(by["grows"]["base_revision"], f.git(&["rev-parse", &format!("{base}:.ai/learnings/grows.md")]));
+        assert_eq!(by["grows"]["status"], "accepted");
+        assert_eq!(by["gone"]["revision"], f.git(&["rev-parse", &format!("{base}:.ai/learnings/gone.md")]));
         assert_eq!(by["new"]["change"], "added");
         assert_eq!(by["old"]["change"], "superseded");
         assert_eq!(by["old"]["superseded_by"], json!(["new"]));

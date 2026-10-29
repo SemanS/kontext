@@ -12,6 +12,10 @@ kontext connect cursor --write     # writes .cursor/mcp.json
 
 Cursor číta aj `.cursorrules`; kontext ho v briefe uvádza v časti *Rules for agents*. `kontext connect agents-md --write` pridá pracovné pravidlá do `AGENTS.md`.
 
+**Hooky.** `kontext connect cursor --hooks --write` zapíše `.cursor/hooks.json` (`version: 1`): `sessionStart` a `postToolUse` (po úprave súboru), oba spúšťajú `kontext hook --host cursor`. Každé `--write` pridá aj `beforeShellExecution`, ktorý zamietne `kontext trust` spustený agentom. Cursor číta aj hooky Claude Code z `.claude/settings.json`; nainštaluj jednu sadu, nie obe. Opt-in do A/B reportu; pozri [Hooky](../guides/09-hooks.md).
+
+**Skills.** Cursor číta súbory `SKILL.md` z `.claude/skills/`, kam ich dá `kontext connect skills --write`.
+
 ## OpenCode
 
 ```sh
@@ -24,6 +28,8 @@ kontext connect opencode --write   # writes opencode.json
   "mcp": { "kontext": { "type": "local", "command": ["kontext", "mcp"], "enabled": true } }
 }
 ```
+
+OpenCode číta `AGENTS.md` a skills v `.claude/skills/`. Nemá hook protokol, do ktorého by kontext zapisoval; agent dostane brief volaním `ctx_brief`, ako mu hovorí blok v `AGENTS.md`.
 
 ## Superset a ďalšie orchestrátory {#superset-and-other-orchestrators}
 

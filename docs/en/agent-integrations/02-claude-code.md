@@ -24,30 +24,35 @@ Claude Code asks each teammate once whether to trust the project's MCP servers. 
 claude mcp add --scope user kontext -- kontext mcp
 ```
 
-Check with `/mcp` inside Claude Code: the server `kontext` should list eleven `ctx_*` tools.
+Check with `/mcp` inside Claude Code: the server `kontext` should list sixteen `ctx_*` tools. Claude Code defers MCP tools behind tool search and loads only names and server instructions; `ctx_brief` carries `alwaysLoad`, so it is loaded from the first turn.
 
 Registered for every project, kontext stays out of the way where nobody set it up: in a repository without a knowledge store it tells the agent so in its instructions, serves `ctx_brief`, `ctx_search`, `ctx_read` and `ctx_why` over docs and history, refuses team captures and promotions (private notes still work), and bootstraps only when asked (`ctx_init` with `bootstrap=true`, which the `kontext-init` prompt passes).
 
 ## Brief at session start
 
-Add a `SessionStart` hook that injects the brief as additional context:
+Hooks inject the brief at session start and the governing entries before an edit (opt-in until the A/B report; see [Hooks](../guides/09-hooks.md)):
 
 ```sh
-kontext connect claude-hooks --write
+kontext connect claude --hooks --write    # also registers the MCP server in .mcp.json
+kontext connect claude-hooks --write      # only the hooks
 ```
 
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      { "hooks": [ { "type": "command", "timeout": 15,
-        "command": "command -v kontext >/dev/null 2>&1 && kontext brief --format claude-hook 2>/dev/null || true" } ] }
-    ]
-  }
-}
-```
+`kontext brief --format claude-hook` still prints `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "…"}}`; the SessionStart hook older versions wrote with it is replaced by `kontext hook --host claude`.
 
-`kontext brief --format claude-hook` prints `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "…"}}`. The hook is a no-op on machines without kontext.
+## Hooks {#hooks}
+
+Both commands write into `.claude/settings.json`:
+
+| Event | Matcher | What the agent gets |
+| --- | --- | --- |
+| `SessionStart` | `startup\|resume\|clear\|compact` | the brief; after a compaction or resume a shorter brief and the ids already told |
+| `SubagentStart` | | the brief for the subagent |
+| `PreToolUse` | `Edit\|Write\|MultiEdit` | the entries governing the edited files not yet told in this session |
+| `PreToolUse` | `Bash` | a deny for `kontext trust`, nothing otherwise |
+
+Every hook runs `kontext hook --host claude`, which reads the hook JSON on stdin and answers with `hookSpecificOutput.additionalContext` (at most 10 000 characters). Hooks draw from one `[hooks] session_budget_tokens` budget (6000), never block an edit, never call a model, and exit 0 with no output on any error. `KONTEXT_HOOKS=off` or `[hooks] enabled = false` turns them off.
+
+The `Bash` hook is written by every `kontext connect claude --write`, with or without `--hooks`: it denies `kontext trust` run by the agent, so the agent cannot pin commands or adapters for you (see [Security](../concepts/08-security.md#verify)).
 
 ## Slash commands
 
@@ -62,7 +67,7 @@ kontext connect claude-hooks --write
 Four recipes for knowledge maintenance ship with the binary as `SKILL.md` files. Install them into the project (commit them, so the team's agents share them):
 
 ```sh
-kontext connect skills --write        # .claude/skills/kontext-*/SKILL.md
+kontext connect skills --write        # .claude/skills/ and .agents/skills/kontext-*/SKILL.md
 ```
 
 | Skill | Use |
@@ -72,7 +77,13 @@ kontext connect skills --write        # .claude/skills/kontext-*/SKILL.md
 | `kontext-verify` | give entries a `verify` command that proves the claim, so `kontext verify` re-runs it |
 | `kontext-merge` | find entries that say the same thing or disagree (`entries.related`) and draft one superseding entry per group |
 
-Each one ends in the local inbox or staged files for a person to review and commit; nothing in `.ai/` changes before that. Re-running `connect skills --write` after an upgrade brings the files back to the shipped text. The same files work in any client that reads the `SKILL.md` layout.
+Each one ends in the local inbox or staged files for a person to review and commit; nothing in `.ai/` changes before that. Each file ends with a `<!-- kontext-skill-hash: <hash> -->` marker of the shipped text it was written from: re-running `connect skills --write` after an upgrade updates files nobody edited and keeps files your team changed, with a note; `--force` replaces them. The same files work in any client that reads the `SKILL.md` layout (`.agents/skills` for Codex, `.claude/skills` for Cursor and OpenCode).
+
+When a verify command is not pinned, `kontext-audit` and `kontext-verify` show the command and stop; they never run `kontext trust`.
+
+## Plugin
+
+The repository ships a Claude Code plugin built from the same sources as `connect`: `.claude-plugin/plugin.json` with the MCP server, the hooks and the skills. Install it from the plugin marketplace instead of running the `connect` commands one by one; the hooks in the plugin follow the same opt-in and kill switch.
 
 ## CLAUDE.md
 
@@ -80,7 +91,7 @@ Each one ends in the local inbox or staged files for a person to review and comm
 kontext connect agents-md --write
 ```
 
-adds a marked block with the working rules to `AGENTS.md`, or to `CLAUDE.md` when that is the file your repository uses. Re-running updates the block in place.
+adds a marked block with the working rules to `AGENTS.md`. Claude Code reads `AGENTS.md` natively; when the repository also has a `CLAUDE.md`, kontext adds an `@AGENTS.md` import to it instead of a second copy. Re-running updates the block in place.
 
 ## Permissions
 
@@ -90,12 +101,20 @@ To stop Claude Code from asking before every kontext call, allow the read-only t
 {
   "permissions": {
     "allow": ["mcp__kontext__ctx_brief", "mcp__kontext__ctx_search", "mcp__kontext__ctx_read",
-              "mcp__kontext__ctx_why", "mcp__kontext__ctx_log", "mcp__kontext__ctx_init"]
+              "mcp__kontext__ctx_why", "mcp__kontext__ctx_log", "mcp__kontext__ctx_drift",
+              "mcp__kontext__ctx_threads"]
   }
 }
 ```
 
-Keep the writing tools (`ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init_submit`) on "ask" if you want to confirm each capture.
+| Tool | Suggested | Why |
+| --- | --- | --- |
+| `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift`, `ctx_threads` | allow | read only |
+| `ctx_capture`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init_submit` | ask, or allow if you review the diff anyway | write the inbox, the working tree or the index |
+| `ctx_init` | ask | with `bootstrap=true` it writes the store skeleton |
+| `ctx_confirm`, `ctx_challenge` | ask | write a ledger line or a challenge for review |
+| `ctx_verify` | ask | runs a pinned shell command from the repository (`destructiveHint: true`) |
+| `ctx_api` | ask | reaches every application operation, including writes |
 
 ## Headless (`claude -p`)
 

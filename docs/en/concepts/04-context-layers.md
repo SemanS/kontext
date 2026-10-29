@@ -11,6 +11,7 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | Header | project, repository id, branch, *About* (overview summary), *Stack* |
 | Rules for agents | `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, Copilot instructions, and nested `AGENTS.md` files on the focus paths |
 | Changed since … | knowledge added, changed or removed since this worktree's last brief, at most five lines ([below](#changed)) |
+| Governs &lt;focus&gt; (N) | with a focus, every active entry whose `paths` govern it, one compact line each, before anything else ([below](#governing)) |
 | Decisions | active decisions, most relevant to the focus first, one line each (up to `brief.max_decisions`) |
 | Conventions · Learnings & pitfalls · Incidents | one line each, focus-ranked |
 | Flows through the focus | with a focus, the [flows](02-knowledge-store.md#flows) whose `paths` overlap it (up to four, with their step count); an unfocused brief says in one line how many flows exist |
@@ -22,6 +23,16 @@ Agents pay for every token they read. kontext answers in small, layered pieces a
 | State | inbox counts, bootstrap progress, entries due for review, entries that may need a refresh, missing git hooks, warnings; its room is kept aside, so a full brief does not drop it |
 
 `focus` accepts paths (files or directories) and topic words. Entries whose `paths` overlap a focus path rank first; topic words match titles, summaries and tags. When every focus path lies in another repository, the brief is that repository's ([Several repositories](09-several-repositories.md)).
+
+A focus item with `/`, a glob character or a known file extension is a path even when the file does not exist yet, so an agent about to create `src/billing/refunds.rs` gets the entries governing `src/billing/**`. Overlap works both ways: a directory focus matches a pattern below it, including patterns that start with a wildcard (`**/migrations/*.sql` against `src/db`) or a leading slash.
+
+### What governs the focus {#governing}
+
+A focused brief never drops a governing entry silently. The *Governs &lt;focus&gt; (N)* section is reserved before every other section and lists one line per entry: full id, title, marks and `· N commits since`. It is ordered by how specifically the entry's `paths` name the focus (a file, then a directory, then a glob, then `**`), and then oldest first, since the oldest constraints are the ones a new change most often breaks. No word list ("never", "must") decides the order.
+
+When the section does not fit the budget, the entries that do not fit are named on one line that is always printed: `also governing: [id] [id] …`. Below the size of the section itself only ids are printed. The other kinds then trim line by line, and each trimmed section ends with a count line: `… 7 more (2 govern your focus)`. A whole section never disappears without that line. The footer that tells the agent where to look next counts against the budget, and superseded module docs are left out.
+
+Budgets in practice run from 200 to 1 400 tokens: an orchestrator such as Peer sends `max(200, 1500 − tokens already used)`, so 200 to 1 000 is the common case, not the edge. The *What changed since* line under a governing entry costs about 25 tokens; at 200 tokens the governing section is ids only.
 
 ### Marks {#marks}
 
@@ -43,9 +54,9 @@ Each brief records the commit it saw in a cache of the worktree's local state (`
 
 The section has its own small budget and is the first thing a full brief drops; the cache moves on only when the section was shown, so a dropped change comes up in the next brief.
 
-An entry is referred to by the shortest unique prefix of its id (`[2026-09-28-adapters]` rather than the id that repeats the whole title), or by its ADR number. `ctx_read` resolves either.
+An entry is referred to by its full id (`[2026-09-28-adapters-are-configuration]`), or by its ADR number. A shorter prefix would stop being unique once a longer id is added, and agents copy these references into `supersedes` and `[[links]]`.
 
-Claude Code can receive the brief automatically at session start: see [Claude Code](../agent-integrations/02-claude-code.md).
+Claude Code, Codex and Cursor can receive the brief automatically at session start and the governing entries before an edit: see [Hooks](../guides/09-hooks.md). What the hooks inject in one session, and `ctx_brief` when it knows the session, draws from one `[hooks] session_budget_tokens` budget (6000).
 
 ### Freshness {#freshness}
 
@@ -55,7 +66,7 @@ An entry is written once, but the code it governs keeps moving. The brief's *Sta
 - May need a refresh (20+ commits on their paths since they were made, edited or confirmed): [0007] Prices are integer cents (34 commits), … — check them: confirm what still holds (`ctx_confirm`), supersede what no longer does.
 ```
 
-The count starts at the latest of three moments: the entry's `date`, its [`checked`](./02-knowledge-store.md#checked) confirmation, and the last commit that changed the entry's own file (an edit counts as a look). Commits from the day of the date (or of a confirmation written as a day), commits up to a confirmation's second, and merge commits are not counted. A commit counts once however many of its files match, and renaming code out of a governed path counts too. Entries without `paths`, or without a `date` or `checked` to count from, are never flagged; incidents and module docs are not watched. A flag is a prompt to check, not a verdict: if the entry still holds, confirm it (`kontext confirm <id>`) and the count starts again; if it does not, supersede or retire it.
+The count starts at the latest of three moments: the entry's `date`, its [`checked`](./02-knowledge-store.md#checked) confirmation, and the last commit that changed the entry's own file (an edit counts as a look). Commits from the day of the date (or of a confirmation written as a day), commits up to a confirmation's second, and merge commits are not counted. With a confirmation or check that names a commit, the count is by ancestry: commits `HEAD` reaches and that commit does not, so a branch merged after the look counts. A failed check is not a look and does not reset the count; an agent or bulk stamp is a look. A commit counts once however many of its files match, and renaming code out of a governed path counts too. Entries without `paths`, or without a `date` or `checked` to count from, are never flagged; incidents and module docs are not watched. A flag is a prompt to check, not a verdict: if the entry still holds, confirm it (`kontext confirm <id>`) and the count starts again; if it does not, supersede or retire it.
 
 For a range of commits rather than the whole history, see [drift](./03-capture-and-review.md#drift).
 
@@ -92,5 +103,6 @@ Every hit carries a URI. `ctx_read` returns it at the level the agent asks for:
 - `ctx_why` keeps each section short: at most `limit` items per section.
 - `ctx_threads` returns a transcript in parts of `budget_chars` (default 20000), each small enough for one tool result.
 - Adapter sections in the brief get at most a third of the remaining budget each.
+- Host hooks draw from one `[hooks] session_budget_tokens` budget per session (`ctx_brief` too, given a `session_id` or `CLAUDE_SESSION_ID`); an edit hook repeats only entries not yet told in the session or whose blob changed.
 
 Token counts are estimated at four characters per token (deliberately simple and conservative).

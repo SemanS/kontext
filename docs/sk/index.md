@@ -91,16 +91,16 @@ Z týchto dvoch súborov kontext odvodí zvyšok:
 
 ## Prečo nie pamäť Claude Code alebo CLAUDE.md?
 
-| | CLAUDE.md, AGENTS.md | Automatická pamäť Claude Code | Služby pamäte | kontext |
+| | CLAUDE.md, AGENTS.md, `.claude/rules` | Automatická pamäť Claude Code | Služby pamäte | kontext |
 | --- | --- | --- | --- | --- |
 | Píše ju | ľudia, ako prózu | model, sám od seba | model, zo sessions | agenti navrhujú, ľudia schvaľujú |
 | Zdieľaná a posúdená | v pull requestoch | nie: jeden používateľ, jeden stroj | podľa nasadenia, bez review | v pull requeste danej zmeny |
-| K agentovi sa dostane | celý súbor, každú session | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | zoradená pre cesty, ktoré agent pomenuje, v rámci rozpočtu |
-| Záznam nesie | žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora |
+| K agentovi sa dostane | koreňový súbor každú session; vnorený `CLAUDE.md`, keď agent číta súbory v jeho adresári; súbor `.claude/rules` s `paths:`, keď sa dotkne zodpovedajúcich súborov | prvých 200 riadkov indexu, každú session | podľa podobnosti s dopytom | zoradená pre cesty, ktoré agent pomenuje, v rámci rozpočtu |
+| Záznam nesie | najviac cesty (`.claude/rules`); žiadny stav, dátum ani vlastníka | čas zápisu | podľa úložiska | cesty, stav, dátum, autora, posledné overenie |
 | Keď zastará | zostane, kým si to niekto nevšimne | model ho môže prepísať | model ho môže prepísať | označí sa po N commitoch na jeho cestách |
-| Funguje s | Claude Code; ostatní čítajú AGENTS.md | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
+| Funguje s | Claude Code číta `AGENTS.md` natívne, rovnako Codex, Cursor a OpenCode; `.claude/rules` len Claude Code | Claude Code | ich pluginom, SDK alebo MCP serverom | každým MCP klientom a CLI |
 
-kontext nenahrádza CLAUDE.md: nechaj tam pár pokynov, ktoré potrebuje každá session. Rozhodnutí je priveľa na to, aby sa načítavali celé, a sú pridôležité na to, aby zostali neposúdené. [Viac o alternatívach](/sk/getting-started/01-introduction#why-not)
+kontext nenahrádza CLAUDE.md ani `AGENTS.md`: nechaj tam pár pokynov, ktoré potrebuje každá session. Rozhodnutí je priveľa na to, aby sa načítavali celé, a sú pridôležité na to, aby zostali neposúdené. [Viac o alternatívach](/sk/getting-started/01-introduction#why-not)
 
 ## Pod tvojou kontrolou
 

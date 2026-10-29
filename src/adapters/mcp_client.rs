@@ -19,7 +19,26 @@ pub struct ToolInfo {
     pub description: String,
     #[serde(rename = "inputSchema")]
     pub input_schema: Value,
+    /// The upstream tool's own title, annotations and output schema, passed through unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Value>,
+    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
+
+/// An HTTP MCP server answered 404 to our session id: the session expired (server restart).
+#[derive(Debug)]
+struct SessionLost;
+
+impl std::fmt::Display for SessionLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MCP session expired (HTTP 404)")
+    }
+}
+
+impl std::error::Error for SessionLost {}
 
 type Pending = Arc<Mutex<HashMap<u64, mpsc::Sender<Value>>>>;
 
@@ -76,6 +95,8 @@ impl McpClient {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
+            // an adapter that talks a lot on stderr must not fill the disk
+            let _ = crate::events::rotate_log(p, 1_000_000);
             std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
         }) {
             Some(f) => cmd.stderr(f),
@@ -100,7 +121,7 @@ impl McpClient {
                     let is_response = msg.get("method").is_none() && (msg.get("result").is_some() || msg.get("error").is_some());
                     if is_response {
                         if let Some(id) = id_of(&msg)
-                            && let Some(tx) = pending.lock().unwrap().remove(&id)
+                            && let Some(tx) = pending.lock().unwrap_or_else(|p| p.into_inner()).remove(&id)
                         {
                             let _ = tx.send(msg);
                         }
@@ -124,7 +145,7 @@ impl McpClient {
                     }
                 }
                 alive.store(false, Ordering::SeqCst);
-                for (_, tx) in pending.lock().unwrap().drain() {
+                for (_, tx) in pending.lock().unwrap_or_else(|p| p.into_inner()).drain() {
                     let _ = tx.send(json!({"error": {"code": -32000, "message": "MCP server exited"}}));
                 }
             });
@@ -175,9 +196,9 @@ impl McpClient {
         if let Transport::Http(h) = &self.transport
             && let Some(v) = res.get("protocolVersion").and_then(|v| v.as_str())
         {
-            *h.protocol.lock().unwrap() = Some(v.to_string());
+            *h.protocol.lock().unwrap_or_else(|p| p.into_inner()) = Some(v.to_string());
         }
-        *self.server_info.lock().unwrap() = res;
+        *self.server_info.lock().unwrap_or_else(|p| p.into_inner()) = res;
         self.notify("notifications/initialized", json!({}))?;
         Ok(())
     }
@@ -190,16 +211,20 @@ impl McpClient {
     }
 
     fn notify(&self, method: &str, params: Value) -> Result<()> {
+        self.notify_within(method, params, Duration::from_secs(30))
+    }
+
+    fn notify_within(&self, method: &str, params: Value, timeout: Duration) -> Result<()> {
         let msg = json!({"jsonrpc": "2.0", "method": method, "params": params});
         match &self.transport {
             Transport::Stdio(s) => {
-                let mut w = s.stdin.lock().unwrap();
+                let mut w = s.stdin.lock().unwrap_or_else(|p| p.into_inner());
                 writeln!(w, "{msg}")?;
                 w.flush()?;
                 Ok(())
             }
             Transport::Http(h) => {
-                self.http_post(h, &msg, None, Duration::from_secs(30))?;
+                self.http_post(h, &msg, None, timeout)?;
                 Ok(())
             }
         }
@@ -214,23 +239,45 @@ impl McpClient {
                     bail!("adapter '{}': MCP server is not running", self.name);
                 }
                 let (tx, rx) = mpsc::channel();
-                s.pending.lock().unwrap().insert(id, tx);
+                s.pending.lock().unwrap_or_else(|p| p.into_inner()).insert(id, tx);
                 {
-                    let mut w = s.stdin.lock().unwrap();
+                    let mut w = s.stdin.lock().unwrap_or_else(|p| p.into_inner());
                     writeln!(w, "{msg}")?;
                     w.flush()?;
                 }
                 match rx.recv_timeout(timeout) {
                     Ok(v) => v,
                     Err(_) => {
-                        s.pending.lock().unwrap().remove(&id);
+                        s.pending.lock().unwrap_or_else(|p| p.into_inner()).remove(&id);
                         let _ = self.notify("notifications/cancelled", json!({"requestId": id, "reason": "timeout"}));
                         bail!("adapter '{}': {method} timed out after {}s", self.name, timeout.as_secs());
                     }
                 }
             }
             Transport::Http(h) => {
-                self.http_post(h, &msg, Some(id), timeout)?.ok_or_else(|| anyhow!("adapter '{}': no response to {method}", self.name))?
+                let sent = match self.http_post(h, &msg, Some(id), timeout) {
+                    // the server forgot our session (it restarted): start a new one once and retry
+                    Err(e) if e.downcast_ref::<SessionLost>().is_some() && method != "initialize" => {
+                        *h.session.lock().unwrap_or_else(|p| p.into_inner()) = None;
+                        self.initialize(timeout.max(Duration::from_secs(10)))
+                            .with_context(|| format!("adapter '{}': re-initializing after the session expired", self.name))?;
+                        self.http_post(h, &msg, Some(id), timeout)
+                    }
+                    other => other,
+                };
+                match sent {
+                    Ok(reply) => reply.ok_or_else(|| anyhow!("adapter '{}': no response to {method}", self.name))?,
+                    Err(e) => {
+                        if is_timeout(&e) {
+                            let _ = self.notify_within(
+                                "notifications/cancelled",
+                                json!({"requestId": id, "reason": "timeout"}),
+                                Duration::from_secs(3),
+                            );
+                        }
+                        return Err(e);
+                    }
+                }
             }
         };
         if let Some(err) = reply.get("error") {
@@ -252,19 +299,25 @@ impl McpClient {
         for (k, v) in &h.headers {
             req = req.header(k, v);
         }
-        if let Some(s) = h.session.lock().unwrap().clone() {
-            req = req.header("Mcp-Session-Id", &s);
+        let session = h.session.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(s) = &session {
+            req = req.header("Mcp-Session-Id", s);
         }
-        if let Some(p) = h.protocol.lock().unwrap().clone() {
+        if let Some(p) = h.protocol.lock().unwrap_or_else(|p| p.into_inner()).clone() {
             req = req.header("MCP-Protocol-Version", &p);
         }
-        let mut resp = req.send(msg.to_string()).with_context(|| format!("adapter '{}': POST {}", self.name, h.url))?;
+        let mut resp = req
+            .send(msg.to_string())
+            .with_context(|| format!("adapter '{}': POST {}", self.name, super::drivers::strip_url_secrets(&h.url)))?;
         if let Some(s) = resp.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
-            *h.session.lock().unwrap() = Some(s.to_string());
+            *h.session.lock().unwrap_or_else(|p| p.into_inner()) = Some(s.to_string());
         }
         let status = resp.status().as_u16();
         if status == 202 || status == 204 {
             return Ok(None);
+        }
+        if status == 404 && session.is_some() {
+            return Err(anyhow::Error::new(SessionLost).context(format!("adapter '{}'", self.name)));
         }
         if status >= 400 {
             let body = resp.body_mut().read_to_string().unwrap_or_default();
@@ -314,7 +367,7 @@ impl McpClient {
     }
 
     pub fn list_tools(&self, timeout: Duration) -> Result<Vec<ToolInfo>> {
-        if let Some(t) = self.tools.lock().unwrap().clone() {
+        if let Some(t) = self.tools.lock().unwrap_or_else(|p| p.into_inner()).clone() {
             return Ok(t);
         }
         let mut tools = Vec::new();
@@ -330,6 +383,9 @@ impl McpClient {
                     name: t.get("name").and_then(|n| n.as_str()).unwrap_or_default().to_string(),
                     description: t.get("description").and_then(|n| n.as_str()).unwrap_or_default().to_string(),
                     input_schema: t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type": "object"})),
+                    title: t.get("title").and_then(|n| n.as_str()).map(str::to_string),
+                    annotations: t.get("annotations").filter(|a| a.is_object()).cloned(),
+                    output_schema: t.get("outputSchema").filter(|a| a.is_object()).cloned(),
                 });
             }
             cursor = res.get("nextCursor").and_then(|c| c.as_str()).map(str::to_string);
@@ -337,7 +393,7 @@ impl McpClient {
                 break;
             }
         }
-        *self.tools.lock().unwrap() = Some(tools.clone());
+        *self.tools.lock().unwrap_or_else(|p| p.into_inner()) = Some(tools.clone());
         Ok(tools)
     }
 
@@ -355,6 +411,11 @@ impl Drop for McpClient {
             let _ = c.wait();
         }
     }
+}
+
+/// Whether a transport error is the request running out of time (the server may still work on it).
+fn is_timeout(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| matches!(c.downcast_ref::<ureq::Error>(), Some(ureq::Error::Timeout(_))))
 }
 
 /// Text of an MCP tool result (`content[].text` joined).

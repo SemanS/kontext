@@ -39,6 +39,8 @@ Pre tím patrí brána tam, kadiaľ prejde každý commit, nech ho urobilo čoko
 
 `kontext confirm` aj povýšenia stagujú súbory v indexe gitu; jj berie súbory z pracovnej kópie a index ignoruje, takže to neškodí. Trailery sa nepridajú samy: napíš ich do popisu (`prepare-commit` ich vypíše).
 
+Kontroly, ktoré hľadajú špinavý strom (beh `verify` označí `[dirty: <cesty>]` v denníku a cez MCP sa nespustí, `confirm` odmietne súbor s nestagnutými úpravami), vidia pracovnú kópiu jj ako necommitnuté zmeny z pohľadu gitu. Najprv spusti `jj commit` alebo `jj new`, aby súbory, ktoré potvrdzuješ, boli v commite; colocated jj smoke test beží v CI, keď je `jj` nainštalované.
+
 ## Trailery
 
 Pre každý súbor znalostí stagnutý v commite pridá `prepare-commit-msg` trailer (`git interpret-trailers --if-exists addIfDifferent`):
@@ -68,7 +70,7 @@ Po commite, merge alebo rebase porovná kontext súbory znalostí v `HEAD` so sn
 
 ## Outbox
 
-Hooky nikdy nekomunikujú so sieťou. Udalosti sa pripisujú do `<git-common-dir>/kontext/outbox.jsonl` a odpojený `kontext outbox flush` ich doručí. Doručenia sa sledujú pre každý adaptér a operáciu, skúšajú sa znova až osemkrát a v jednom klone beží naraz len jedno doručovanie. `kontext outbox` vypíše, čo čaká, a poslednú chybu.
+Hooky nikdy nekomunikujú so sieťou. Udalosti sa pripisujú do `<git-common-dir>/kontext/outbox.jsonl` a odpojený `kontext outbox flush` ich doručí. Doručenia sa sledujú pre každý adaptér a operáciu a v jednom klone beží naraz len jedno doručovanie. Pokus sa ráta len adaptéru, ktorý sa naozaj skúsil, takže výpadok jedného adaptéra nemíňa pokusy ostatným; eventy pre adaptér, ktorý preskočilo `when`, ostanú vo fronte. Po ôsmich neúspešných pokusoch sa event presunie do `outbox.dead.jsonl`, ktorý ukáže `kontext status` a vráti `kontext outbox retry`. Nič sa nestratí ticho. `kontext outbox` vypíše, čo čaká, a poslednú chybu; sync hlási mazania a premenovania; logy adaptérov rotujú.
 
 ## Merge
 

@@ -12,6 +12,7 @@
 #     forbid = [..]   must not appear (noise)
 #     rank = { "needle" = N }         the first numbered hit containing needle is within the top N
 #     max_tokens = N                  output size limit (chars / 4)
+#     expect_exit = N                 the exit status it must end with (default 0; any other fails the step)
 # `pending = "<item>"` marks behaviour not built yet: reported, not asserted.
 
 # ------------------------------------------------------------------------------------- 1.1
@@ -292,6 +293,7 @@ Reports over a year time out.
 [[scenario.step]]
 run = ["check"]
 expect = ["error: .ai/learnings/reports-time-out.md: review_by"]
+expect_exit = 1
 
 [[scenario]]
 name = "per-kind review default applies to new incidents"
@@ -415,6 +417,7 @@ item = "2.3"
 [[scenario.step]]
 run = ["api", "drafts.retire", '{"operation_id":"rt-1","entry_id":"log-with-request-ids","entry_revision":"0000000000000000000000000000000000000000","reason":"Tracing replaced it."}']
 expect = ["operation_conflict"]
+expect_exit = 1
 [[scenario.step]]
 write = ".ai/conventions/log-with-request-ids.md"
 content = """---
@@ -428,6 +431,7 @@ Every log line carries the trace id.
 [[scenario.step]]
 run = ["api", "drafts.retire", '{"operation_id":"rt-2","entry_id":"log-with-request-ids","entry_revision":"{head}","reason":"Tracing replaced it."}']
 expect = ["operation_conflict"]
+expect_exit = 1
 
 [[scenario]]
 name = "retire and supersede work for every kind"
@@ -512,6 +516,7 @@ item = "3.2"
 [[scenario.step]]
 run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
 expect = ["model_unavailable"]
+expect_exit = 1
 
 [[scenario]]
 name = "revise drafts a superseding entry"
@@ -534,3 +539,180 @@ format = "text"
 [[scenario.step]]
 run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
 expect = ['"supersedes":["2026-02-20-round-prices-half-even-on-invoices"]', '"status":"proposed"', '"paths":["src/pricing/**"]']
+
+# ------------------------------------------------------------------------- search ranking
+# Decision 13: ranking changes land with graded evidence (tests/eval/qrels.tsv, queries.toml).
+
+[[scenario]]
+name = "a superseded hit names its successor"
+item = "3.3"
+[[scenario.step]]
+write = ".ai/decisions/2026-05-02-cache-product-pages-for-one-minute.md"
+content = """---
+id: 2026-05-02-cache-product-pages-for-one-minute
+kind: decision
+title: Cache product pages for one minute
+status: accepted
+date: 2026-05-02
+supersedes: [2026-05-01-cache-product-pages-for-an-hour]
+paths: [src/catalog/**]
+---
+
+## Decision
+
+Product pages are cached for one minute at the edge, so a price change shows within a minute.
+"""
+[[scenario.step]]
+write = ".ai/decisions/2026-05-01-cache-product-pages-for-an-hour.md"
+content = """---
+id: 2026-05-01-cache-product-pages-for-an-hour
+kind: decision
+title: Cache product pages for an hour at the edge
+status: superseded
+superseded_by: [2026-05-02-cache-product-pages-for-one-minute]
+date: 2026-05-01
+paths: [src/catalog/**]
+---
+
+## Decision
+
+Product pages are cached for an hour at the edge; product pages at the edge cache well.
+"""
+[[scenario.step]]
+run = ["search", "cache product pages at the edge"]
+expect = ["→ superseded by [2026-05-02-cache-product-pages-for-one-minute] Cache product pages for one minute"]
+keep = ["<kx:2026-05-01-cache-product-pages-for-an-hour>"]
+rank = { "<kx:2026-05-02-cache-product-pages-for-one-minute>" = 1 }
+
+[[scenario]]
+name = "a decision outranks a doc chunk for its own title words"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "retry payments with idempotency keys"]
+keep = ["<file:docs/payments.md#retrying-payments>"]
+rank = { "<kx:2026-02-03-retry-payments-with-idempotency-keys>" = 1 }
+
+[[scenario]]
+name = "namietka finds námietka"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "namietka"]
+rank = { "<file:docs/sk/namietky.md>" = 1 }
+
+[[scenario]]
+name = "a singular query finds the plural"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "outages", "-k", "incident"]
+expect = ["<kx:2026-04-02-checkout-outage-from-an-expired-certificate>"]
+[[scenario.step]]
+run = ["search", "webhook retry"]
+keep = ["<kx:webhook-retries-arrive-twice-from-the-provider>", "<kx:webhook-retries-arrive-twice-from-the-carrier>"]
+
+[[scenario]]
+name = "phrase with identifier ranks exact wording first"
+item = "3.3"
+[[scenario.step]]
+write = ".ai/learnings/importer-holds-the-catalog-lock.md"
+content = """---
+id: importer-holds-the-catalog-lock
+kind: learning
+title: Importer holds the catalog lock
+---
+
+The importer runs its snapshotUpsert retry loop only while it holds the catalog lock, so two concurrent imports never interleave their writes to the catalog tables.
+"""
+[[scenario.step]]
+write = ".ai/learnings/exports-are-safe-to-repeat.md"
+content = """---
+id: exports-are-safe-to-repeat
+kind: learning
+title: Exports are safe to repeat
+---
+
+Retry an export freely: snapshotUpsert is idempotent.
+"""
+[[scenario.step]]
+run = ["search", "snapshotUpsert retry"]
+keep = ["<kx:exports-are-safe-to-repeat>"]
+rank = { "<kx:importer-holds-the-catalog-lock>" = 1 }
+# ------------------------------------------------------------------------- focused brief (0.9.2)
+# The governing section (decision 6 of the 2026-10-29 analysis): a focused brief never silently
+# drops an entry that governs the focus. Fixture `dense`: twelve decisions govern
+# src/checkout/total.rs through an exact file, a directory, `dir/**`, globs and `**`.
+
+[[scenario]]
+name = "every governing entry survives a focused brief"
+item = "brief-governs"
+fixture = "dense"
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "200"]
+expect = ["## Governs src/checkout/total.rs (12)"]
+keep = ["[totals-in-cents]", "[round-half-even]", "[tax-after-discount]", "[no-float-math]", "[one-currency-per-cart]", "[discounts-stack-once]", "[log-cart-ids]", "[totals-are-pure]", "[freeze-prices-at-checkout]", "[vat-from-shipping-address]", "[errors-are-typed]", "[review-money-changes]"]
+max_tokens = 200
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "400"]
+expect = ["## Governs src/checkout/total.rs (12)"]
+keep = ["[totals-in-cents]", "[round-half-even]", "[tax-after-discount]", "[no-float-math]", "[one-currency-per-cart]", "[discounts-stack-once]", "[log-cart-ids]", "[totals-are-pure]", "[freeze-prices-at-checkout]", "[vat-from-shipping-address]", "[errors-are-typed]", "[review-money-changes]"]
+max_tokens = 400
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "600"]
+expect = ["## Governs src/checkout/total.rs (12)"]
+keep = ["[totals-in-cents]", "[round-half-even]", "[tax-after-discount]", "[no-float-math]", "[one-currency-per-cart]", "[discounts-stack-once]", "[log-cart-ids]", "[totals-are-pure]", "[freeze-prices-at-checkout]", "[vat-from-shipping-address]", "[errors-are-typed]", "[review-money-changes]"]
+max_tokens = 600
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "1000"]
+expect = ["## Governs src/checkout/total.rs (12)"]
+keep = ["[totals-in-cents]", "[round-half-even]", "[tax-after-discount]", "[no-float-math]", "[one-currency-per-cart]", "[discounts-stack-once]", "[log-cart-ids]", "[totals-are-pure]", "[freeze-prices-at-checkout]", "[vat-from-shipping-address]", "[errors-are-typed]", "[review-money-changes]"]
+max_tokens = 1000
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "1400"]
+expect = ["## Governs src/checkout/total.rs (12)", "Cart totals are integer cents"]
+keep = ["[totals-in-cents]", "[round-half-even]", "[tax-after-discount]", "[no-float-math]", "[one-currency-per-cart]", "[discounts-stack-once]", "[log-cart-ids]", "[totals-are-pure]", "[freeze-prices-at-checkout]", "[vat-from-shipping-address]", "[errors-are-typed]", "[review-money-changes]"]
+max_tokens = 1400
+
+[[scenario]]
+name = "a not-yet-created file in a governed directory gets its governing entries"
+item = "brief-governs"
+fixture = "dense"
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/refund.rs", "--no-adapters"]
+expect = ["## Governs src/checkout/refund.rs"]
+keep = ["[tax-after-discount]", "[no-float-math]", "[one-currency-per-cart]", "[discounts-stack-once]", "[freeze-prices-at-checkout]"]
+forbid = ["[catalog-pages-are-cached]"]
+
+[[scenario]]
+name = "a glob focus is a path"
+item = "brief-governs"
+fixture = "dense"
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/**", "--no-adapters"]
+expect = ["## Governs src/checkout/**"]
+keep = ["[totals-in-cents]", "[tax-after-discount]", "[no-float-math]", "[discounts-stack-once]"]
+forbid = ["[catalog-images-on-cdn]"]
+
+[[scenario]]
+name = "a cut kind leaves a count line"
+item = "brief-governs"
+fixture = "dense"
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "400"]
+expect = ["govern your focus): `ctx_search kinds=[convention]`"]
+max_tokens = 400
+
+[[scenario]]
+name = "an agent stamp is never called verified"
+item = "brief-governs"
+fixture = "dense"
+[[scenario.step]]
+write = ".ai/confirmations.log"
+content = "2026-05-01T11:00:00Z\ttotals-in-cents\tagent\t{head}\tagent:claude\t-\tlooked while editing\n2026-05-01T11:00:00Z\tround-half-even\tbulk\t{head}\tEval\t-\tsweep\n2026-05-01T11:00:00Z\tvat-from-shipping-address\tverify\t{head}\tEval\t0\tcargo test vat\n"
+[[scenario.step]]
+git = ["add", "-A"]
+[[scenario.step]]
+git = ["commit", "-qm", "looks"]
+date = "2026-05-02T10:00:00+00:00"
+[[scenario.step]]
+run = ["brief", "--focus", "src/checkout/total.rs", "--no-adapters", "--budget", "6000"]
+expect = ["stamped by agent at", "bulk stamp at"]
+forbid = ["verified agent", "verified bulk", "verified verify", "verify (FAILED)"]

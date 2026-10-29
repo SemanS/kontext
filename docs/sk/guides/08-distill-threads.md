@@ -27,7 +27,7 @@ Distilling 1 thread(s)…
 
 Čo sa deje:
 
-1. Vlákno sa prečíta do kompaktného prepisu: čo sa vývojár pýtal, čo agent odpovedal, čo upravil a spustil (`→ edit src/cache.ts`, `→ $ git commit …`). Výstupy nástrojov, uvažovanie a vložené inštrukcie (AGENTS.md, prostredie, hooky) sa vynechajú. Notifikácia prostredia, napríklad `<task-notification>` v Claude Code o dokončenom agentovi na pozadí, sa zmení na jeden riadok (`→ Agent "…" finished: <začiatok jeho výsledku>`). Cesty sa prepíšu relatívne k repozitáru, dočasné adresáre relácie agenta sa skrátia na `<tmp>/` a tajné údaje sa zamaskujú.
+1. Vlákno sa prečíta do kompaktného prepisu: čo sa vývojár pýtal, čo agent odpovedal, čo upravil a spustil (`→ edit src/cache.ts`, `→ $ git commit …`). Výstupy nástrojov, uvažovanie, vložené inštrukcie (AGENTS.md, prostredie, hooky), výstupy bash režimu v Claude Code (príkazy `!` a to, čo vypísali) a zhrnutia kompaktácie sa vynechajú. Notifikácia prostredia, napríklad `<task-notification>` v Claude Code o dokončenom agentovi na pozadí, sa zmení na jeden riadok (`→ Agent "…" finished: <začiatok jeho výsledku>`). Cesty sa prepíšu relatívne k repozitáru, dočasné adresáre relácie agenta sa skrátia na `<tmp>/` a tajné údaje sa zamaskujú.
 2. Prepis sa rozdelí na časti po zhruba 45 000 znakoch (`--max-parts`, predvolene 12, pri dlhšom vlákne rovnomerne rozložené) a pošle sa tvojmu LLM adaptéru, viacero naraz (`--jobs`).
 3. Model pomenuje rozhodnutia, konvencie, úskalia a incidenty, ktoré má tím vedieť aj neskôr, najviac `--max` na vlákno (5). Vidí, čo už je zapísané, takže to neopakuje. Zistenia podobné existujúcemu záznamu alebo kandidátovi v inboxe sa vyradia.
 4. Každé zistenie sa stane kandidátom v inboxe s cestami, commitmi, v ktorých ho vlákno urobilo, `origin: thread` a zdrojom (`claude:4f1c2a9b`, ukáže ho `kontext inbox`, pri povýšení sa zahodí).
@@ -47,15 +47,22 @@ Prejdi ich cez `kontext inbox`, každý povýš so zmenou, ku ktorej patrí (`ko
 
 Pracovné vlákna nesú to, z čoho je projekt: mená a adresy ľudí, vložené e-maily a logy, hosty, zákaznícke dáta. Namerané na skutočnom klientskom vlákne: z 52 MB prepisu sa k modelu dostane 240 KB (0,5 %), výstupy nástrojov a obsah súborov nikdy. To, čo zostane, sa ďalej maskuje:
 
-- tajné údaje, ako všade v kontexte;
-- e-mailové adresy, telefónne čísla, IBAN, čísla kariet a IP adresy (`127.0.0.1` zostane);
-- tvoje vlastné vzory, napr. id integrácií klienta alebo mená zákazníkov:
+- tajné údaje, ako všade v kontexte: súkromný kľúč sa zamaskuje ako celý PEM blok od `BEGIN` po `END`, nie len prvý riadok;
+- e-mailové adresy; telefónne čísla s `+` aj národné čísla písané s oddeľovačmi (aspoň deväť číslic); IBAN; čísla kariet; adresy IPv4 aj IPv6 (`127.0.0.1` a `::1` zostanú);
+- každý výskyt na riadku, nie len prvý;
+- tvoje vlastné vzory, napr. id integrácií klienta alebo mená zákazníkov, spojené so vzormi, ktoré deklaruje repozitár:
 
   ```toml
   # .git/kontext/config.toml (len tento klon) alebo ~/.config/kontext/repos/<slug>.toml
   [secrets]
   redact = ["\\bINT-\\d+\\b", "\\bAcme Corp\\b"]
   ```
+
+Vzor, ktorý sa nedá skompilovať, zastaví distill, `ctx_threads` aj autopilota skôr, než sa čokoľvek odošle; `kontext status` ho pomenuje. Chybný vzor sa nikdy ticho nezahodí.
+
+Čo sa **nemaskuje**: mená ľudí a firiem, ktorým nezodpovedá žiadny vzor, adresy ulíc, identifikátory vo voľnom texte a význam toho, čo zaznelo. Pridaj vzory pre to, čo tvoj klient považuje za citlivé, a pri pochybnosti si prompt najprv pozri cez `--dry-run`.
+
+Čo prompt pošle: zamaskovanú časť prepisu, názov repozitára, zoznam už zaznamenaných záznamov (názvy a id, aby ich model neopakoval) a inštrukcie. URL remote repozitára, host ani organizácia sa neposielajú.
 
 Model má pokyn písať pre tím (roly namiesto mien ľudí, žiadne kontakty, záznamy, prístupové údaje ani hosty) a to, čo napíše, sa znova zamaskuje. Nič sa nezdieľa, kým to neprejdeš v inboxe.
 
@@ -69,7 +76,7 @@ Pri repozitári klienta ešte rozhodni:
 Prompt `kontext-distill` (`/mcp__kontext__kontext-distill` v Claude Code), alebo len prosba („vytiahni trvalé znalosti z vlákna claude:4f1c2a9b“), nechá prácu na pripojenom agentovi a jeho vlastnom modeli, bez LLM adaptéra:
 
 1. `ctx_threads` bez argumentov vypíše posledné vlákna tohto repozitára a aktuálny workspace v Supersete;
-2. `ctx_threads thread="claude:4f1c2a9b"` vráti prepis po častiach (`part=2`, … keď ohlási, že je ich viac);
+2. `ctx_threads thread="claude:4f1c2a9b"` vráti prepis po častiach (`part=2`, … keď ohlási, že je ich viac). Číta len `claude:`, `codex:`, `superset:`, `last` a súbory pod známymi koreňmi prepisov;
 3. agent overí `ctx_search` a každé zistenie zapíše cez `ctx_capture` (so `source` a `commits`).
 
 ## Superset

@@ -16,11 +16,13 @@ Neskoršie vrstvy vyhrávajú. Tabuľky sa zlučujú kľúč po kľúči; polia 
 
 Používateľský adresár je `$KONTEXT_CONFIG_DIR`, inak `$XDG_CONFIG_HOME/kontext`, inak `~/.config/kontext`. `kontext status` vypíše vrstvy, ktoré sa načítali.
 
+Jeden kľúč sa číta len z tvojich používateľských vrstiev (2 a 3), takže ho naklonovaný repozitár nenastaví: `[verify] pass_env`. Dva zoznamy sa naprieč vrstvami spájajú namiesto nahradenia: `secrets.redact` a `secrets.allow`. Zdieľané `[vars]` nikdy neprepíšu `vars` adaptéra deklarovaného v tvojich vlastných vrstvách.
+
 ## `[project]`
 
 | Kľúč | Predvolene | |
 | --- | --- | --- |
-| `name` | nastaví ho `kontext init` z koreňového manifestu; inak názov repozitára z remote | zobrazí sa v briefe; `{{project.name}}` v šablónach |
+| `name` | nastaví ho `kontext init` z koreňového manifestu; inak názov repozitára z remote | zobrazí sa v briefe; `{{project.name}}` v šablónach. V zdieľanej konfigurácii musí byť slug a pokrýva ho trust pin |
 | `description` | | |
 
 ## `[store]` {#store}
@@ -91,6 +93,8 @@ Globy sa riadia konvenciami gitu: vzor bez `/` zodpovedá v ľubovoľnej hĺbke,
 | `adapters` | `always` | kedy sa `ctx_search` a `kontext search` pýtajú adaptérov s operáciou `search`: `always`, alebo `fallback` — iba keď lokálne zdroje našli menej ako `min_local_hits` zásahov. Adaptér menovaný v `sources` alebo `adapters: true` (`--adapters`) sa pýta vždy |
 | `min_local_hits` | `3` | koľko lokálnych zásahov v režime `fallback` stačí |
 
+Lokálne zdroje sa pred spojením vážia: záznamy 1.0, kúsky dokumentácie 0.7, commity 0.6, záznamy vnoreného úložiska 0.95. Tieto váhy sú vstavané a zatiaľ sa nedajú nastaviť; kľúče `weight_entries`, `weight_docs` a `weight_commits` sú plánované. Adaptéry majú vlastnú `weight` ([konfigurácia adaptérov](../adapters/02-configuration.md)).
+
 `fallback` ušetrí cestu k adaptéru, keď lokálna odpoveď už existuje (v evaluačnej sade hub s
 oneskorením jednej sekundy pridal v režime `always` ku každému hľadaniu asi sekundu a v režime
 `fallback` nič). Znamená to však aj, že sémantická pamäť sa nepýta, keď BM25 niečo našlo, a preto
@@ -110,14 +114,20 @@ predvolene ostáva `always`.
 | `validate` | `true` | validuje stagnuté záznamy v pre-commit |
 | `trailers` | `true` | pridáva trailery v prepare-commit-msg |
 | `remind_inbox` | `true` | pripomenie kandidátov z inboxu, ktorí sa týkajú stagnutých ciest |
+| `enabled` | `true` | hooky hostiteľov agentov (`kontext hook --host`) odpovedajú; `false` (alebo `KONTEXT_HOOKS=off`, aj `0`, `false`, `no`) spôsobí, že nevypíšu nič. Bežia len tam, kde ich nainštaloval `kontext connect <host> --hooks` |
+| `session_budget_tokens` | `6000` | tokeny, ktoré kontext smie vložiť do jednej session: každá odpoveď hooku a `ctx_brief`, keď pozná session (`session_id`, `CLAUDE_SESSION_ID`) |
+| `edit_budget_tokens` | `900` | najviac, čo nesie jedna odpoveď na úpravu (v rámci toho, čo session ostáva) |
+| `stop_note` | `false` | na hook Stop odpovie jedným riadkom: riadiace záznamy, ktoré session dostala, a minuté tokeny. `kontext connect` hook Stop neinštaluje; nikdy neblokuje |
+
+Prvé tri kľúče riadia git hooky, posledné štyri hooky hostiteľov agentov (pozri [Hooky](../guides/09-hooks.md)). Nastaviť ich môže každá vrstva; neskoršia vyhráva.
 
 ## `[secrets]`
 
 | Kľúč | Predvolene | |
 | --- | --- | --- |
 | `scan` | `store` | `store` (súbory znalostí), `staged` (každý stagnutý textový súbor) alebo `off` |
-| `allow` | `[]` | regexy riadkov, ktoré sa ignorujú |
-| `redact` | `[]` | regexy hodnôt, ktoré sa maskujú vo vláknach agentov a v tom, čo sa z nich vydestiluje (meno klienta, id integrácie); drž ich v súkromnej vrstve (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`) |
+| `allow` | `[]` | regexy riadkov, ktoré sa ignorujú; spájajú sa naprieč vrstvami |
+| `redact` | `[]` | regexy hodnôt, ktoré sa maskujú vo vláknach agentov a v tom, čo sa z nich vydestiluje (meno klienta, id integrácie); drž ich v súkromnej vrstve (`.git/kontext/config.toml`, `~/.config/kontext/repos/<slug>.toml`). Tvoje vzory sa spájajú s repozitárovými, nikdy ich repozitár nenahradí. Vzor, ktorý sa nedá skompilovať, je varovanie v `kontext status` a distill, threads aj autopilot odmietnu poslať modelu čokoľvek, kým ho neopravíš |
 
 ## `[init]`
 
@@ -130,12 +140,24 @@ predvolene ostáva `always`.
 | `max_decision_tasks` | `20` | úlohy `dec:` |
 | `task_max_files` | `12` | kľúčové súbory na úlohu modulu |
 | `task_inline_chars` | `24000` | priložený zdroják na úlohu autopilota |
-| `jobs` | `2` | paralelizmus autopilota (aj `--jobs`) |
+| `jobs` | `2` | paralelizmus autopilota; `--jobs` ho prepíše |
 | `llm` | | predvolený adaptér autopilota |
+| `decision_words` | `{}` | tabuľka ďalších slovných kmeňov, ktoré označia commit v tvare rozhodnutia: zoznamy `strong`, `rationale` a `contrast`, pridané k angličtine a k dodávaným slovám zisteného jazyka (slovenčina, čeština), napríklad `decision_words = { strong = ["rozhodli"], contrast = ["namiesto"] }` |
+| `bot_authors` | `[]` | ďalší autori commitov, z ktorých sa rozhodnutia nikdy neťažia (podreťazec autora, bez ohľadu na veľkosť písmen), popri vstavaných botoch (`[bot]`, renovate, dependabot, github-actions, greenkeeper, snyk-bot) |
 
 ## `[vars]`
 
 Globálne premenné šablón, dostupné každému adaptéru ako `{{vars.<name>}}` (`vars` adaptéra ich prepíšu).
+
+Zdieľané `[vars]` pokrýva trust pin a nikdy neprepíšu `vars` adaptéra deklarovaného v tvojich vlastných vrstvách.
+
+## `[verify]` {#verify}
+
+| Kľúč | Predvolene | |
+| --- | --- | --- |
+| `pass_env` | `[]` | mená ďalších premenných prostredia, ktoré verify príkaz dostane, popri `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR` a `TERM`. Číta sa len z tvojich vlastných vrstiev; zdieľaná konfigurácia ho nenastaví |
+
+Verify príkaz beží až po `kontext trust --verify`; pozri [Bezpečnosť](../concepts/08-security.md#verify).
 
 ## `[adapters.<name>]`
 

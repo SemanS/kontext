@@ -28,12 +28,12 @@ Keep it under 500 characters, deterministic, with no network and nothing it writ
 
 ## 3. Record it
 
-- An entry already in the store: add `verify: "<command>"` to its front matter (quote it), then `kontext check` and `kontext verify <id> --because "first run"`. The outcome lands in the ledger and the health view reads *verified by its check*.
-- A draft in the inbox: `kontext inbox verify <inbox-id> "<command>"`; promotion keeps it.
-- A new capture: `kontext capture … --verify "<command>"` (`ctx_capture` with `verify`).
+- A draft in the inbox: `ctx_inbox` with `action: "verify"` (or `kontext inbox verify <inbox-id> "<command>"`); promotion keeps it.
+- A new capture: `ctx_capture` with `verify` (or `kontext capture … --verify "<command>"`).
+- An entry already in the store: add only a `verify: "<command>"` line to its front matter (quote it), then `kontext check`. Change nothing else in the file: reviewed text is never rewritten in place, and a claim that needs rewording is a superseding entry.
 
-Edit only the `verify` line of an existing entry; a claim that needs rewording is a superseding entry, not an edit.
+A verify command is code from the repository: it runs only after a person pins it on their machine (`kontext trust --verify <id>` at their terminal; editing the command revokes the pin). When `ctx_verify` answers `untrusted_verify` or hands the command back, show the person the command and stop. Never run `kontext trust` yourself. What you check by hand is recorded with `ctx_confirm` (an agent stamp), never as a verify line.
 
 ## 4. Hand over
 
-Report which entries got a check and which could not (and why), and what `kontext verify` printed. The edits are staged; the person reviews and commits them. Teams can then run `kontext verify <ids>` or `kontext drift --fail` in their check script, so a claim that stops holding fails a build instead of waiting for a reader.
+Report which entries got a check and which could not (and why), and which commands wait for the person to pin and run (`kontext verify <id>` on their terminal shows an unpinned command and asks first). The edits are staged; the person reviews and commits them. Teams can then run `kontext verify <ids>` or `kontext drift --fail` in their check script, so a claim that stops holding fails a build instead of waiting for a reader.

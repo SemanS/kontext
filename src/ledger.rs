@@ -91,6 +91,59 @@ impl Line {
     pub fn is_confirmation(&self) -> bool {
         self.kind != "verify"
     }
+
+    /// Whether this line is a look at the entry: anything but a `verify` that did not pass. A failed
+    /// check is shown, never counted as having looked.
+    pub fn is_look(&self) -> bool {
+        self.kind != "verify" || self.passed == Some(true)
+    }
+
+    /// Whether this line verifies the entry: a person's `read` or a passed `verify`.
+    pub fn is_verifying(&self) -> bool {
+        self.kind == "read" || (self.kind == "verify" && self.passed == Some(true))
+    }
+}
+
+/// An entry's lines as readers use them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Looks<'a> {
+    /// The newest line of any kind.
+    pub newest: Option<&'a Line>,
+    /// The newest look: any line but a failed `verify`.
+    pub look: Option<&'a Line>,
+    /// The newest verifying line: a `read` or a passed `verify`.
+    pub verified: Option<&'a Line>,
+    /// The newest `verify` failed: true until a later one passes.
+    pub failing: bool,
+}
+
+/// Per entry id: its newest line, newest look, newest verification and whether its check is
+/// failing. Newer by time; of equal times the line written later.
+pub fn looks(lines: &[Line]) -> HashMap<&str, Looks<'_>> {
+    let newer = |prev: Option<&Line>, l: &Line| prev.is_none_or(|p| p.at <= l.at);
+    let mut out: HashMap<&str, Looks> = HashMap::new();
+    let mut last_verify: HashMap<&str, &Line> = HashMap::new();
+    for l in lines {
+        let e = out.entry(l.id.as_str()).or_default();
+        if newer(e.newest, l) {
+            e.newest = Some(l);
+        }
+        if l.is_look() && newer(e.look, l) {
+            e.look = Some(l);
+        }
+        if l.is_verifying() && newer(e.verified, l) {
+            e.verified = Some(l);
+        }
+        if l.kind == "verify" && newer(last_verify.get(l.id.as_str()).copied(), l) {
+            last_verify.insert(l.id.as_str(), l);
+        }
+    }
+    for (id, v) in last_verify {
+        if let Some(e) = out.get_mut(id) {
+            e.failing = v.passed != Some(true);
+        }
+    }
+    out
 }
 
 /// The ledger's path relative to the repository root.
@@ -250,5 +303,33 @@ mod tests {
         ];
         assert_eq!(latest(&lines, false)["a"].kind, "verify");
         assert_eq!(latest(&lines, true)["a"].kind, "read");
+    }
+
+    #[test]
+    fn a_failed_verify_is_shown_but_is_not_a_look() {
+        let mk = |at: &str, kind: &str, passed: Option<bool>| Line {
+            at: at.into(),
+            id: "a".into(),
+            kind: kind.into(),
+            commit: None,
+            by: None,
+            passed,
+            because: String::new(),
+        };
+        let lines = vec![
+            mk("2026-10-20T10:00:00Z", "read", None),
+            mk("2026-10-21T10:00:00Z", "bulk", None),
+            mk("2026-10-22T10:00:00Z", "verify", Some(false)),
+        ];
+        let l = looks(&lines)["a"];
+        assert_eq!(l.newest.unwrap().kind, "verify");
+        assert_eq!(l.look.unwrap().kind, "bulk", "a failed verify is not a look");
+        assert_eq!(l.verified.unwrap().kind, "read");
+        assert!(l.failing);
+        let mut more = lines.clone();
+        more.push(mk("2026-10-23T10:00:00Z", "verify", Some(true)));
+        let l = looks(&more)["a"];
+        assert!(!l.failing, "a later pass ends it");
+        assert_eq!((l.look.unwrap().kind.as_str(), l.verified.unwrap().kind.as_str()), ("verify", "verify"));
     }
 }

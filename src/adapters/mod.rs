@@ -74,7 +74,7 @@ impl Adapter {
     }
 
     fn check_breaker(&self) -> Result<()> {
-        let mut g = self.broken_until.lock().unwrap();
+        let mut g = self.broken_until.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((until, why)) = g.as_ref() {
             if Instant::now() < *until {
                 bail!("adapter '{}' is cooling down after an error: {why}", self.name);
@@ -85,7 +85,8 @@ impl Adapter {
     }
 
     fn trip(&self, err: &anyhow::Error) {
-        *self.broken_until.lock().unwrap() = Some((Instant::now() + Duration::from_secs(30), util::truncate_chars(&err.to_string(), 160)));
+        *self.broken_until.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((Instant::now() + Duration::from_secs(30), util::truncate_chars(&drivers::strip_url_secrets(&err.to_string()), 160)));
     }
 
     /// Execute an op and return the unwrapped payload (MCP results become JSON or text).
@@ -96,7 +97,8 @@ impl Adapter {
             Ok(v) => Ok(unwrap_payload(v)),
             Err(e) => {
                 self.trip(&e);
-                Err(e)
+                // the text reaches agent-visible notes and the outbox: no query strings, no userinfo
+                Err(anyhow!("{}", drivers::strip_url_secrets(&format!("{e:#}"))))
             }
         }
     }
@@ -172,13 +174,8 @@ impl Adapter {
 
     // ------------------------------------------------------------------ tools through kontext
 
-    fn exposes_any(&self) -> bool {
-        match &self.cfg.expose {
-            Some(Value::String(s)) => s == "all",
-            Some(Value::Array(a)) => !a.is_empty(),
-            Some(Value::Bool(b)) => *b,
-            _ => false,
-        }
+    pub fn exposes_any(&self) -> bool {
+        cfg_exposes_any(&self.cfg)
     }
 
     fn exposes(&self, tool: &str) -> bool {
@@ -210,6 +207,7 @@ impl Adapter {
                         let mut info = t.clone();
                         info.description = format!("[{}] {}", self.name, t.description);
                         info.name = public.clone();
+                        info.annotations = Some(upstream_annotations(t.annotations.as_ref()));
                         out.push((t.name, info));
                     }
                 }
@@ -223,6 +221,9 @@ impl Adapter {
                     name: t.name.clone(),
                     description: format!("[{}] {}", self.name, t.description),
                     input_schema: simple_schema(t.params.as_ref()),
+                    title: None,
+                    annotations: Some(upstream_annotations(None)),
+                    output_schema: None,
                 },
             ));
         }
@@ -258,6 +259,18 @@ impl Adapter {
     pub fn raw_tools(&self) -> Result<Vec<ToolInfo>> {
         self.driver.tools(self.timeout(None).max(Duration::from_secs(30)))
     }
+}
+
+/// Annotations of a tool kontext re-exposes: the upstream ones as given, and where a hint is
+/// missing the cautious reading (it may write, and it reaches outside), so clients that approve by
+/// hints ask before running it.
+pub fn upstream_annotations(upstream: Option<&Value>) -> Value {
+    let mut a = upstream.filter(|v| v.is_object()).cloned().unwrap_or_else(|| json!({}));
+    if let Some(o) = a.as_object_mut() {
+        o.entry("readOnlyHint").or_insert(json!(false));
+        o.entry("openWorldHint").or_insert(json!(true));
+    }
+    a
 }
 
 fn simple_schema(params: Option<&Value>) -> Value {
@@ -453,6 +466,24 @@ pub struct Registry {
     pub adapters: Vec<Arc<Adapter>>,
     pub skipped: Vec<(String, String)>,
     pub errors: Vec<String>,
+    /// Adapters skipped because their `when` failed at build time (sorted).
+    when_skipped: Vec<String>,
+    /// When `when` conditions were last evaluated.
+    checked: Mutex<Instant>,
+}
+
+/// How long a registry trusts its `when` evaluation before looking again.
+const WHEN_RECHECK: Duration = Duration::from_secs(300);
+
+/// Whether an adapter's config re-exposes MCP tools (`expose`): its tool set can change while a
+/// server runs, so the server announces `tools.listChanged`.
+pub fn cfg_exposes_any(cfg: &AdapterCfg) -> bool {
+    match &cfg.expose {
+        Some(Value::String(s)) => s == "all",
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Bool(b)) => *b,
+        _ => false,
+    }
 }
 
 fn path_exists_glob(p: &str) -> bool {
@@ -501,20 +532,27 @@ fn when_fails(a: &AdapterCfg, repo: &Repo, ctx: &Value) -> Option<String> {
 
 impl Registry {
     pub fn empty() -> Registry {
-        Registry { adapters: Vec::new(), skipped: Vec::new(), errors: Vec::new() }
+        Registry {
+            adapters: Vec::new(),
+            skipped: Vec::new(),
+            errors: Vec::new(),
+            when_skipped: Vec::new(),
+            checked: Mutex::new(Instant::now()),
+        }
     }
 
-    pub fn build(repo: &Repo, cfg: &Config) -> Registry {
-        let mut reg = Registry::empty();
+    /// Every enabled adapter with its template context (`None`: disabled).
+    fn bases<'c>(repo: &Repo, cfg: &'c Config) -> Vec<(&'c String, &'c AdapterCfg, Option<Value>)> {
         let now = json!({"date": util::today(), "iso": util::now_iso()});
         let repo_ctx = repo.template_ctx();
         let project = json!({"name": cfg.project_name(repo)});
         let global_ctx = json!({"repo": repo_ctx, "now": now, "project": project});
         let global_vars: Map<String, Value> =
             cfg.vars.iter().map(|(k, v)| (k.clone(), Value::String(render_str(v, &global_ctx)))).collect();
+        let mut out = Vec::new();
         for (name, a) in &cfg.adapters {
             if a.enabled == Some(false) {
-                reg.skipped.push((name.clone(), "disabled".into()));
+                out.push((name, a, None));
                 continue;
             }
             let mut vars = global_vars.clone();
@@ -523,15 +561,51 @@ impl Registry {
                 vars.insert(k.clone(), Value::String(render_str(v, &var_ctx)));
             }
             let base = json!({"repo": repo.template_ctx(), "now": now, "project": project, "vars": Value::Object(vars), "adapter": {"name": name}});
+            out.push((name, a, Some(base)));
+        }
+        out
+    }
+
+    /// Names of the adapters whose `when` fails right now, sorted.
+    fn failing_when(repo: &Repo, cfg: &Config) -> Vec<String> {
+        let mut v: Vec<String> = Self::bases(repo, cfg)
+            .into_iter()
+            .filter_map(|(name, a, base)| base.filter(|b| when_fails(a, repo, b).is_some()).map(|_| name.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Whether `when` conditions evaluate differently than when this registry was built (a tool
+    /// installed or an opt-in file created mid-session). Re-evaluated at most every five minutes.
+    pub fn when_changed(&self, repo: &Repo, cfg: &Config) -> bool {
+        {
+            let mut checked = self.checked.lock().unwrap_or_else(|e| e.into_inner());
+            if checked.elapsed() < WHEN_RECHECK {
+                return false;
+            }
+            *checked = Instant::now();
+        }
+        Self::failing_when(repo, cfg) != self.when_skipped
+    }
+
+    pub fn build(repo: &Repo, cfg: &Config) -> Registry {
+        let mut reg = Registry::empty();
+        for (name, a, base) in Self::bases(repo, cfg) {
+            let Some(base) = base else {
+                reg.skipped.push((name.clone(), "disabled".into()));
+                continue;
+            };
             if let Some(why) = when_fails(a, repo, &base) {
                 reg.skipped.push((name.clone(), why));
+                reg.when_skipped.push(name.clone());
                 continue;
             }
             let log = repo.state_dir().join("logs").join(format!("{}.log", util::slugify(name, 40)));
             let driver: Result<Box<dyn Driver>> = match a.driver.as_str() {
                 "mcp" => McpDriver::new(name, a, &base, repo.root.clone(), log).map(|d| Box::new(d) as Box<dyn Driver>),
                 "http" => Ok(Box::new(HttpDriver::new(name, a, &base))),
-                "command" => Ok(Box::new(CommandDriver::new(name, a, &base, repo.root.clone()))),
+                "command" => Ok(Box::new(CommandDriver::new(name, a, &base, repo.root.clone(), repo.state_dir()))),
                 other => Err(anyhow!("adapter '{name}': unknown driver '{other}' (use mcp, http or command)")),
             };
             match driver {
@@ -545,6 +619,7 @@ impl Registry {
                 Err(e) => reg.errors.push(format!("{e:#}")),
             }
         }
+        reg.when_skipped.sort();
         reg
     }
 
@@ -599,6 +674,19 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exposed_tools_keep_upstream_hints_and_default_to_cautious() {
+        let given = json!({"title": "Wipe", "destructiveHint": true, "readOnlyHint": false});
+        let a = upstream_annotations(Some(&given));
+        assert_eq!(a["title"], "Wipe");
+        assert_eq!(a["destructiveHint"], true);
+        assert_eq!(a["openWorldHint"], true);
+        let read = upstream_annotations(Some(&json!({"readOnlyHint": true, "openWorldHint": false})));
+        assert_eq!((read["readOnlyHint"].clone(), read["openWorldHint"].clone()), (json!(true), json!(false)));
+        let none = upstream_annotations(None);
+        assert_eq!((none["readOnlyHint"].clone(), none["openWorldHint"].clone()), (json!(false), json!(true)));
+    }
 
     #[test]
     fn maps_openviking_shape() {

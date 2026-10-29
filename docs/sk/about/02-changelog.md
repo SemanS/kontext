@@ -2,6 +2,90 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.10.0 (2026-10-29)
+
+**Sľuby znova platia: verify príkazy s trust pinom, poctivé overenie, brief, ktorý zachová každý riadiaci záznam, čerstvý index, dodatky, ktoré len pridávajú, a MCP rozhranie roku 2026.**
+
+### Bezpečnosť
+
+- **`verify:` beží až po pine.** Príkaz v poli `verify:` záznamu je kód z repozitára. Spustí sa, len keď `trust.toml` drží SHA-256 pin cesty záznamu a textu príkazu (`[repos.<slug>.verify]`). Bez neho nebeží nič: `kontext verify` aj `drafts.verify` zlyhajú s `untrusted_verify`, ktorého chyba nesie `id`, `command`, `command_sha256` a `hint` (`kontext trust --verify <id>`). Úprava príkazu pin zruší. Capability `drafts.verify.pinned`.
+- **`kontext trust --verify [<id>|--all]`** pinuje verify príkazy len z interaktívneho terminálu a vypíše, čo pinuje. Žiadny MCP nástroj ani operácia `ctx_api` nepinuje.
+- **Cez MCP sa nepinnutý príkaz vráti, nespustí**, a rovnako pinnutý, kým má súbor záznamu alebo jeho riadené cesty necommitnuté zmeny (`ran: false`, `reason: untrusted_verify | dirty_tree`). Agent ho spustí vo vlastnom sandboxe; výsledok sa zapíše ako `agent` pečiatka, nie ako `verify`.
+- **Runner** pustí len povolené premenné prostredia (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM` a `[verify] pass_env` len z tvojej vlastnej konfigurácie), rediguje `output_tail`, necommitnuté riadené cesty uvedie v riadku denníka (`[dirty: <cesty>]`, vo výsledku `dirty`, `dirty_paths`), 2 s po skončení shellu prestane čítať stdout a zabije skupinu procesov. MCP server zabije bežiacu kontrolu, keď sa zatvorí stdin alebo sa požiadavka zruší.
+- **`ctx_verify`** má anotácie `destructiveHint: true`, `openWorldHint: true`. `dir` nástrojov `ctx_verify`, `ctx_inbox` a `ctx_prepare_commit` je obmedzený na tento repozitár, jeho worktrees a submoduly.
+- **Trust piny adaptérov sú SHA-256** nad kanonickým TOML zdieľaných `adapters`, `vars` a `project.name`. Starý 12-hex FNV pin sa odmietne s hláškou, nikdy sa ticho nepovýši. Zdieľané `[vars]` nikdy neprepíšu vars používateľského ani lokálneho adaptéra; zdieľané `project.name` musí byť slug; `{{repo.remote}}` nenesie userinfo. `kontext trust` beží len z terminálu.
+- `ctx_threads` prijme len `claude:`, `codex:`, `superset:`, `last` a cesty pod známymi koreňmi prepisov a cez MCP odmietne `-`. `ctx_read file:` odmietne `.git/`, `.git-credentials` a `.ssh`. `ctx_prepare_commit drop` najprv overí každé id a odmietne kandidáta, ktorého zapísal iný worktree.
+
+### Čo sa agent dozvie
+
+- **Brief s focusom zachová každý riadiaci záznam.** Rezervovaná sekcia *Governs &lt;focus&gt; (N)* ide prvá: jeden kompaktný riadok na záznam (plné id, názov, značky, commity odvtedy), zoradené podľa špecifickosti cesty (súbor, adresár, glob, `**`) a potom od najstaršieho. Čo sa nezmestí, vymenuje jeden vždy vytlačený riadok `also governing:`; pod veľkosťou sekcie sa tlačia len id. Ostatné druhy sa orezávajú po riadkoch a končia `… N more (K govern your focus)`. Päta sa ráta do rozpočtu.
+- **Cesty ostanú cestami.** Položka focusu s `/`, glob znakom alebo známou príponou je cesta, aj kým súbor neexistuje. Prekryv funguje oboma smermi vrátane úvodných wildcardov a úvodného lomítka. `[slug]` sa najprv porovná doslovne, potom ako glob.
+- **Poctivé riadky aktuálnosti.** Brief píše `read by <kto>`, `stamped by agent`, `bulk stamp`, `check passed` alebo `CHECK FAILING`; „verified“ sa objaví len tam, kde overenie platí. Riadok briefu použije `rule_text`, keď zhrnutie pravidlo neobsahuje.
+- **MCP server vidí iné procesy.** Index sa znova načíta, keď ho obnovil iný proces (capture z CLI, `kontext status`, druhá session); nová schéma sa stavia v dočasnom adresári a premenuje. Vetva sa číta pri každej požiadavke; chyba parsovania konfigurácie sa vráti ako varovanie.
+- **Viditeľné od prvého kola.** `ctx_brief` nesie `_meta["anthropic/alwaysLoad"]`; prvých 512 znakov inštrukcií servera stojí samostatne a celok ostáva pod 4 096 znakmi.
+
+### Nahrádzanie a parsovanie
+
+- **Nahradenie sa odvodzuje od aktívnych nástupcov.** Záznam uvedený v `supersedes` aktívneho záznamu je nahradený a `superseded_by` sa doplní. Sekcia `## Status` v štýle adr-tools sa číta aj zapisuje vo vlastnom štýle. Odkazy sa zapisujú ako plné id; nejednoznačný cieľ sa odmietne. `kontext check` hlási jednostranné nahradenie a `kontext repair [--dry-run]` dopíše chýbajúcu stranu.
+- **Záznamy sa parsujú tak, ako ich píšu ľudia a formátery:** viacriadkové flow zoznamy, blokové zoznamy, koncové komentáre, BOM. Neparsovateľný záznam je chyba `check`. Statusy `retired`, `archived` alebo emoji sa čítajú ako `deprecated` s varovaním; nelatinkové názvy dostanú krátke hash id.
+- **Dodatky len pridávajú.** `drafts.stage amends` prijme telo, len keď je staré telo jeho bajtovým prefixom a zvyšok sú sekcie `## Added <YYYY-MM-DD>`; inak `amend_not_additive` s odkazom na nahradenie. Názov a všetky polia mimo tela musia ostať rovnaké. `drafts.extend` s `llm` už nič nezapracúva: poznatok pridá tak, ako bol napísaný (`as_written: true`). `extends` prejde cez `ctx_capture`, inbox aj povýšenie.
+- **Námietky ostávajú v stave resolving**, kým nový blob záznamu nepristane v `HEAD`.
+- **`since` počíta podľa predkov.** `since` a čerstvosť počítajú ne-merge commity na riadených cestách dosiahnuteľné z `HEAD` a nie z commitu pohľadu, takže sa zaráta aj vetva zlúčená po potvrdení. Zlyhaná kontrola sa ukáže, ale nie je pohľad.
+- **Čo je overené:** čítanie človekom alebo prejdená kontrola. Dátum `checked:` bez riadku v denníku je druh `cache` a hlási `verified: false`; `kontext confirm --migrate-legacy` pre také záznamy zapíše bulk riadky. CLI zapíše `read` len na termináli (inak `agent`; `--kind read` ho vynúti s varovaním); MCP nikdy nezapíše `read`; `kontext api` zapíše `by: application:<meno>`.
+- **Drift potrebuje základ** a pohľad v poslednej riadenej zmene rozsahu alebo po nej; bez základu povie prečo a `--fail` skončí kódom 3.
+
+### Redakcia a outbox
+
+- **Redakcia maskuje, čo sľubuje, a zlyháva zatvorene:** celé PEM bloky, národné telefónne čísla, IPv6 a každý výskyt na riadku. Neplatný vzor `secrets.redact` hlási `status` a distill, threads aj autopilot odmietnu poslať čokoľvek modelu. Tvoje vlastné zoznamy `redact` a `allow` sa spájajú s repozitárovými, nenahrádzajú ich. Chyby adaptérov neobsahujú query string ani userinfo. Výstupy bash režimu a zhrnutia kompaktácie z Claude vlákien vypadnú.
+- **Outbox nič ticho nestratí.** Pokus sa ráta len adaptéru, ktorý sa naozaj skúsil; po opakovaných zlyhaniach sa eventy presunú do `outbox.dead.jsonl`, ktorý ukáže `status`, a `kontext outbox retry` ich vráti do frontu. Eventy pre adaptér preskočený cez `when` ostanú vo fronte.
+
+### Init
+
+- `kontext init skip mod:<modul>` platí. Klastre `dec:`, ktorých commity už cituje záznam alebo trailer `Decision:`, sa znova neplánujú; stav úloh `dec:` sa odvodzuje z gitu a z `<store>/init-covered.log` (commitnutý, zlučovaný ako union), takže kolega aj čerstvý klon sa zhodnú. Id úloh `dec:` sú `dec:<modul>-<sha7>` najstaršieho commitu klastra.
+- Opätovné vykreslenie modulového dokumentu zachová ručne upravené `paths`, `tags` a `summary`. Výber modulu a id klastrov sú deterministické.
+- Autori-boti sa do skórovania nerátajú; slovenské a české rozhodovacie slová sú dodávané, `[init] decision_words = { strong, rationale, contrast }` pridá kmene v tvojom jazyku a `[init] bot_authors` pomenuje ďalších botov. Odmietnutie hookov zapíše len výslovné `--no-hooks`. `init.jobs` sa rešpektuje.
+
+### Vyhľadávanie a eval
+
+- **Tieňové polia.** Zložené a anglicky stemované `title_f` a `body_f` sa prehľadávajú s nižším boostom, takže `namietka` nájde `námietka` a `adapter` nájde „Adapters“. Verzia schémy indexu stúpla; index sa pri prvom použití prestavia.
+- **Reviewované znalosti prvé.** Lokálne zdroje sa pred spojením vážia (záznamy 1.0, kúsky dokumentácie 0.7, commity 0.6; vstavané, kľúče `[search]` sú plánované); nahradené výsledky dostanú nižšiu váhu a znejú `→ superseded by [id] Title`, nikdy sa neskryjú; kópie sa hľadajú podľa digestu názvu a textu; deduplikácia nikdy nenechá nahradené dvojča nad aktívnym nástupcom; výsledky adaptérov sa radia podľa mapovaného skóre.
+- **Graded eval.** `tests/eval/qrels.tsv` s nDCG@5, recall@10 a MRR po rezoch (identifikátory, množné číslo, slovenčina s diakritikou aj bez, parafráza, briefy s focusom od 200 do 1 400 tokenov). Očakávania píše iná session než tá, ktorá zmenu implementuje.
+
+### Politika API v1
+
+- **Politika kompatibility je zapísaná.** V rámci verzie 1 môžu pribúdať operácie, voliteľné vstupy, polia, kódy chýb, enum hodnoty a capability reťazce a klienti ignorujú, čo nepoznajú. Zúženie vstupu je dovolené len tam, kde staré správanie odporovalo zaznamenanému rozhodnutiu alebo bezpečnostnému sľubu, a oznamuje sa capability reťazcom a poznámkou k migrácii. Pozri [Kompatibilita](../reference/05-application-api.md#compatibility).
+- **`api.describe`** vráti JSON Schema vstupu každej operácie.
+- **Jeden pojem revízie:** blob id. Posunutá revízia je všade `stale_entry` so starým `operation_conflict` v `error.aliases`; `model_unavailable` uvádza `llm_unavailable`. Guard prijme blob id, plný hash commitu alebo staršiu 12-hex revíziu; `HEAD` alebo meno vetvy je `invalid_input`.
+- **Polia overenia** `last_verified`, `since_verified`, `failing` a `amended_since` stoja vedľa existujúcich. `entries.changed` nesie `status` a číta commitnutú konfiguráciu každej revízie; commitnuté záznamy nesú `date`, `verify`, `review_by`, `supersedes`, `commits` a `author`. Replay vráti uložený receipt aj po neskoršej úprave; `operations.get` nájde routované receipty.
+- **Nové kódy chýb:** `untrusted_verify`, `amend_not_additive`; `stale_entry` všade.
+- **`drift.ordered`:** `entries.drift` nesie `base_source` (`explicit`, `origin-head`, `origin-main`, `upstream`, `default-remote`, `fallback-none`) a bez základu `warning`; `kontext drift --fail` a `kontext ci --strict` vtedy skončia kódom 3.
+- **`drafts.confirm` prijme `operation_id`**, takže opakovanie nepridá druhý riadok do denníka; `drafts.capture` zachová `extends`.
+- **Nové capability reťazce:** `api.describe`, `drafts.stage.amends.additive`, `drafts.capture.extends`, `drafts.confirm.operation_id`, `drafts.verify.pinned`, `verification.last_verified`, `drift.ordered`.
+
+### MCP, hooky, štruktúrované výsledky, skills a pluginy
+
+- **MCP pre obe éry.** Schopnosti už neobsahujú `logging`. Server odpovedá na bezstavovú revíziu 2026-07-28 (`server/discover`, `_meta` na požiadavkách bez `initialize`, `resultType`, `ttlMs`/`cacheScope`) aj na starý `initialize`, ktorý padá späť na 2025-11-25. Neznáma verzia je `-32022`, neznámy nástroj `-32602`; `resources/list` stránkuje cez cursor; `tools.listChanged` môže byť true: je, keď adaptéry vystavujú nástroje.
+- **Štruktúrované výsledky.** `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_inbox` a `ctx_drift` vracajú `structuredContent` s `outputSchema` vedľa textu a bloky `resource_link` na `kontext://entry/{id}`. `kontext brief --format json` vráti rovnakú štruktúru.
+- **Hooky.** `kontext hook --host claude|codex|cursor` číta hook JSON hostiteľa zo stdin a odpovedá v jeho tvare. SessionStart (startup, resume, clear, compact) a SubagentStart dostanú brief; PreToolUse na `Edit|Write|MultiEdit` (Codex: `apply_patch|Edit|Write`; Cursor: `postToolUse`) dostane riadiace záznamy pre upravené súbory, len tie v session ešte nepovedané. Jeden rozpočet na session, zdieľaný s `ctx_brief`, keď pozná session (`session_id`, `CLAUDE_SESSION_ID`): `[hooks] session_budget_tokens` (6000), `edit_budget_tokens` (900). Fail-open; vypínač `KONTEXT_HOOKS=off` alebo `[hooks] enabled = false`. Inštaluje ich len `kontext connect <host> --hooks`; každé `--write` nainštaluje aj strážcu shellu, ktorý agentovi zamietne `kontext trust`. Pozri [Hooky](../guides/09-hooks.md).
+- **Poctivé schvaľovanie.** Vystavené nástroje adaptérov si ponechajú anotácie zo zdroja; chýbajúce sú `readOnlyHint: false`, `openWorldHint: true`. `kontext connect codex --write` zapíše `default_tools_approval_mode = "prompt"` a tabuľku `[mcp_servers.kontext.tools.<tool>]` pre každý nástroj: `approval_mode = "approve"` pre čítacie nástroje a inbox, `"prompt"` pre `ctx_verify`, `ctx_api` a `ctx_init`.
+- **Skills a pluginy.** Skills idú do `.claude/skills` aj `.agents/skills`; značka `kontext-skill-hash` chráni tímové úpravy a `connect skills --write --force` ich nahradí. Plugin pre Claude Code (`.claude-plugin/plugin.json`) a plugin pre Codex sa stavajú z rovnakých zdrojov ako `connect`. Parametre dostali aliasy (`id`/`uri`, `focus`/`paths`, `kind`/`kinds` (aj reťazec), `limit`/`max`, `budget_tokens`, `reason`/`why`/`because`); nič sa nepremenovalo. `ctx_read` stránkuje dlhý text (`part`, `offset`).
+- **Odolnejší server.** Panic v jednej požiadavke odpovie `-32603` a server beží ďalej; HTTP MCP klient sa po 404 znova inicializuje; mimo git repozitára to server povie a `dir` funguje.
+- **Nové príkazy a voľby:** `kontext repair [--dry-run]`, `kontext trust [--yes]` a `--verify [<id>|--all]`, `kontext confirm --kind read|agent` a `--migrate-legacy`, `kontext distill --force`, `kontext outbox retry`, `kontext hook --host`, `kontext connect <target> [--write] [--hooks] [--force]`.
+
+**Migrácia.**
+
+- Minimum je Rust 1.90 (`rust-version` v `Cargo.toml`).
+- Staré FNV piny adaptérov sa odmietajú: spusti `kontext trust` znova v každom repozitári so zdieľanými adaptérmi.
+- Verify príkazy nebežia, kým nie sú pinnuté: `kontext trust --verify <id>` alebo `--all`, v termináli.
+- Peer: `drift.ts` musí mapovať `untrusted_verify` na „neoverené, ukáž príkaz“.
+- Záznam, ktorého jediným dôkazom je dátum `checked:`, teraz hlási `verified: false` (druh `cache`); `kontext confirm --migrate-legacy` pre ne zapíše bulk riadky.
+- Počty `since` môžu narásť: commity zlúčené po pohľade sa teraz rátajú.
+- `drafts.extend` nikdy nezapracuje zistenie do tela: s `llm` aj bez neho sa pridá tak, ako je napísané, a `as_written` je vždy true.
+- `entries.export` bez commitnutej konfigurácie hlási `config_source.kind: "defaults"` (úložisko `.ai`), nie `local_configuration`.
+- Námietka ostáva v zozname ako *resolving* (`resolving` v `inbox.list`), kým nový blob záznamu nepristane v `HEAD`, nie keď `prepare_commit` zmenu stagne.
+- Polia API sú aditívne a verzia API ostáva 1. Klient, ktorý posielal `HEAD` ako revíziu, dostane `invalid_input`, neaditívne telo `amends` `amend_not_additive`.
+- Vyhľadávací index sa raz prestavia (zvýšená verzia schémy).
+
 ## 0.9.0 (2026-10-29)
 
 **Doplnenia upravia záznam na mieste, nové záznamy sa prepoja s tým, na čom stavajú, a zmeny medzi commitmi sa dajú vypísať.**
@@ -10,6 +94,8 @@ Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzov
 - **`drafts.stage`** prijíma `amends: {id, revision}`, ktoré zapíše toto telo do vlastného súboru záznamu a frontmatter ponechá bajt po bajte (vylučuje sa so `supersedes`), a `entry.extends: [ids]`, ktoré prepojí nový záznam so záznamami, na ktorých stavia (`unknown_entry` pre id, ktoré úložisko nemá). Pozri [Doplnenie a prepojenie](../reference/05-application-api.md#amend).
 - **`entries.changed {base, head}`** vypíše commitnuté záznamy pridané, upravené, nahradené (so `superseded_by`) alebo vyradené medzi dvoma commitmi, bez modelu. Pozri [Zmenené záznamy](../reference/05-application-api.md#changed).
 - Kandidáti z `entries.related` nesú `revision`, hodnotu, ktorú obe operácie vyššie prijímajú. `status.capabilities` uvádza `drafts.extend`, `entries.changed`, `drafts.stage.amends` a `drafts.stage.extends`. Verzia API ostáva 1.
+
+**Známe problémy** (opravené v 0.10.0): príkaz `verify:` beží cez `sh` bez trust brány, preto nevolaj `ctx_verify`, `drafts.verify` ani `kontext verify` v repozitári, ktorému neveríš; `drafts.extend` s `llm` a `amends` s ľubovoľným telom prepíšu záznam na mieste, proti rozhodnutiu z 2026-10-27.
 
 ## 0.8.0 (2026-10-28)
 
