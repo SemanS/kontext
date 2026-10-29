@@ -438,7 +438,8 @@ impl Repo {
             "name": self.name,
             "dir": self.dir_name,
             "root": self.root.to_string_lossy(),
-            "remote": self.remote.clone().unwrap_or_default(),
+            // never the userinfo: a clone made with a token must not hand it to adapter templates
+            "remote": self.remote.as_deref().map(crate::util::strip_userinfo).unwrap_or_default(),
             "branch": self.branch.clone().unwrap_or_default(),
             "worktree": self.worktree_key,
         })
