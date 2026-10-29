@@ -157,14 +157,20 @@ pub(crate) struct Marks {
     unapproved: Vec<String>,
     today: String,
     challenged: HashSet<String>,
+    /// challenges whose answer (a retirement or replacement) is staged but not committed yet
+    resolving: HashSet<String>,
 }
 
 impl Marks {
     pub(crate) fn load(app: &App, entries: &[Entry]) -> Marks {
         let unapproved = if entries.is_empty() { Vec::new() } else { crate::api_read::unapproved_files(app) };
-        let challenged =
-            Inbox::open(&app.repo).list().into_iter().filter(|c| c.kind == "challenge").filter_map(|c| c.get_extra("against")).collect();
-        Marks { unapproved, today: util::today(), challenged }
+        let inbox = Inbox::open(&app.repo);
+        let against = |list: Vec<Entry>| -> HashSet<String> {
+            list.into_iter().filter(|c| c.kind == "challenge").filter_map(|c| c.get_extra("against")).collect()
+        };
+        let challenged = against(inbox.list());
+        let resolving = against(inbox.promoted());
+        Marks { unapproved, today: util::today(), challenged, resolving }
     }
 
     /// Marks other than the status: where the entry stands locally and what it is waiting for.
@@ -178,6 +184,8 @@ impl Marks {
         }
         if self.challenged.contains(&e.id) {
             out.push("challenged locally".to_string());
+        } else if self.resolving.contains(&e.id) {
+            out.push("challenged locally (resolving)".to_string());
         }
         out
     }
@@ -265,13 +273,67 @@ fn show_commit(app: &App, sha: &str, level: u8) -> Result<String> {
     Ok(match level {
         0 => app.repo.git(&["show", "-s", "--format=%h %ad %an: %s", "--date=short", sha])?,
         1 => app.repo.git(&["show", "--stat", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?,
-        _ => {
-            util::truncate_chars(&app.repo.git(&["show", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?, 60_000)
-        }
+        _ => util::truncate_chars(
+            &app.repo.git(&["show", "--format=commit %H%nAuthor: %an%nDate: %ad%n%n%B", "--date=short", sha])?,
+            READ_MAX_CHARS,
+        ),
     })
 }
 
+/// Characters in one part of a long `ctx_read` answer (about 8k tokens): under the limit of clients
+/// that cut a tool result near 10k tokens. `offset` or `part` reads on.
+pub const READ_PART_CHARS: usize = 32_000;
+
+/// The most a level-2 read takes in before paging (a generated file or a huge diff stops here).
+const READ_MAX_CHARS: usize = 2_000_000;
+
+/// Which slice of a long answer to return: a character `offset`, or a 1-based `part` of
+/// [`READ_PART_CHARS`] characters. Neither: the first part, with a line saying how to read on.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Paging {
+    pub offset: Option<usize>,
+    pub part: Option<usize>,
+}
+
 pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
+    read_paged(app, uri, level, Paging::default())
+}
+
+/// [`read`] with paging: a text longer than one part comes back one part at a time, cut by
+/// characters, with a line naming the next `offset` and `part`.
+pub fn read_paged(app: &App, uri: &str, level: u8, paging: Paging) -> Result<String> {
+    Ok(page(&read_full(app, uri, level)?, paging))
+}
+
+fn page(text: &str, p: Paging) -> String {
+    let total = text.chars().count();
+    let start = match (p.offset, p.part) {
+        (Some(o), _) => o,
+        (None, Some(n)) => n.saturating_sub(1) * READ_PART_CHARS,
+        (None, None) => 0,
+    };
+    if start == 0 && total <= READ_PART_CHARS {
+        return text.to_string();
+    }
+    if start >= total {
+        return format!("(nothing from character {start} on: the text has {total} characters)");
+    }
+    let end = (start + READ_PART_CHARS).min(total);
+    let mut out: String = text.chars().skip(start).take(end - start).collect();
+    let parts = total.div_ceil(READ_PART_CHARS);
+    let which = if start % READ_PART_CHARS == 0 { format!("part {} of {parts}, ", start / READ_PART_CHARS + 1) } else { String::new() };
+    let next = if end >= total {
+        String::new()
+    } else if start % READ_PART_CHARS == 0 {
+        format!(" — read on with `part: {}` or `offset: {end}`", start / READ_PART_CHARS + 2)
+    } else {
+        format!(" — read on with `offset: {end}`")
+    };
+    let _ = write!(out, "\n\n({which}characters {start}–{end} of {total}{next})\n");
+    out
+}
+
+fn read_full(app: &App, uri: &str, level: u8) -> Result<String> {
     let uri = uri.trim();
     // a nested repository's entry, commit or note, as search and the brief name them: kx:<nested>/<id>
     for scheme in ["kx:", "git:", "inbox:"] {
@@ -280,7 +342,7 @@ pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
             && let Some((root, inner, n)) = crate::route::nested_of(app, rest)
             && !inner.is_empty()
         {
-            return read(&n, &format!("{scheme}{inner}"), level).map(|t| nested_refs(&t, &root));
+            return read_full(&n, &format!("{scheme}{inner}"), level).map(|t| nested_refs(&t, &root));
         }
     }
     if let Some(id) = uri.strip_prefix("inbox:") {
@@ -313,8 +375,26 @@ pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
     let key = uri.strip_prefix("kx:").unwrap_or(uri);
     if !uri.starts_with("file:") {
         let (entries, _) = app.entries();
-        if let Some(e) = Store::find(&entries, key) {
-            return Ok(render_entry(e, level));
+        let found = Store::find(&entries, key);
+        // a plain repository path names its file, even when it is also an entry's id or a prefix of
+        // one (`overview`, `mod-src`); the answer says which it read
+        if !uri.starts_with("kx:") {
+            let (plain, anchor) = match key.split_once('#') {
+                Some((p, a)) => (p, Some(a)),
+                None => (key, None),
+            };
+            let rel = plain.trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
+            let exists = !rel.is_empty() && !rel.split('/').any(|s| s == "..") && app.repo.abs(rel).exists();
+            if exists && !found.is_some_and(|e| e.rel_path == rel) {
+                let text = read_file(app, rel, anchor, level)?;
+                return Ok(match found {
+                    Some(e) => format!("(the file {rel}; the entry of that name is `kx:{}`)\n{text}", e.id),
+                    None => text,
+                });
+            }
+        }
+        if let Some(e) = found {
+            return Ok(render_entry(app, &entries, e, level));
         }
         if uri.starts_with("kx:") {
             // an entry of a nested repository named without its path
@@ -323,7 +403,7 @@ pub fn read(app: &App, uri: &str, level: u8) -> Result<String> {
             for n in &nested {
                 let (theirs, _) = n.app.entries();
                 if let Some(e) = Store::find(&theirs, key) {
-                    return Ok(format!("(entry of {}/)\n{}", n.rel, nested_refs(&render_entry(e, level), &n.rel)));
+                    return Ok(format!("(entry of {}/)\n{}", n.rel, nested_refs(&render_entry(&n.app, &theirs, e, level), &n.rel)));
                 }
                 several.extend(theirs.iter().filter(|e| e.id.starts_with(key)).map(|e| format!("{}/{}", n.rel, e.id)));
             }
@@ -347,16 +427,52 @@ fn nested_refs(text: &str, root: &str) -> String {
     text.replace("<kx:", &format!("<kx:{root}/")).replace("<git:", &format!("<git:{root}/"))
 }
 
-fn render_entry(e: &Entry, level: u8) -> String {
+/// The entries that replace `e`: named in its `superseded_by`, or naming it in their `supersedes`.
+fn replacements<'a>(e: &Entry, entries: &'a [Entry]) -> Vec<&'a Entry> {
+    let mut out: Vec<&Entry> = e.superseded_by.iter().filter_map(|id| Store::find(entries, id)).collect();
+    for n in entries.iter().filter(|n| n.supersedes.iter().any(|s| *s == e.id)) {
+        if !out.iter().any(|o| o.id == n.id) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// An entry at level 0 (one line), 1 (header, marks, what replaces it, body) or 2 (the file). The
+/// marks and the replacement are the ones the brief and search show, so a read says the same.
+fn render_entry(app: &App, entries: &[Entry], e: &Entry, level: u8) -> String {
+    if level >= 2 {
+        return e.markdown();
+    }
+    let flags = Marks::load(app, entries).flags(e);
+    let mut by: Vec<String> = replacements(e, entries).iter().map(|n| format!("[{}] {}", n.id, n.title)).collect();
+    // a replacement named but not in the store is still named
+    for id in &e.superseded_by {
+        if Store::find(entries, id).is_none() {
+            by.push(format!("[{id}]"));
+        }
+    }
     match level {
-        0 => format!("{} [{}{}] <kx:{}>", e.l0(240), e.kind, e.status.as_deref().map(|s| format!(" · {s}")).unwrap_or_default(), e.id),
-        1 => {
+        0 => {
+            let mut marks: Vec<String> = e.status.iter().cloned().collect();
+            marks.extend(flags);
+            let marks = if marks.is_empty() { String::new() } else { format!(" · {}", marks.join("; ")) };
+            let by = if by.is_empty() { String::new() } else { format!(" → superseded by {}", by.join(", ")) };
+            format!("{} [{}{marks}] <kx:{}>{by}", e.l0(240), e.kind, e.id)
+        }
+        _ => {
             let mut s = format!("# {}\n{} · {}", e.title, e.kind, e.rel_path);
             if let Some(st) = &e.status {
                 let _ = write!(s, " · {st}");
             }
             if let Some(d) = &e.date {
                 let _ = write!(s, " · {d}");
+            }
+            if !flags.is_empty() {
+                let _ = write!(s, " · {}", flags.join("; "));
+            }
+            if !by.is_empty() {
+                let _ = write!(s, "\nsuperseded by: {}", by.join(", "));
             }
             if !e.paths.is_empty() {
                 let _ = write!(s, "\npaths: {}", e.paths.join(", "));
@@ -374,7 +490,6 @@ fn render_entry(e: &Entry, level: u8) -> String {
             let _ = write!(s, "\n\n{}", util::truncate_chars(e.body.trim(), 4000));
             s
         }
-        _ => e.markdown(),
     }
 }
 
@@ -402,7 +517,8 @@ fn read_file(app: &App, path: &str, anchor: Option<&str>, level: u8) -> Result<S
     Ok(match level {
         0 => util::first_paragraph(section.as_deref().unwrap_or(&text), 300),
         1 => util::truncate_chars(section.as_deref().unwrap_or(&text), 4000),
-        _ => util::truncate_chars(section.as_deref().unwrap_or(&text), 80_000),
+        // the whole file: `read_paged` hands it out in parts
+        _ => util::truncate_chars(section.as_deref().unwrap_or(&text), READ_MAX_CHARS),
     })
 }
 
@@ -766,8 +882,9 @@ fn change_paths(app: &App) -> Vec<String> {
 
 // ------------------------------------------------------------------------------------- brief
 
+/// The active module docs: a superseded or deprecated one has been replaced and is not the map.
 pub fn module_docs(entries: &[Entry]) -> Vec<&Entry> {
-    entries.iter().filter(|e| e.kind == "architecture" && e.id.starts_with("mod-")).collect()
+    entries.iter().filter(|e| e.kind == "architecture" && e.is_active() && e.id.starts_with("mod-")).collect()
 }
 
 /// Flows: architecture entries that are a curated trail through the knowledge along one process
@@ -797,6 +914,22 @@ struct Focus {
     words: Vec<String>,
 }
 
+/// Extensions that make a bare focus item (`README.md`, `main.rs`) a path rather than topic words.
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "java", "kt", "kts", "swift", "rb", "php", "c", "h", "cc", "cpp", "hpp",
+    "cs", "fs", "ex", "exs", "erl", "scala", "dart", "lua", "zig", "vue", "svelte", "astro", "html", "css", "scss", "sql", "sh", "bash",
+    "md", "mdx", "toml", "yaml", "yml", "json", "proto", "tf", "lock", "xml", "gradle",
+];
+
+/// Whether a focus item names a path, existing or not: it has a `/`, a glob character or a known
+/// source extension. Bare words stay topic words.
+fn looks_like_path(item: &str) -> bool {
+    if item.contains('/') || item.contains(['*', '?', '[']) {
+        return true;
+    }
+    item.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && SOURCE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 fn parse_focus(app: &App, focus: &[String]) -> Focus {
     let mut f = Focus { paths: Vec::new(), words: Vec::new() };
     for item in focus {
@@ -804,9 +937,16 @@ fn parse_focus(app: &App, focus: &[String]) -> Focus {
         if t.is_empty() {
             continue;
         }
-        let as_path = t.split(':').next().unwrap_or(t);
-        if app.repo.abs(as_path).exists() {
-            f.paths.push(as_path.trim_end_matches('/').to_string());
+        let as_path = crate::route::focus_path(t).trim_start_matches('/');
+        if !as_path.is_empty() && (app.repo.abs(as_path).exists() || looks_like_path(as_path)) {
+            let p = as_path.trim_end_matches('/');
+            // the whole repository is no focus: everything would govern it
+            if p.is_empty() || p == "." {
+                continue;
+            }
+            if !f.paths.iter().any(|x| x == p) {
+                f.paths.push(p.to_string());
+            }
         } else {
             f.words.extend(t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(str::to_string));
         }
@@ -814,10 +954,41 @@ fn parse_focus(app: &App, focus: &[String]) -> Focus {
     f
 }
 
+/// Whether an entry path pattern bears on a focus path: either covers the other, or a focus
+/// directory could hold a match. A focus that is itself a glob is compared as a pattern.
+fn covers(pattern: &str, focus_path: &str) -> bool {
+    if crate::glob::is_glob(focus_path) {
+        return path_matches(focus_path, pattern) || crate::glob::patterns_overlap(pattern, focus_path);
+    }
+    path_matches(pattern, focus_path) || path_overlaps(pattern, focus_path)
+}
+
+/// How closely a pattern names the paths it governs: 0 a file, 1 a directory, 2 a glob, 3 a glob
+/// with `**` in it (anywhere but a trailing `/**`). The governing section lists the closest first.
+fn specificity(app: &App, pattern: &str) -> u8 {
+    let pat = pattern.trim().trim_start_matches("./").trim_start_matches('/');
+    let literal_dir = |p: &str| p.ends_with('/') || p.is_empty() || app.repo.abs(p.trim_end_matches('/')).is_dir();
+    // a real file or directory named with brackets (`app/[slug]`) is literal, as matching is
+    if !crate::glob::is_glob(pat) || app.repo.abs(pat.trim_end_matches('/')).exists() {
+        return if literal_dir(pat) { 1 } else { 0 };
+    }
+    if let Some(dir) = pat.strip_suffix("/**")
+        && !crate::glob::is_glob(dir)
+    {
+        return 1;
+    }
+    if pat.contains("**") { 3 } else { 2 }
+}
+
+/// The closest of an entry's patterns that bear on the focus.
+fn governing_rank(app: &App, e: &Entry, focus: &Focus) -> u8 {
+    e.paths.iter().filter(|ep| focus.paths.iter().any(|p| covers(ep, p))).map(|ep| specificity(app, ep)).min().unwrap_or(u8::MAX)
+}
+
 fn relevance(e: &Entry, f: &Focus) -> f32 {
     let mut s = 0.0;
     for p in &f.paths {
-        if e.paths.iter().any(|ep| path_overlaps(ep, p) || path_matches(ep, p)) {
+        if e.paths.iter().any(|ep| covers(ep, p)) {
             s += 10.0;
         }
     }
@@ -940,6 +1111,65 @@ fn local_notes(app: &App, focus: &Focus, h2: &str, prefix: &str) -> String {
     s
 }
 
+/// One committed entry that changed between two revisions, as `entries.changed` names it.
+struct EntryChange {
+    entry: Entry,
+    /// `added`, `revised`, `superseded` or `deprecated`
+    change: &'static str,
+    /// for `superseded`: the head entries that replace it
+    by: Vec<String>,
+    /// a `deprecated` entry whose file is gone
+    removed: bool,
+}
+
+/// The committed entries of the default kinds that changed between `base` (none: every entry at
+/// `head` is new) and `head`: the same notion as the `entries.changed` operation. A change of
+/// `checked` alone is a look, not a revision. By id, as the operation lists them.
+fn entry_changes(app: &App, base: Option<&str>, head: &str) -> Option<Vec<EntryChange>> {
+    let wanted = |e: &Entry| crate::drift::DEFAULT_KINDS.contains(&e.kind.as_str());
+    let before: Vec<Entry> = match base {
+        Some(b) => crate::drift::entries_at(app, b).ok()?.into_iter().filter(|e| wanted(e)).collect(),
+        None => Vec::new(),
+    };
+    let after: Vec<Entry> = crate::drift::entries_at(app, head).ok()?.into_iter().filter(|e| wanted(e)).collect();
+    let content = |e: &Entry| {
+        let mut e = e.clone();
+        e.checked = None;
+        e.markdown()
+    };
+    let gone = |e: &Entry| matches!(e.status.as_deref(), Some("superseded" | "deprecated" | "rejected" | "retired"));
+    let mut out: Vec<EntryChange> = Vec::new();
+    let change = |entry: &Entry, change: &'static str| EntryChange { entry: entry.clone(), change, by: Vec::new(), removed: false };
+    for e in &after {
+        let Some(old) = before.iter().find(|o| o.id == e.id) else {
+            out.push(change(e, "added"));
+            continue;
+        };
+        if content(old) == content(e) {
+            continue;
+        }
+        match (gone(old), e.status.as_deref()) {
+            (false, Some("superseded")) => {
+                let mut by: Vec<String> = after.iter().filter(|n| n.supersedes.contains(&e.id)).map(|n| n.id.clone()).collect();
+                for id in &e.superseded_by {
+                    if let Some(n) = Store::find(&after, id).filter(|n| !by.contains(&n.id)) {
+                        by.push(n.id.clone());
+                    }
+                }
+                out.push(EntryChange { by, ..change(e, "superseded") });
+            }
+            (false, _) if gone(e) => out.push(change(e, "deprecated")),
+            (true, _) if gone(e) => {}
+            _ => out.push(change(e, "revised")),
+        }
+    }
+    for old in before.iter().filter(|o| !gone(o) && !after.iter().any(|e| e.id == o.id)) {
+        out.push(EntryChange { removed: true, ..change(old, "deprecated") });
+    }
+    out.sort_by(|a, b| a.entry.id.cmp(&b.entry.id));
+    Some(out)
+}
+
 /// Knowledge that changed since this worktree's last brief: entries added, changed or removed between
 /// the knowledge-store HEAD the last brief saw (a disposable cache in `.git/kontext`) and HEAD now.
 /// Without the cache, the last 14 days. `None` when nothing changed. At most five lines.
@@ -950,59 +1180,52 @@ fn changed_since(app: &App, entries: &[Entry], refs: &dyn Fn(&Entry) -> String) 
     if seen.as_deref() == Some(head.as_str()) {
         return None;
     }
-    let store = app.store();
-    let mut dirs: Vec<String> = app.cfg().kind_names().iter().map(|k| app.cfg().kind_path(k)).collect();
-    dirs.sort();
-    dirs.dedup();
     let known = seen.as_deref().filter(|s| app.repo.git_status_ok(&["cat-file", "-e", &format!("{s}^{{commit}}")]));
-    let (heading, listing) = match known {
-        Some(s) => {
-            let mut args = vec!["diff", "--name-status", "--no-renames", s, &head, "--"];
-            args.extend(dirs.iter().map(String::as_str));
-            (format!("Changed since {}", &s[..s.len().min(8)]), app.repo.git(&args).ok()?)
-        }
+    let (heading, base) = match known {
+        Some(s) => (format!("Changed since {}", &s[..s.len().min(8)]), Some(s.to_string())),
         None => {
-            let since = (chrono::Local::now() - chrono::Duration::days(14)).format("--since=%Y-%m-%dT%H:%M:%S").to_string();
-            let mut args = vec!["log", &since, "--name-status", "--no-renames", "--format=", &head, "--"];
-            args.extend(dirs.iter().map(String::as_str));
-            ("Changed in the last 14 days".to_string(), app.repo.git(&args).ok()?)
+            // the last commit before the window; none when the history is younger than it
+            let before = (chrono::Local::now() - chrono::Duration::days(14)).format("--before=%Y-%m-%dT%H:%M:%S").to_string();
+            let base = app.repo.git(&["rev-list", "-1", &before, &head]).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            ("Changed in the last 14 days".to_string(), base)
         }
     };
-    // newest first in a log; a path once, with its latest state
-    let mut seen_paths = HashSet::new();
-    let mut changes: Vec<(char, String)> = Vec::new();
-    for line in listing.lines() {
-        let Some((st, path)) = line.split_once('\t') else { continue };
-        let st = st.chars().next().unwrap_or('M');
-        if store.is_entry_path(path) && seen_paths.insert(path.to_string()) {
-            changes.push((st, path.to_string()));
-        }
-    }
+    let changes = entry_changes(app, base.as_deref(), &head)?;
     if changes.is_empty() {
         return Some((String::new(), Some(head)));
     }
-    let superseders: Vec<&Entry> =
-        changes.iter().filter_map(|(_, p)| entries.iter().find(|e| &e.rel_path == p)).filter(|e| !e.supersedes.is_empty()).collect();
+    // a line names an entry as the brief does when it is still in the store
+    let named = |e: &Entry| entries.iter().find(|o| o.id == e.id).map(refs).unwrap_or_else(|| e.id.clone());
+    let listed: Vec<&Entry> = changes.iter().filter(|c| matches!(c.change, "added" | "revised")).map(|c| &c.entry).collect();
     let mut lines: Vec<String> = Vec::new();
-    for (st, path) in &changes {
-        match entries.iter().find(|e| &e.rel_path == path) {
-            Some(e) => {
-                // the replaced entry is named on its replacement's line
-                if superseders.iter().any(|n| n.supersedes.iter().any(|s| e.id == *s || e.id.starts_with(&format!("{s}-")))) {
-                    continue;
-                }
-                let what = if *st == 'A' { "new" } else { "changed" };
+    for c in &changes {
+        let e = &c.entry;
+        let line = match c.change {
+            "added" | "revised" => {
+                let what = if c.change == "added" { "new" } else { "changed" };
                 let replaces: Vec<String> = e
                     .supersedes
                     .iter()
-                    .map(|s| entries.iter().find(|o| o.id == *s).map(|o| format!("[{}] {}", refs(o), o.title)).unwrap_or_else(|| s.clone()))
+                    .map(|s| Store::find(entries, s).map(|o| format!("[{}] {}", refs(o), o.title)).unwrap_or_else(|| s.clone()))
                     .collect();
                 let replaces = if replaces.is_empty() { String::new() } else { format!(", supersedes {}", replaces.join(", ")) };
-                lines.push(format!("- [{}] {} ({what}{replaces})", refs(e), e.title));
+                format!("- [{}] {} ({what}{replaces})", named(e), e.title)
             }
-            None if *st == 'D' => lines.push(format!("- {path} (removed)")),
-            None => {}
-        }
+            // the replaced entry is named on its replacement's line when that is listed
+            "superseded" if listed.iter().any(|n| n.supersedes.iter().any(|s| *s == e.id)) => continue,
+            "superseded" => {
+                let by: Vec<String> =
+                    c.by.iter().map(|id| format!("[{}]", Store::find(entries, id).map(refs).unwrap_or_else(|| id.clone()))).collect();
+                if by.is_empty() {
+                    format!("- [{}] {} (superseded)", named(e), e.title)
+                } else {
+                    format!("- [{}] {} (superseded by {})", named(e), e.title, by.join(", "))
+                }
+            }
+            _ if c.removed => format!("- [{}] {} (removed)", e.id, e.title),
+            _ => format!("- [{}] {} (deprecated)", named(e), e.title),
+        };
+        lines.push(line);
     }
     let total = lines.len();
     lines.truncate(5);
@@ -1021,10 +1244,34 @@ pub(crate) const READ_BEFORE_CHANGING: &str =
 
 /// Whether an entry governs one of the focus paths: the entries a brief serves for them.
 fn governs(e: &Entry, focus: &Focus) -> bool {
-    e.is_active() && focus.paths.iter().any(|p| e.paths.iter().any(|ep| path_overlaps(ep, p) || path_matches(ep, p)))
+    e.is_active() && focus.paths.iter().any(|p| e.paths.iter().any(|ep| covers(ep, p)))
 }
 
-/// `verified read at a7450a5 (2026-10-27); 3 commits on its paths since: subject; subject` — how a
+/// How the last look at an entry reads: `read by Ana at a7450a5 (2026-10-27)` for a person's read,
+/// `check passed at …`, `CHECK FAILING since …`, `stamped by agent at …`, `bulk stamp at …`. A stamp
+/// is never called verified; the word appears only where `Verification::verified` holds.
+pub(crate) fn look_text(v: &crate::verification::Verification) -> String {
+    let sha = v.commit.as_deref().map(|c| &c[..c.len().min(7)]);
+    let at = sha.map(|c| format!(" at {c}")).unwrap_or_default();
+    let date = v.at.get(..10).unwrap_or(&v.at);
+    match (v.kind.as_str(), v.passed) {
+        ("read", _) => match v.by.as_deref().filter(|b| !b.trim().is_empty()) {
+            Some(who) => format!("read by {who}{at} ({date})"),
+            None => format!("read{at} ({date})"),
+        },
+        ("verify", Some(true)) => format!("check passed{at} ({date})"),
+        ("verify", _) => match sha {
+            Some(c) => format!("CHECK FAILING since {c} ({date})"),
+            None => format!("CHECK FAILING since {date}"),
+        },
+        ("agent", _) => format!("stamped by agent{at} ({date})"),
+        ("bulk", _) => format!("bulk stamp{at} ({date})"),
+        (k, _) if v.verified() => format!("verified {k}{at} ({date})"),
+        (k, _) => format!("{k} stamp{at} ({date})"),
+    }
+}
+
+/// `read by Ana at a7450a5 (2026-10-27); 3 commits on its paths since: subject; subject` — how a
 /// governing entry was last looked at and what changed since, from the ledger and the history.
 pub(crate) fn currency_line(
     v: Option<&crate::verification::Verification>,
@@ -1033,15 +1280,7 @@ pub(crate) fn currency_line(
 ) -> String {
     let mut s = match v {
         None => "never verified".to_string(),
-        Some(v) => {
-            let kind = match (v.kind.as_str(), v.passed) {
-                ("verify", Some(true)) => "verify (passed)".to_string(),
-                ("verify", _) => "verify (FAILED)".to_string(),
-                (k, _) => k.to_string(),
-            };
-            let at = v.commit.as_deref().map(|c| format!(" at {}", &c[..c.len().min(7)])).unwrap_or_default();
-            format!("verified {kind}{at} ({})", v.at.get(..10).unwrap_or(&v.at))
-        }
+        Some(v) => look_text(v),
     };
     if let Some(since) = since.filter(|s| s.commits > 0) {
         let subjects: Vec<String> = since.recent.iter().take(2).map(|(_, subject)| util::truncate_chars(subject, 60)).collect();
@@ -1062,13 +1301,186 @@ pub(crate) fn currency_line(
     s
 }
 
+/// The smallest budget a brief is written for.
+const MIN_BRIEF_BUDGET: usize = 200;
+
+/// How a governing entry is printed: with its rule and currency line, as one compact line, or
+/// only by id on the `also governing` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    Full,
+    Compact,
+    Id,
+}
+
+/// One governing entry in each form the governing section can print it.
+struct GovLine {
+    entry_id: String,
+    /// the id as the brief names it (with a nested repository's prefix)
+    id: String,
+    full: String,
+    compact: String,
+    /// commits on its paths since the last look
+    changed: bool,
+}
+
+/// What a governing line says the entry asks: its summary, unless the summary leaves out most of
+/// the words of the rule in `## Decision` (a summary that states the goal), then the rule itself.
+fn governing_text(e: &Entry, max: usize) -> String {
+    let summary = e.summary.as_deref().filter(|s| !s.trim().is_empty());
+    let (Some(summary), true) = (summary, e.body.contains("## Decision")) else { return e.summary_text(max) };
+    let words = |s: &str| -> HashSet<String> {
+        s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() > 3).map(str::to_string).collect()
+    };
+    let rule = words(&e.rule_text(300));
+    let said = words(summary);
+    if rule.is_empty() || rule.intersection(&said).count() * 2 >= rule.len() { e.summary_text(max) } else { e.rule_text(max) }
+}
+
+/// The entries that govern the focus paths (any kind but architecture), closest path first (a
+/// file, a directory, a glob, a `**` glob), then older first.
+fn governing_entries<'a>(app: &App, entries: &'a [Entry], focus: &Focus) -> Vec<&'a Entry> {
+    let mut list: Vec<(&Entry, u8)> =
+        entries.iter().filter(|e| e.kind != "architecture" && governs(e, focus)).map(|e| (e, governing_rank(app, e, focus))).collect();
+    list.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.date.cmp(&b.0.date)).then_with(|| a.0.id.cmp(&b.0.id)));
+    list.into_iter().map(|(e, _)| e).collect()
+}
+
+/// Each governing entry's full and compact line, with how it was last looked at.
+fn governing_line_forms(app: &App, entries: &[Entry], gov: &[&Entry], marks: &Marks, prefix: &str) -> Vec<GovLine> {
+    let wanted: HashSet<&str> = gov.iter().map(|e| e.rel_path.as_str()).collect();
+    let ctx = crate::verification::Context::load(app, entries, &|e| wanted.contains(e.rel_path.as_str()));
+    gov.iter()
+        .map(|e| {
+            let since = ctx.since(e);
+            let look = ctx.verification(e);
+            let commits = since.map(|s| s.commits).unwrap_or(0);
+            let failing = look.as_ref().is_some_and(|v| v.kind == "verify" && v.passed != Some(true));
+            let id = format!("{prefix}{}", e.id);
+            let title = format!("{}{}", e.title, marks.suffix(e));
+            let mut compact = format!("- [{id}] {title}");
+            if commits > 0 {
+                let _ = write!(compact, " · {commits} commit{} since", if commits == 1 { "" } else { "s" });
+            }
+            if failing {
+                compact.push_str(" · CHECK FAILING");
+            }
+            compact.push('\n');
+            let text = governing_text(e, 100);
+            let text = if text.is_empty() { String::new() } else { format!(" — {text}") };
+            // a dated id already says when
+            let date = e.date.as_deref().filter(|d| !e.id.starts_with(*d)).map(|d| format!(" ({d})")).unwrap_or_default();
+            let currency = currency_line(look.as_ref(), since, &crate::verification::premises(e, entries));
+            let full = format!("- [{id}] {title}{text}{date}\n  {currency}\n");
+            GovLine { entry_id: e.id.clone(), id, full, compact, changed: commits > 0 }
+        })
+        .collect()
+}
+
+fn render_governing(header: &str, lines: &[GovLine], forms: &[Form]) -> String {
+    let mut s = header.to_string();
+    for (l, f) in lines.iter().zip(forms) {
+        match f {
+            Form::Full => s.push_str(&l.full),
+            Form::Compact => s.push_str(&l.compact),
+            Form::Id => {}
+        }
+    }
+    let ids: Vec<String> = lines.iter().zip(forms).filter(|(_, f)| **f == Form::Id).map(|(l, _)| format!("[{}]", l.id)).collect();
+    if !ids.is_empty() {
+        let _ = writeln!(s, "- also governing: {}", ids.join(" "));
+    }
+    s
+}
+
+/// The governing section within `budget` tokens: every entry at least by id on one `also
+/// governing` line, as many as fit as compact lines (in order), and as many of those as fit in
+/// full. Below even the ids, as many ids as fit and a count; it never exceeds the budget.
+fn governing_block(header: &str, lines: &[GovLine], budget: isize, compact_only: bool) -> (String, Vec<Form>) {
+    let n = lines.len();
+    let cost = |forms: &[Form]| util::est_tokens(&render_governing(header, lines, forms)) as isize;
+    let mut forms = vec![Form::Id; n];
+    if n == 0 {
+        return (String::new(), forms);
+    }
+    if cost(&forms) > budget {
+        let mut s = format!("{header}- also governing:");
+        let mut shown = 0;
+        for l in lines {
+            let piece = format!(" [{}]", l.id);
+            let rest = n - shown - 1;
+            let tail = if rest > 0 { format!(" +{rest} more\n") } else { "\n".to_string() };
+            if util::est_tokens(&format!("{s}{piece}{tail}")) as isize > budget {
+                break;
+            }
+            s.push_str(&piece);
+            shown += 1;
+        }
+        if shown < n {
+            let _ = writeln!(s, " +{} more", n - shown);
+        } else {
+            s.push('\n');
+        }
+        return if util::est_tokens(&s) as isize > budget { (String::new(), forms) } else { (s, forms) };
+    }
+    for i in 0..n {
+        forms[i] = Form::Compact;
+        if cost(&forms) > budget {
+            forms[i] = Form::Id;
+            break;
+        }
+    }
+    if !compact_only {
+        for i in 0..n {
+            if forms[i] != Form::Compact {
+                break;
+            }
+            forms[i] = Form::Full;
+            if cost(&forms) > budget {
+                forms[i] = Form::Compact;
+            }
+        }
+    }
+    (render_governing(header, lines, &forms), forms)
+}
+
+/// The compact governing lines for one path (a file about to be edited, existing or not), within
+/// `budget_tokens`: `- [id] Title (marks) · N commits since`, then `- also governing: [id] …` for
+/// what does not fit. Empty when nothing governs it. A path may be absolute inside the repository.
+#[allow(dead_code)] // the edit hook's entry point
+pub fn governing_lines(app: &App, path: &str, budget_tokens: usize) -> String {
+    let p = std::path::Path::new(path.trim());
+    let rel = if p.is_absolute() {
+        match crate::route::rel_to(&app.repo.root, p) {
+            Some(r) => r,
+            None => return String::new(),
+        }
+    } else {
+        path.trim().to_string()
+    };
+    // always a path here, whatever its name looks like
+    let rel = rel.trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
+    if rel.is_empty() || rel == "." {
+        return String::new();
+    }
+    let focus = Focus { paths: vec![rel.to_string()], words: Vec::new() };
+    let (entries, _) = app.entries();
+    let gov = governing_entries(app, &entries, &focus);
+    if gov.is_empty() {
+        return String::new();
+    }
+    let marks = Marks::load(app, &entries);
+    let lines = governing_line_forms(app, &entries, &gov, &marks, "");
+    governing_block("", &lines, budget_tokens as isize, true).0
+}
+
 fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, part: Part, elsewhere: &[Elsewhere]) -> String {
     let cfg = app.cfg();
     let (entries, errors) = app.entries();
     let focus = parse_focus(app, focus);
     let focused = !focus.paths.is_empty() || !focus.words.is_empty();
     let h2 = if part.section { "###" } else { "##" };
-    let mut budget_left = budget.max(300) as isize;
+    let mut budget_left = budget.max(MIN_BRIEF_BUDGET) as isize;
     let mut out = String::new();
     let add = |out: &mut String, text: &str, budget_left: &mut isize| -> bool {
         let cost = util::est_tokens(text) as isize;
@@ -1132,6 +1544,15 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
     }
     let reserved = if state.is_empty() { 0 } else { util::est_tokens(&format!("\n## State\n{state}")) as isize };
     budget_left -= reserved;
+    // the footer is part of the budget too
+    let footer = if part.section {
+        ""
+    } else if budget >= 600 {
+        "\nMore: `ctx_search` (decisions, docs, history, adapters) · `ctx_read kx:<id>` (L0/L1/L2) · `ctx_why <path>` · record with `ctx_capture` · before committing `ctx_prepare_commit`.\n"
+    } else {
+        "\nMore: `ctx_search` · `ctx_read kx:<id>` · `ctx_why <path>`\n"
+    };
+    budget_left -= util::est_tokens(footer) as isize;
 
     let overview = entries.iter().find(|e| e.kind == "architecture" && e.id == "overview");
     let mut head = if part.section {
@@ -1192,6 +1613,75 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         all.extend(nested_rules.iter().map(|s| format!("{}{s}", part.prefix)));
         add(&mut out, &format!("Rules for agents: read {}\n", all.join(", ")), &mut budget_left);
     }
+
+    // the entries that govern the focus paths: a reserved section before every other kind, where
+    // each one is at least named; the other kinds keep room for their count lines
+    let kinds: [(&str, &str, usize); 4] = [
+        ("decision", "Decisions", cfg.brief.max_decisions),
+        ("convention", "Conventions", 8),
+        ("learning", "Learnings & pitfalls", 6),
+        ("incident", "Incidents", 3),
+    ];
+    let governing = if focus.paths.is_empty() { Vec::new() } else { governing_entries(app, &entries, &focus) };
+    let gov_ids: HashSet<&str> = governing.iter().map(|e| e.id.as_str()).collect();
+    let more_line = |kind: &str, left: usize, governing_left: usize| -> String {
+        if left == 0 {
+            return String::new();
+        }
+        if !focused && kind == "decision" {
+            // an unfocused brief (e.g. injected at session start) lists the newest only; the ones
+            // that govern the task's paths may be among those left out
+            return format!("- … {left} more: `ctx_brief` with `focus` set to the paths you will change lists the ones that govern them\n");
+        }
+        let govern = if focus.paths.is_empty() { String::new() } else { format!(" ({governing_left} govern your focus)") };
+        let dir = if part.prefix.is_empty() { String::new() } else { format!(" with `dir: \"{}\"`", part.prefix.trim_end_matches('/')) };
+        format!("- … {left} more{govern}: `ctx_search kinds=[{kind}]`{dir}\n")
+    };
+    let kind_head = |kind: &str, heading: &str, total: usize, above: usize| -> String {
+        if kind == "decision" {
+            let above = if above > 0 { format!(", {above} above") } else { String::new() };
+            let order = if focused { ", most relevant first" } else { ", newest first" };
+            format!("\n{h2} Decisions ({total} active{above}{order})\n")
+        } else {
+            format!("\n{h2} {heading}\n")
+        }
+    };
+    // what each kind's count line costs when every entry of it is cut
+    let stub_cost: Vec<isize> = kinds
+        .iter()
+        .map(|(kind, heading, _)| {
+            let total = entries.iter().filter(|e| e.kind == *kind && e.is_active()).count();
+            let gov = governing.iter().filter(|e| e.kind == *kind).count();
+            if total == 0 { 0 } else { util::est_tokens(&(kind_head(kind, heading, total, 0) + &more_line(kind, total, gov))) as isize }
+        })
+        .collect();
+    let mut printed: HashSet<String> = HashSet::new();
+    let mut changed_paths = false;
+    if !governing.is_empty() {
+        let label = util::truncate_chars(&focus.paths.join(", "), 80);
+        let header = format!("\n{h2} Governs {label} ({})\n", governing.len());
+        let lines = governing_line_forms(app, &entries, &governing, &marks, part.prefix);
+        let room = budget_left - stub_cost.iter().sum::<isize>();
+        let (mut text, mut forms) = governing_block(&header, &lines, room, false);
+        if forms.iter().all(|f| *f == Form::Id) && budget_left > room {
+            // not one line beside the other kinds' count lines: the governing entries come first
+            (text, forms) = governing_block(&header, &lines, budget_left, false);
+        }
+        if add(&mut out, &text, &mut budget_left) {
+            for (l, f) in lines.iter().zip(&forms) {
+                if *f != Form::Id {
+                    printed.insert(l.entry_id.clone());
+                    changed_paths |= l.changed;
+                }
+            }
+        }
+        if changed_paths {
+            add(&mut out, &format!("\n{READ_BEFORE_CHANGING}\n"), &mut budget_left);
+        }
+    }
+    let stubs_reserved: isize = stub_cost.iter().sum();
+    budget_left -= stubs_reserved;
+
     // what changed since the last brief goes here, but only if room is left once everything else
     // is in: it is the first thing a full budget drops (and then it stays due for the next brief)
     let changed_at = out.len();
@@ -1249,84 +1739,50 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         }
     }
 
-    // for the entries that govern the focus paths: how each was verified and what changed since
-    let governing: HashSet<&str> = entries.iter().filter(|e| governs(e, &focus)).map(|e| e.rel_path.as_str()).collect();
-    let currency =
-        (!governing.is_empty()).then(|| crate::verification::Context::load(app, &entries, &|e| governing.contains(e.rel_path.as_str())));
-    // the line under a served entry, and whether its paths changed since it was verified
-    let currency_of = |e: &Entry| -> (String, bool) {
-        let Some(ctx) = currency.as_ref().filter(|_| governing.contains(e.rel_path.as_str())) else { return (String::new(), false) };
-        let since = ctx.since(e);
-        let line = format!("  {}\n", currency_line(ctx.verification(e).as_ref(), since, &crate::verification::premises(e, &entries)));
-        (line, since.is_some_and(|s| s.commits > 0))
-    };
-    let mut changed_paths = false;
-
-    // decisions
-    let mut decisions: Vec<(&Entry, f32)> =
-        entries.iter().filter(|e| e.kind == "decision" && e.is_active()).map(|e| (e, relevance(e, &focus))).collect();
-    decisions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
-    if !decisions.is_empty() {
-        let total = decisions.len();
-        let mut sec = format!("\n{h2} Decisions ({total} active{})\n", if focused { ", most relevant first" } else { ", newest first" });
+    // the other entries of each kind, line by line in the room left; a kind cut short ends with a
+    // count of what it left out and how many of those govern the focus (named above)
+    for (i, (kind, heading, max)) in kinds.iter().enumerate() {
+        budget_left += stub_cost[i];
+        let all: Vec<&Entry> = entries.iter().filter(|e| e.kind == *kind && e.is_active()).collect();
+        if all.is_empty() {
+            continue;
+        }
+        let mut list: Vec<(&Entry, f32)> =
+            all.iter().filter(|e| !gov_ids.contains(e.id.as_str())).map(|e| (*e, relevance(e, &focus))).collect();
+        list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
+        let above = all.iter().filter(|e| printed.contains(&e.id)).count();
+        let governing_left = all.iter().filter(|e| gov_ids.contains(e.id.as_str()) && !printed.contains(&e.id)).count();
+        if list.is_empty() && governing_left == 0 {
+            continue;
+        }
+        let mut sec = kind_head(kind, heading, all.len(), above);
+        let stub = util::est_tokens(&(sec.clone() + &more_line(kind, list.len() + governing_left, governing_left))) as isize;
+        // decisions leave room for the kinds after them
+        let room = if *kind == "decision" { (budget_left * 6 / 10).max(stub) } else { budget_left };
         let mut shown = 0;
-        for (e, _) in decisions.iter().take(cfg.brief.max_decisions) {
-            let r = reference(e);
-            // a dated reference already says when
-            let date = e
-                .date
-                .as_deref()
-                .filter(|d| !r.trim_start_matches(part.prefix).starts_with(*d))
-                .map(|d| format!(" ({d})"))
-                .unwrap_or_default();
-            let (current, changed) = currency_of(e);
-            let line = format!("- [{r}] {}{date}\n{current}", marks.line(e, 150));
-            if util::est_tokens(&(sec.clone() + &line)) as isize > budget_left * 6 / 10 {
+        for (e, _) in list.iter().take(*max) {
+            let line = if *kind == "decision" {
+                let r = reference(e);
+                // a dated reference already says when
+                let date = e
+                    .date
+                    .as_deref()
+                    .filter(|d| !r.trim_start_matches(part.prefix).starts_with(*d))
+                    .map(|d| format!(" ({d})"))
+                    .unwrap_or_default();
+                format!("- [{r}] {}{date}\n", marks.line(e, 150))
+            } else {
+                format!("- {} <kx:{}>\n", marks.line(e, 140), reference(e))
+            };
+            let after = more_line(kind, list.len() - shown - 1 + governing_left, governing_left);
+            if util::est_tokens(&format!("{sec}{line}{after}")) as isize > room {
                 break;
             }
             sec.push_str(&line);
-            changed_paths |= changed;
             shown += 1;
         }
-        if shown < total {
-            let how = if !focused {
-                // an unfocused brief (e.g. injected at session start) lists the newest only; the ones
-                // that govern the task's paths may be among those left out
-                "`ctx_brief` with `focus` set to the paths you will change lists the ones that govern them".to_string()
-            } else if part.prefix.is_empty() {
-                "`ctx_log` or `ctx_search kinds=[decision]`".to_string()
-            } else {
-                format!("`ctx_search kinds=[decision]`, or `ctx_log` with `dir: \"{}\"`", part.prefix.trim_end_matches('/'))
-            };
-            let _ = writeln!(sec, "- … {} more: {how}", total - shown);
-        }
-        if !add(&mut out, &sec, &mut budget_left) {
-            changed_paths = false;
-        }
-    }
-
-    // conventions, learnings, incidents
-    for (kind, heading, max) in [("convention", "Conventions", 8), ("learning", "Learnings & pitfalls", 6), ("incident", "Incidents", 3)] {
-        let mut list: Vec<(&Entry, f32)> =
-            entries.iter().filter(|e| e.kind == kind && e.is_active()).map(|e| (e, relevance(e, &focus))).collect();
-        if list.is_empty() {
-            continue;
-        }
-        list.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(b.0.date.cmp(&a.0.date)));
-        let mut sec = format!("\n{h2} {heading}\n");
-        let mut changed = false;
-        for (e, _) in list.iter().take(max) {
-            let _ = writeln!(sec, "- {} <kx:{}>", marks.line(e, 140), reference(e));
-            let (current, c) = currency_of(e);
-            sec.push_str(&current);
-            changed |= c;
-        }
-        if add(&mut out, &sec, &mut budget_left) {
-            changed_paths |= changed;
-        }
-    }
-    if changed_paths {
-        add(&mut out, &format!("\n{READ_BEFORE_CHANGING}\n"), &mut budget_left);
+        sec.push_str(&more_line(kind, list.len() - shown + governing_left, governing_left));
+        add(&mut out, &sec, &mut budget_left);
     }
 
     // flows: the trails a reader follows along the processes the task touches; an unfocused
@@ -1407,7 +1863,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
                 continue;
             }
             shown += 1;
-            let _ = writeln!(sec, "- {path} — {summary}");
+            let _ = writeln!(sec, "- {path}{} — {summary}", marks.suffix(e));
             if *rel >= 10.0
                 && let Some(pos) = e.body.find("## Overview")
             {
@@ -1503,7 +1959,7 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
     if !full.is_empty() && !add(&mut out, &format!("\n## State\n{full}"), &mut budget_left) && !state.is_empty() {
         add(&mut out, &format!("\n## State\n{state}"), &mut budget_left);
     }
-    out.push_str("\nMore: `ctx_search` (decisions, docs, history, adapters) · `ctx_read kx:<id>` (L0/L1/L2) · `ctx_why <path>` · record with `ctx_capture` · before committing `ctx_prepare_commit`.\n");
+    out.push_str(footer);
     out
 }
 
@@ -2298,5 +2754,212 @@ mod tests {
         // an id two entries share (a decision and a learning) has no unique prefix: it stays whole
         let twice = Refs::new(["2026-09-28-use-cents", "2026-09-28-use-cents", "2026-09-28-ship-weekly"]);
         assert_eq!(twice.prefix("2026-09-28-use-cents"), "2026-09-28-use-cents");
+    }
+
+    /// A throwaway repository with a few entries on src/checkout.
+    struct Repo(std::path::PathBuf);
+    impl Repo {
+        fn new() -> Repo {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "kontext-ops-unit-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            let r = Repo(path);
+            r.git(&["init", "-q", "-b", "main"]);
+            r.git(&["config", "user.email", "test@example.invalid"]);
+            r.git(&["config", "user.name", "Ana Test"]);
+            r.write(".ai/kontext.toml", "[project]\nname = \"unit\"\n");
+            r.write("src/checkout/total.rs", "pub fn total() {}\n");
+            r
+        }
+        fn git(&self, args: &[&str]) -> String {
+            let out = std::process::Command::new("git").arg("-C").arg(&self.0).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().into()
+        }
+        fn write(&self, path: &str, text: &str) {
+            let p = self.0.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        fn decision(&self, id: &str, date: &str, path: &str, extra: &str) {
+            self.write(
+                &format!(".ai/decisions/{id}.md"),
+                &format!(
+                    "---\nid: {id}\nkind: decision\ntitle: Rule {id}\nstatus: accepted\ndate: {date}\npaths: [\"{path}\"]\n{extra}---\n\n## Decision\n\nRule {id} holds.\n"
+                ),
+            );
+        }
+        fn app(&self) -> App {
+            self.git(&["add", "-A"]);
+            self.git(&["commit", "-qm", "seed"]);
+            let mut app = App::open(&self.0).unwrap();
+            app.loaded.cfg.adapters.clear();
+            app
+        }
+    }
+    impl Drop for Repo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_focus_is_a_path_before_the_file_exists() {
+        let r = Repo::new();
+        let app = r.app();
+        let f = parse_focus(
+            &app,
+            &[
+                "src/checkout/refund.rs".into(),
+                "src/adapters/**".into(),
+                "main.rs".into(),
+                "src/checkout/total.rs:12".into(),
+                "retry budget".into(),
+                ".".into(),
+            ],
+        );
+        assert_eq!(f.paths, vec!["src/checkout/refund.rs", "src/adapters/**", "main.rs", "src/checkout/total.rs"]);
+        assert_eq!(f.words, vec!["retry", "budget"]);
+        // a glob focus is compared as a pattern, a directory focus reaches into early wildcards
+        assert!(covers("src/adapters/mod.rs", "src/adapters/**"));
+        assert!(covers("src/**", "src/adapters/**"));
+        assert!(!covers("docs/**", "src/adapters/**"));
+        assert!(covers("**/migrations/*.sql", "src/db"));
+        assert!(covers("src/checkout", "src/checkout/refund.rs"));
+    }
+
+    #[test]
+    fn governing_entries_come_closest_path_first_then_oldest() {
+        let r = Repo::new();
+        r.decision("anything", "2026-01-01", "**", "");
+        r.decision("glob-old", "2026-01-02", "src/*/total.rs", "");
+        r.decision("dir-new", "2026-03-01", "src/checkout/**", "");
+        r.decision("dir-old", "2026-01-03", "src/checkout", "");
+        r.decision("file-new", "2026-04-01", "src/checkout/total.rs", "");
+        r.decision("file-old", "2026-02-01", "src/checkout/total.rs", "");
+        r.decision("elsewhere", "2026-01-01", "docs/**", "");
+        let app = r.app();
+        let (entries, _) = app.entries();
+        let focus = parse_focus(&app, &["src/checkout/total.rs".into()]);
+        let ids: Vec<&str> = governing_entries(&app, &entries, &focus).iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["file-old", "file-new", "dir-old", "dir-new", "glob-old", "anything"]);
+
+        // every one of them is named, whatever the budget
+        let brief = brief(&app, &["src/checkout/total.rs".into()], 200, false);
+        assert!(brief.contains("## Governs src/checkout/total.rs (6)"), "{brief}");
+        for id in &ids {
+            assert!(brief.contains(&format!("[{id}]")), "{id} missing:\n{brief}");
+        }
+        assert!(util::est_tokens(&brief) <= 200, "{}: {brief}", util::est_tokens(&brief));
+
+        // the hook's form: compact lines only
+        let lines = governing_lines(&app, &r.0.join("src/checkout/total.rs").to_string_lossy(), 400);
+        assert!(lines.starts_with("- [file-old] Rule file-old\n"), "{lines}");
+        assert!(!lines.contains("never verified"), "{lines}");
+        // a file not written yet: `docs/**` names its directory, `**` everything
+        assert_eq!(governing_lines(&app, "docs/guide.md", 400), "- [elsewhere] Rule elsewhere\n- [anything] Rule anything\n");
+    }
+
+    #[test]
+    fn the_governing_block_never_exceeds_its_budget() {
+        let lines: Vec<GovLine> = (0..12)
+            .map(|i| GovLine {
+                entry_id: format!("entry-number-{i}"),
+                id: format!("entry-number-{i}"),
+                full: format!("- [entry-number-{i}] A title — a rule that is long enough to cost something\n  never verified\n"),
+                compact: format!("- [entry-number-{i}] A title\n"),
+                changed: false,
+            })
+            .collect();
+        let header = "\n## Governs src/a.rs (12)\n";
+        for budget in [10, 40, 60, 100, 200, 400, 1000] {
+            let (text, forms) = governing_block(header, &lines, budget, false);
+            assert!(util::est_tokens(&text) as isize <= budget, "{budget}: {text}");
+            if forms.iter().any(|f| *f != Form::Id) {
+                for l in &lines {
+                    assert!(text.contains(&format!("[{}]", l.id)), "{budget}: {text}");
+                }
+            }
+        }
+        let (all, forms) = governing_block(header, &lines, 10_000, false);
+        assert!(forms.iter().all(|f| *f == Form::Full) && !all.contains("also governing"));
+        let (ids, _) = governing_block(header, &lines, 60, false);
+        assert!(ids.contains("- also governing: [entry-number-0]") && ids.contains("more"), "{ids}");
+    }
+
+    #[test]
+    fn a_stamp_is_never_called_verified() {
+        use crate::verification::Verification;
+        let v = |kind: &str, passed: Option<bool>, by: Option<&str>| Verification {
+            at: "2026-10-27T10:00:00Z".into(),
+            kind: kind.into(),
+            commit: Some("a7450a5ffff".into()),
+            by: by.map(String::from),
+            because: None,
+            passed,
+            source: "ledger",
+            landed: None,
+        };
+        assert_eq!(look_text(&v("read", None, Some("Ana"))), "read by Ana at a7450a5 (2026-10-27)");
+        assert_eq!(look_text(&v("agent", None, Some("agent:claude"))), "stamped by agent at a7450a5 (2026-10-27)");
+        assert_eq!(look_text(&v("bulk", None, None)), "bulk stamp at a7450a5 (2026-10-27)");
+        assert_eq!(look_text(&v("verify", Some(true), None)), "check passed at a7450a5 (2026-10-27)");
+        assert_eq!(look_text(&v("verify", Some(false), None)), "CHECK FAILING since a7450a5 (2026-10-27)");
+        for (k, p) in [("agent", None), ("bulk", None), ("verify", Some(false))] {
+            assert!(!look_text(&v(k, p, None)).contains("verified"));
+        }
+    }
+
+    #[test]
+    fn a_read_names_what_replaces_an_entry_and_its_marks() {
+        let r = Repo::new();
+        r.decision("old-rule", "2026-01-01", "src/checkout/**", "superseded_by: [new-rule]\n");
+        r.write(
+            ".ai/decisions/old-rule.md",
+            &std::fs::read_to_string(r.0.join(".ai/decisions/old-rule.md")).unwrap().replace("status: accepted", "status: superseded"),
+        );
+        r.decision("new-rule", "2026-02-01", "src/checkout/**", "supersedes: [old-rule]\n");
+        r.write("overview/README.md", "The overview directory.\n");
+        r.write(
+            ".ai/architecture/overview.md",
+            "---\nid: overview\nkind: architecture\ntitle: Unit\nsummary: A unit fixture.\n---\n\n## Overview\n\nUnit.\n",
+        );
+        let app = r.app();
+        let l1 = read(&app, "kx:old-rule", 1).unwrap();
+        assert!(l1.contains("superseded by: [new-rule] Rule new-rule"), "{l1}");
+        let l0 = read(&app, "kx:old-rule", 0).unwrap();
+        assert!(l0.contains("→ superseded by [new-rule] Rule new-rule"), "{l0}");
+        // a plain path that is also an entry's id reads the path, and says so
+        let dir = read(&app, "overview", 1).unwrap();
+        assert!(dir.starts_with("(the file overview; the entry of that name is `kx:overview`)"), "{dir}");
+        assert!(read(&app, "kx:overview", 1).unwrap().starts_with("# Unit"));
+        // a locally edited entry is marked
+        r.write(
+            ".ai/decisions/new-rule.md",
+            &std::fs::read_to_string(r.0.join(".ai/decisions/new-rule.md")).unwrap().replace("holds", "holds now"),
+        );
+        let edited = read(&app, "kx:new-rule", 1).unwrap();
+        assert!(edited.contains("local, unapproved"), "{edited}");
+    }
+
+    #[test]
+    fn a_long_read_comes_in_parts() {
+        let text: String = "é".repeat(READ_PART_CHARS + 10);
+        let first = page(&text, Paging::default());
+        assert!(
+            first.starts_with('é') && first.contains(&format!("part 1 of 2, characters 0–{READ_PART_CHARS} of {}", READ_PART_CHARS + 10))
+        );
+        assert!(first.contains("`part: 2`"), "{}", &first[first.len() - 200..]);
+        let second = page(&text, Paging { offset: None, part: Some(2) });
+        assert_eq!(second.chars().filter(|c| *c == 'é').count(), 10);
+        let by_offset = page(&text, Paging { offset: Some(READ_PART_CHARS + 5), part: None });
+        assert_eq!(by_offset.chars().filter(|c| *c == 'é').count(), 5);
+        assert_eq!(page("short", Paging::default()), "short");
+        assert!(page("short", Paging { offset: Some(99), part: None }).starts_with("(nothing from character 99"));
     }
 }
