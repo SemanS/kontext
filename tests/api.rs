@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod common;
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 struct Repo(PathBuf);
@@ -21,6 +23,8 @@ impl Repo {
     }
     fn command(&self, program: &str) -> Command {
         let mut cmd = Command::new(program);
+        // no global git config, HOME or agent directories of the machine running the tests
+        common::isolate(&mut cmd, &PathBuf::from(format!("{}-home", self.0.display())));
         cmd.current_dir(&self.0)
             .env("KONTEXT_CONFIG_DIR", self.0.join(".config"))
             .env("GIT_AUTHOR_NAME", "API Test")

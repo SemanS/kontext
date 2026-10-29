@@ -106,9 +106,14 @@ fn shape(v: &Value, path: &str, out: &mut BTreeMap<String, BTreeSet<&'static str
     }
 }
 
-/// An operation, as opposed to a later input of one (`drafts.stage.amends` extends `drafts.stage`).
-fn operations(capabilities: &[String]) -> Vec<String> {
-    capabilities.iter().filter(|c| !capabilities.iter().any(|o| o != *c && c.starts_with(&format!("{o}.")))).cloned().collect()
+/// The operations among `capabilities`: those `api.describe` lists, in capability order (a feature
+/// such as `drafts.stage.amends` or `drift.ordered` is not one). Without `api.describe`, a
+/// capability that extends another (`drafts.stage.amends` extends `drafts.stage`) is a feature.
+fn operations(capabilities: &[String], described: &Value) -> Vec<String> {
+    match described.as_object().filter(|o| !o.is_empty()) {
+        Some(ops) => capabilities.iter().filter(|c| ops.contains_key(c.as_str())).cloned().collect(),
+        None => capabilities.iter().filter(|c| !capabilities.iter().any(|o| o != *c && c.starts_with(&format!("{o}.")))).cloned().collect(),
+    }
 }
 
 fn render(op: &str, response: &Value) -> String {
@@ -132,11 +137,12 @@ fn every_operation_keeps_its_response_shape() {
         .iter()
         .filter_map(|c| c.as_str().map(String::from))
         .collect();
+    let described = api(&probe, "api.describe", &json!({}))["result"]["operations"].clone();
     drop(probe);
 
     let mut snapshot = String::from("# API v1 response shapes on tests/eval/fixtures/shop (tests/api_contract.rs).\n");
     snapshot.push_str(&format!("# capabilities: {}\n", capabilities.join(", ")));
-    for op in operations(&capabilities) {
+    for op in operations(&capabilities, &described) {
         // a fresh fixture per operation: a write never changes what the next one sees
         let sb = Sandbox::fixture("shop");
         let mut vars = BTreeMap::new();
@@ -187,5 +193,8 @@ fn shapes_are_key_paths_and_types() {
     assert_eq!(out["result.entries[].id"].iter().copied().collect::<Vec<_>>(), ["string"]);
     assert!(out.contains_key("result.entries[].n") && out.contains_key("result.entries[].x"));
     let caps = ["drafts.stage".to_string(), "drafts.stage.amends".to_string(), "status".to_string()];
-    assert_eq!(operations(&caps), ["drafts.stage", "status"]);
+    assert_eq!(operations(&caps, &Value::Null), ["drafts.stage", "status"]);
+    // what api.describe lists decides: a feature that extends no operation is not one
+    let caps = ["status".to_string(), "drift.ordered".to_string()];
+    assert_eq!(operations(&caps, &json!({"status": {}})), ["status"]);
 }

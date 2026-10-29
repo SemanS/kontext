@@ -604,7 +604,9 @@ fn knowledge_of_the_repository_that_owns_the_paths() {
     // focus inside the submodule: its brief answers, and its references resolve from here
     let brief = s.kontext(&["brief", "--no-adapters", "--focus", "lib/src"]);
     assert!(brief.contains("answered from lib at lib/") && brief.contains("[lib/2026-09-01-lib]"), "{brief}");
-    assert!(!brief.contains("lib-amounts-are-integer-cents]"), "references are short: {brief}");
+    // a governing line carries the full id (decision 2026-10-29: a focused brief never drops one);
+    // the other lines keep short references
+    assert!(brief.contains("[lib/2026-09-01-lib-amounts-are-integer-cents]"), "governing lines carry full ids: {brief}");
     // …also when the agent names it as the submodule's own AGENTS.md would, relative to the submodule
     let brief = s.kontext(&["brief", "--no-adapters", "--focus", "src/money.ts"]);
     assert!(brief.contains("answered from lib at lib/") && brief.contains("Lib amounts are integer cents"), "{brief}");

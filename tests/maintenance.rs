@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod common;
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 struct Repo(PathBuf);
@@ -23,6 +25,8 @@ impl Repo {
 
     fn cmd(&self, program: &str) -> Command {
         let mut c = Command::new(program);
+        // no global git config, HOME or agent directories of the machine running the tests
+        common::isolate(&mut c, &PathBuf::from(format!("{}-home", self.0.display())));
         c.current_dir(&self.0)
             .env("KONTEXT_CONFIG_DIR", self.0.join(".git/user-config"))
             .env("GIT_AUTHOR_NAME", "Test")
@@ -208,8 +212,14 @@ fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
         "{retired}"
     );
     assert!(r.git(&["diff", "--cached", "--name-only"]).contains("2026-01-10-use-cron.md"));
-    assert_eq!(r.ok("inbox.list", json!({}))["entries"], json!([]), "the challenge left with the change");
+    // the challenge stays, resolving, until its answer lands in HEAD (decision 2026-10-29)
+    let listed = r.ok("inbox.list", json!({}))["entries"].clone();
+    assert_eq!(listed.as_array().map(Vec::len), Some(1), "{listed}");
+    assert_eq!(listed[0]["resolving"], ".ai/decisions/2026-01-10-use-cron.md", "{listed}");
     r.commit("retire cron");
+    let o = r.cmd(env!("CARGO_BIN_EXE_kontext")).env_remove("KONTEXT_SKIP").args(["hook", "post-commit"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(r.ok("inbox.list", json!({}))["entries"], json!([]), "the challenge left once the retirement landed");
 
     // drafts.retire: a receipt, a replay, and the same refusal for a stale revision
     let input = json!({"operation_id":"retire-log","entry_id":"log-ids","entry_revision":head,"reason":"Tracing replaced it."});
@@ -222,7 +232,9 @@ fn a_challenge_is_resolved_by_retiring_or_superseding_never_in_place() {
     let again = r.ok("drafts.retire", input);
     assert_eq!(again["replayed"], true);
     let stale = r.api("drafts.retire", json!({"operation_id":"retire-csv","entry_id":"2026-01-10-use-csv","entry_revision":"0123456789012345678901234567890123456789","reason":"x"}));
-    assert_eq!(stale["error"]["code"], "operation_conflict");
+    // one code for a stale revision everywhere; the old one stays readable as an alias
+    assert_eq!(stale["error"]["code"], "stale_entry", "{stale}");
+    assert_eq!(stale["error"]["aliases"], json!(["operation_conflict"]), "{stale}");
     assert_eq!(r.api("drafts.retire", json!({"entry_id":"log-ids"}))["error"]["code"], "invalid_input", "operation_id is required");
     r.commit("retire log");
     // the entry's blob (publication.blob_hash) works as entry_revision too

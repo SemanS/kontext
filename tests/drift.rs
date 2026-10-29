@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod common;
+
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 struct Repo(PathBuf);
@@ -26,6 +28,8 @@ impl Repo {
 
     fn cmd(&self, program: &str) -> Command {
         let mut c = Command::new(program);
+        // no global git config, HOME or agent directories of the machine running the tests
+        common::isolate(&mut c, &PathBuf::from(format!("{}-home", self.0.display())));
         c.current_dir(&self.0)
             .env("KONTEXT_CONFIG_DIR", self.0.join(".git/user-config"))
             .env("GIT_AUTHOR_NAME", "Test")
