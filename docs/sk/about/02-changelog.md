@@ -2,7 +2,7 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
-## Nevydané
+## 0.9.0 (2026-10-29)
 
 **Doplnenia upravia záznam na mieste, nové záznamy sa prepoja s tým, na čom stavajú, a zmeny medzi commitmi sa dajú vypísať.**
 
