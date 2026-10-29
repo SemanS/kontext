@@ -91,16 +91,16 @@ From these two files, kontext derives the rest:
 
 ## Why not Claude Code's memory or CLAUDE.md?
 
-| | CLAUDE.md, AGENTS.md | Claude Code auto memory | Memory services | kontext |
+| | CLAUDE.md, AGENTS.md, `.claude/rules` | Claude Code auto memory | Memory services | kontext |
 | --- | --- | --- | --- | --- |
 | Written by | people, as prose | the model, on its own | the model, from sessions | agents propose, people approve |
 | Shared and reviewed | in pull requests | no: one user, one machine | per deployment, no review | in the pull request of the change |
-| Reaches the agent | the whole file, every session | the first 200 lines of its index, every session | by similarity to the query | ranked for the paths it names, within a budget |
-| An entry records | no status, date or owner | when it was written | depends on the store | paths, status, date, author |
+| Reaches the agent | the root file every session; a nested `CLAUDE.md` when the agent reads files in its directory; a `.claude/rules` file with `paths:` when matching files are touched | the first 200 lines of its index, every session | by similarity to the query | ranked for the paths it names, within a budget |
+| An entry records | paths at most (`.claude/rules`); no status, date or owner | when it was written | depends on the store | paths, status, date, author, last verification |
 | When it goes stale | stays until someone notices | the model may rewrite it | the model may overwrite it | flagged after N commits on its paths |
-| Works with | Claude Code; others read AGENTS.md | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
+| Works with | Claude Code reads `AGENTS.md` natively, as do Codex, Cursor and OpenCode; `.claude/rules` is Claude Code only | Claude Code | their plugin, SDK or MCP server | every MCP client and the CLI |
 
-kontext does not replace CLAUDE.md: keep the few instructions every session needs there. Decisions are too many to load whole and too important to leave unreviewed. [More on the alternatives](/getting-started/01-introduction#why-not)
+kontext does not replace CLAUDE.md or `AGENTS.md`: keep the few instructions every session needs there. Decisions are too many to load whole and too important to leave unreviewed. [More on the alternatives](/getting-started/01-introduction#why-not)
 
 ## Under your control
 

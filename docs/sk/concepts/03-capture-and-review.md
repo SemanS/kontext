@@ -30,7 +30,10 @@ Agenti volajú `ctx_capture` s rovnakými poliami. Pri zachytení kontext:
 - upozorní, keď už podobný záznam existuje (aby sa radšej aktualizoval),
 - rozhodnutiam predvolene nastaví `status: accepted` a zapíše autora (`git config user.name`) a pôvod (`agent` alebo `cli`),
 - zaradí udalosť `capture` pre adaptéry, ktoré ju odoberajú,
-- založí ho v repozitári, ktorému patria jeho `paths`, napríklad v submodule s vlastným úložiskom ([Viac repozitárov](09-several-repositories.md)).
+- založí ho v repozitári, ktorému patria jeho `paths`, napríklad v submodule s vlastným úložiskom ([Viac repozitárov](09-several-repositories.md)),
+- zachová `supersedes` a `extends` ako plné ID cez inbox aj povýšenie; nejednoznačný alebo neznámy cieľ sa odmietne.
+
+Poznatok, ktorý stavia na rozhodnutí, sa zachytí ako nový záznam s `extends: [<id>]` (`--extends` v CLI); samotné rozhodnutie sa nikdy nedopĺňa. Konvencia, poznatok alebo incident môže namiesto toho dostať datovanú sekciu `## Added` (pozri [Dodatky len pridávajú](./02-knowledge-store.md#amendments)).
 
 Poučenie alebo rozhodnutie, ktoré si dokázal príkazom, nesie ten príkaz, aby sa dalo neskôr [dokázať znova](#verify):
 
@@ -79,7 +82,7 @@ Zachytenie tiež pomenuje zaznamenané záznamy, ktoré môže duplikovať, roz�
 
 ## Drift: znalosti, ktoré zmena nechala za sebou {#drift}
 
-`ctx_prepare_commit` sa pozerá na jednu zmenu. `kontext drift` (`ctx_drift`, `entries.drift`) sa pozerá na rozsah: vypíše aktívne záznamy, ktorých `paths` pokrývajú súbory zmenené v `base..head` a ktorých vlastný súbor sa v tom istom rozsahu **nezmenil**. Úprava záznamu, jeho vyradenie aj [potvrdenie](./02-knowledge-store.md#checked) sa rátajú ako pohľad naň.
+`ctx_prepare_commit` sa pozerá na jednu zmenu. `kontext drift` (`ctx_drift`, `entries.drift`) sa pozerá na rozsah: vypíše aktívne záznamy, ktorých `paths` pokrývajú súbory zmenené v `base..head` a ktorých vlastný súbor sa v tom istom rozsahu **nezmenil**. Úprava záznamu, jeho vyradenie, [potvrdenie](./02-knowledge-store.md#checked) aj prejdená kontrola sa rátajú ako pohľad naň, ale len keď je ten pohľad v poslednom commite rozsahu, ktorý zmenil jeho riadené súbory, alebo po ňom: pohľad pred zmenou ju nepokrýva. Zlyhaná kontrola nie je pohľad.
 
 ```text
 $ kontext drift
@@ -95,7 +98,7 @@ For each, read it against the change: if it still holds, confirm it (`kontext co
 - `--base` je predvolene miesto, kde `HEAD` opustil predvolenú vetvu remote (merge base s `origin/HEAD`, inak `origin/main`, inak `origin/master`), a bez remote `HEAD`.
 - Bez `--head` sa počíta aj pracovný strom: commity `base..HEAD` plus necommitnuté a nesledované zmeny. Presne tak vidí git pracovnú kópiu [jj](./07-git-integration.md#jj), takže drift funguje bez commitov aj bez hookov. S `--head` sa počítajú len commitnuté zmeny a záznamy sa čítajú tak, ako sú commitnuté tam.
 - Kontrolujú sa rozhodnutia, konvencie, poučenia a incidenty (výber cez `--kind`); dokumenty modulov obnovuje `kontext init`, nepotvrdzujú sa.
-- Nezúčastňuje sa žiadny model: odpoveď je deterministická funkcia repozitára. `--json` vypíše výsledok `entries.drift`; `--fail` skončí so stavom 2, keď je vypísaný nejaký záznam. V CI ho spúšťa [`kontext ci`](../guides/07-ci.md).
+- Nezúčastňuje sa žiadny model: odpoveď je deterministická funkcia repozitára. `--json` vypíše výsledok `entries.drift`; `--fail` skončí so stavom 2, keď je vypísaný nejaký záznam. Bez základu (žiadny remote, žiadny merge base, žiadne `--base`) to drift povie namiesto hlásenia, že drift nie je, a `--fail` skončí nenulou. V CI ho spúšťa [`kontext ci`](../guides/07-ci.md).
 - **Bránou je skript alebo CI, nie hook.** Tím, ktorý commituje cez jj alebo cez klientov, čo git hooky obchádzajú, nemá pri commite žiadnu kontrolu, preto brána patrí do tímového kontrolného skriptu (`bun run check`, `make check`) alebo do CI: `kontext drift --fail` (alebo `kontext ci --strict`). kontext nepridáva hook, ktorý by commit pre drift zablokoval.
 
 ## Overenia: denník {#verifications}
@@ -113,10 +116,13 @@ Spôsob pohľadu:
 
 | Druh | Zapisuje | Platí ako overenie |
 | --- | --- | --- |
-| `read` | `kontext confirm` (človek v termináli) | áno |
-| `agent` | `ctx_confirm` a `drafts.confirm`, ak neuvedie `kind: read` | nie: pečiatka, uchovaná a zobrazená ako taká |
-| `bulk` | každé potvrdenie viac ako piatich záznamov jedným volaním | nie: pečiatka |
-| `verify` | `kontext verify`, `ctx_verify`, `drafts.verify` | keď príkaz prešiel |
+| `read` | `kontext confirm` na termináli; `drafts.confirm` s `kind: read` (zapísané `by: application:<meno>`) | áno |
+| `agent` | `ctx_confirm`; `kontext confirm` bez terminálu; `drafts.confirm` predvolene | nie: pečiatka, uchovaná a zobrazená ako taká |
+| `bulk` | každé potvrdenie viac ako piatich záznamov jedným volaním; `kontext confirm --migrate-legacy` | nie: pečiatka |
+| `verify` | `kontext verify`, `ctx_verify`, `drafts.verify` (len pinnuté príkazy) | keď príkaz prešiel |
+| `cache` | nezapisuje sa: dátum `checked:` bez riadku v denníku | nie |
+
+MCP nikdy nezapíše `read`. `kontext confirm --kind read` ho vynúti aj bez terminálu a varuje. Terminál nie je dôkaz, že záznam čítal človek; je to najlepší signál, aký príkazový riadok má, a denník zaznamená, ktorá cesta riadok zapísala.
 
 `kontext confirm <id…> --because "…"` (`because` v nástroji aj v API) uloží dôvod. `checked:` v zázname sa zapisuje a stagne ako doteraz, aby staršie čítačky fungovali ďalej; je to vyrovnávacia kópia denníka, nikdy nie dôkaz. Keď kópia zaostáva za denníkom (merge vzal staršiu stranu alebo riadok prišiel z inej vetvy), `kontext check` varuje (`checked date … behind its ledger; run kontext confirm --repair`) a **`kontext confirm --repair`** prepíše `checked:` každého takého aktívneho záznamu podľa denníka a súbory stagne. Riadok `verify` nie je potvrdenie a kópiu nemení.
 
@@ -128,7 +134,7 @@ Záznam môže uviesť jeden shellový príkaz, ktorý ukáže, že stále plat�
 verify: cargo test -p billing totals_are_integer_cents
 ```
 
-Jeden riadok, najviac 500 znakov (dlhšia kontrola patrí do skriptu, ktorý príkaz zavolá); iné `kontext check` odmietne. `kontext verify <id…>` (`ctx_verify`, `drafts.verify`) ho spustí cez `sh -c` z koreňa repozitára so zatvoreným vstupom, zastaví ho po 120 sekundách (mení to `KONTEXT_VERIFY_TIMEOUT_SECS`) a pridá riadok `verify` s výsledkom a commitom, voči ktorému bežal. Vráti, či prešiel, návratový kód a posledné 2 KB výstupu. Príkaz nahradeného alebo vyradeného záznamu sa nikdy nespustí a záznam bez `verify:` je odmietnutý: prečítajte ho a potvrďte. Takto sa najlepšie overujú fakty, ktoré stroj vie zistiť; čo niekto zamýšľal, potvrdí človek.
+Jeden riadok, najviac 500 znakov (dlhšia kontrola patrí do skriptu, ktorý príkaz zavolá); iné `kontext check` odmietne. Príkaz je kód z repozitára, preto beží až po tom, čo jeho text pinneš z terminálu: `kontext trust --verify <id>` (alebo `--all`). Bez pinu `kontext verify <id…>` (`ctx_verify`, `drafts.verify`) nič nespustí a vráti `untrusted_verify` s príkazom; cez MCP ho môže agent spustiť vo vlastnom sandboxe a výsledok zapísať cez `ctx_confirm`. Pinnutý príkaz beží cez `sh -c` z koreňa repozitára so zatvoreným vstupom a povoleným zoznamom premenných prostredia, zastaví sa po 120 sekundách (mení to `KONTEXT_VERIFY_TIMEOUT_SECS`) a pridá riadok `verify` s výsledkom, commitom, voči ktorému bežal, a údajom, či bol strom špinavý. Vráti, či prešiel, návratový kód a zamaskované posledné 2 KB výstupu. Čo pin pokrýva a čo nie, je v [Bezpečnosti](./08-security.md#verify). Príkaz nahradeného alebo vyradeného záznamu sa nikdy nespustí a záznam bez `verify:` je odmietnutý: prečítajte ho a potvrďte. Takto sa najlepšie overujú fakty, ktoré stroj vie zistiť; čo niekto zamýšľal, potvrdí človek.
 
 ### Čo sa odvtedy zmenilo {#since}
 
@@ -136,10 +142,22 @@ Pre každý záznam, ktorý riadi cesty z `focus`, pridá [`ctx_brief`](./04-con
 
 ```text
 - [prices-are-integer-cents] Prices are integer cents — Every amount is an integer number of cents.
-  verified read at a7450a5 (2026-10-27); 3 commits on its paths since: feat(billing): VAT per line; fix(billing): round totals; …
+  read by Jana Nová at a7450a5 (2026-10-27); 3 commits on its paths since: feat(billing): VAT per line; fix(billing): round totals; …
 ```
 
-Počíta sa od commitu, ktorý overenie uviedlo, alebo od commitu, ktorý jeho riadok denníka priniesol, ak je novší (zmena, s ktorou prešlo review), a to ne-merge commity na riadených súboroch záznamu bez súborov znalostí. Overenie známe len z dátumu `checked:` sa počíta ako pri aktuálnosti. Záznam, ktorý nikto neoveril, hovorí `never verified`. Keď má niektorý vypísaný záznam commity odvtedy, brief raz pridá: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Na rozdiel od aktuálnosti tu nie je prah: už jeden commit na riadenej ceste je dôvod čítať.
+Prvé slová povedia, aký bol posledný pohľad, a „verified“ sa pri pečiatke nikdy nepoužije:
+
+| Riadok | Význam |
+| --- | --- |
+| `read by <kto> at <commit>` | potvrdil ho človek (riadok `read`) |
+| `check passed at <commit>` | jeho pinnutý príkaz `verify` prešiel |
+| `stamped by agent at <commit>` | potvrdil ho agent: pohľad, nie overenie |
+| `bulk stamp at <commit>` | potvrdený naraz s viac ako piatimi ďalšími |
+| `checked <dátum> (cache)` | len dátum `checked:`, bez riadku v denníku |
+| `CHECK FAILING at <commit>` | najnovší `verify` zlyhal; zobrazí sa vedľa posledného pohľadu, ktorý nenahrádza |
+| `never verified` | žiadny pohľad |
+
+Počíta sa podľa predkov: ne-merge commity na riadených súboroch záznamu (bez súborov znalostí), ktoré `HEAD` dosiahne a commit pohľadu nie. Zaráta sa aj vetva vyvinutá pred potvrdením a zlúčená po ňom. Commit pohľadu je ten, ktorý riadok denníka uviedol, alebo commit, ktorý riadok priniesol, ak je novší. Čas sa použije len vtedy, keď taký commit nie je. Keď má niektorý vypísaný záznam commity odvtedy, brief raz pridá: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Na rozdiel od aktuálnosti tu nie je prah: už jeden commit na riadenej ceste je dôvod čítať.
 
 Strojové API vracia to isté pri každom zázname (`entries.list`, `entries.get`, `entries.governing`, `entries.drift`): `verification`, `since`, `verify` a `premises`. Pozri [aplikačné API](../reference/05-application-api.md#verification).
 
@@ -156,7 +174,7 @@ Niekedy agent zistí, že zaznamenaná znalosť už neplatí. Povie to cez `ctx_
 - **vyradiť** záznam (`retire=[id]`): jeho súbor dostane stav `deprecated` a poznámku `## Retired` s námietkou ako dôvodom, stagnuté;
 - **nahradiť** ho: zachyť nové pravidlo so `supersedes: [id]` a povýš ho.
 
-Oboje vezme námietku z inboxu spolu s commitom. Ak sa záznam od námietky zmenil, report to povie; námietku, ktorá sa ukázala ako mylná, zahoď. Námietka je vybavená, až keď zmena prejde review a merge, nie keď ju jeden worktree pripravil. Zdieľané námietky s počítaním nezávislých hlasov patria aplikácii, napríklad Peer Hubu; kontext drží lokálnu, posúdenú časť.
+Oboje vezme námietku z inboxu spolu s commitom. Ak sa záznam od námietky zmenil, report to povie; námietku, ktorá sa ukázala ako mylná, zahoď. Námietka je vybavená, až keď zmena prejde review a merge, nie keď ju jeden worktree pripravil: ostáva v stave *resolving*, kým nový blob záznamu nepristane v `HEAD`, takže ju reset ani opustená vetva nestratia. Zdieľané námietky s počítaním nezávislých hlasov patria aplikácii, napríklad Peer Hubu; kontext drží lokálnu, posúdenú časť.
 
 ## Review
 

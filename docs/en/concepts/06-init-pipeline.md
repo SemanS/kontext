@@ -10,7 +10,7 @@
 [5/5] deepen   purpose · mod:<module> · dec:<area> · refresh:<module> tasks
 ```
 
-Re-running `kontext init` is safe: generated facts are refreshed, everything people or agents wrote is kept. While the bootstrap waits for review on its branch, agents on other branches are told it exists there (brief) and `ctx_init` does not start a second one.
+Re-running `kontext init` is safe: generated facts are refreshed, everything people or agents wrote is kept, including hand-edited `paths`, `tags` and `summary` of module docs. Two runs over the same `HEAD` produce the same modules and cluster ids. While the bootstrap waits for review on its branch, agents on other branches are told it exists there (brief) and `ctx_init` does not start a second one.
 
 ## 1 · scan
 
@@ -36,7 +36,9 @@ Mines the last `init.history_max_commits` non-merge commits (3000):
 - **churn** per file and module, and the last change date,
 - **conventions**: the share of Conventional Commits, ticket keys in subjects.
 
-Commits that only touch existing ADRs or `.ai/` are skipped (they already are knowledge), and attribution trailers (`Co-authored-by`, …) are dropped. When few commits pass the threshold (history written as rules rather than "we decided"), the next best fill up to a quarter of the history. Candidates are clustered per module; a module with one or two joins its enclosing module, and a large cluster is split into chronological parts of up to 8 commits. The strongest clusters become `dec:` tasks (`init.max_decision_tasks`, default 20).
+The word signals above are English. Language-neutral signals (dependency swaps, Conventional-Commit types, breaking markers, body length, `Decision:` trailers) work in any language; add words in your team's language with `[init] decision_words` (for example `rozhodli`, `namiesto`, `prechádzame`). Commits by bots (dependabot, renovate, authors ending in `[bot]`, and `[init] bot_authors`) are left out of scoring, so release notes do not pass for decisions.
+
+Commits that only touch existing ADRs or `.ai/` are skipped (they already are knowledge), and so are commits an existing entry cites in `commits` or that carry a `Decision:` trailer; attribution trailers (`Co-authored-by`, …) are dropped. When few commits pass the threshold (history written as rules rather than "we decided"), the next best fill up to a quarter of the history. Candidates are clustered per module; a module with one or two joins its enclosing module, and a large cluster is split into chronological parts of up to 8 commits. The strongest clusters become `dec:` tasks (`init.max_decision_tasks`, default 20).
 
 ## 3 · render
 
@@ -45,13 +47,13 @@ Commits that only touch existing ADRs or `.ai/` are skipped (they already are kn
 - `.ai/architecture/modules/<module>.md` for the top `init.max_module_docs` modules (40) by rank, with an *Overview* placeholder and generated facts: kind, language, size, manifests, dependencies, dependents, key files, exports, packages, docs, activity,
 - `.ai/README.md` and `.ai/.gitattributes`.
 
-Generated facts sit between `<!-- kontext:facts:start … -->` and `<!-- kontext:facts:end -->`. Only that block is rewritten on later runs.
+Generated facts sit between `<!-- kontext:facts:start … -->` and `<!-- kontext:facts:end -->`. Only that block is rewritten on later runs; front-matter `paths`, `tags` and `summary` that someone edited are kept. Facts mark files that are untracked, and the facts carry the date they were generated.
 
 Modules are ranked by kind (apps and services first), size, how many modules depend on them, churn and whether they have docs.
 
 ## 4 · wire
 
-Installs the [git hooks](./07-git-integration.md) unless `--no-hooks`. `--connect claude,agents-md` also wires agent clients.
+Installs the [git hooks](./07-git-integration.md) unless `--no-hooks`. Only that explicit flag records a hooks opt-out for the clone; a bootstrap through `ctx_init` or the API `setup` skips the hooks without recording a refusal. `--connect claude,agents-md` also wires agent clients.
 
 ## 5 · deepen
 
@@ -66,7 +68,7 @@ The semantic part is split into tasks that one agent turn can finish:
 
 Order: purpose → the top eight modules → decision clusters → remaining modules → refreshes.
 
-**Progress lives in the files.** A module doc carries `deepened` and `deepened_fingerprint`; decisions carry the commits they came from; skipped tasks are recorded in the clone's common dir. So you can stop at any time, continue in another worktree, or let a teammate finish after pulling. When a module's files change enough to alter its fingerprint, a `refresh:` task appears.
+**Progress lives in the files.** A module doc carries `deepened` and `deepened_fingerprint`; decisions carry the commits they came from. The state of `dec:` tasks is derived from git: a cluster whose commits an entry cites, or a `Decision:` trailer covers, is not planned again, and the commits a finished or skipped `dec:` task covered are kept in a covered-commits log in the store, committed with the bootstrap. So a teammate after pulling and a fresh clone see the same queue. `kontext init skip <task>` works for every task, `mod:<module>` included. You can stop at any time, continue in another worktree, or let a teammate finish after pulling. When a module's files change enough to alter its fingerprint, a `refresh:` task appears.
 
 Who does the work:
 

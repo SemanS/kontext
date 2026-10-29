@@ -1,6 +1,6 @@
 # Security and privacy
 
-kontext runs on your machine with your permissions and handles text that may end up in a shared repository. These are the guarantees it tries to give.
+kontext runs on your machine with your permissions and handles text that may end up in a shared repository. These are the guarantees it tries to give, and where they stop.
 
 ## What leaves your machine
 
@@ -9,17 +9,44 @@ Nothing, unless you configure it:
 - the local index, inbox, outbox and caches stay in `.git/kontext/`,
 - knowledge reaches others only through commits you push,
 - adapters send data only where their configuration says (and only for the ops and events they declare),
-- `kontext distill` sends a thread's compacted transcript to the `llm` adapter you choose, with secrets redacted and email addresses, phone numbers, IBANs, card numbers, IP addresses and your `secrets.redact` patterns masked (see [sensitive threads](../guides/08-distill-threads.md#sensitive-threads)).
+- `kontext distill` sends a thread's compacted transcript to the `llm` adapter you choose, after redaction. What is masked, and what is dropped before the prompt, is listed under [sensitive threads](../guides/08-distill-threads.md#sensitive-threads). An invalid `secrets.redact` pattern stops distill, threads and autopilot before anything is sent.
 
 ## Trust for repository-declared adapters
 
 Adapters can start processes and call URLs. A repository you clone must not be able to make kontext, or its git hooks, run arbitrary commands. Therefore:
 
 - adapters in your user config (`~/.config/kontext/…`) and in the clone-local config are trusted,
-- adapters declared in a repository's **shared** config (`.ai/kontext.toml`) are **skipped** until you review them and run `kontext trust`,
-- trust is pinned to a hash of the adapters table (in `~/.config/kontext/trust.toml`); any change requires trusting again.
+- adapters declared in a repository's **shared** config (`.ai/kontext.toml`) are **skipped** until you review them and run `kontext trust` from a terminal,
+- trust is pinned (in `~/.config/kontext/trust.toml`) to a SHA-256 hash over the canonical TOML of everything shared that reaches an adapter: the `adapters` table, `[vars]` and `project.name`. Any change to them requires trusting again,
+- a legacy 12-hex FNV pin from a version before 0.10 is refused with a message, never upgraded silently: run `kontext trust` again,
+- shared `[vars]` never override the vars of a user or local adapter, a shared `project.name` must be a slug, and `{{repo.remote}}` carries no userinfo.
 
 `kontext status` and `kontext adapters list` show untrusted adapters as a warning.
+
+What trust covers:
+
+- **The declared text, not the scripts it starts.** If a trusted adapter runs `./scripts/sync.sh`, the pin covers the line that names the script, not the script. A later commit that changes the script is not caught. Review scripts an adapter starts from the repository as you would any code you run.
+- **Honour-based against a process that can edit `trust.toml`.** `kontext trust` refuses to run without a terminal, but an agent that can allocate a terminal or write your config can pin anything. `kontext connect` installs a host rule that denies `kontext trust` run by the agent (PreToolUse on Bash in Claude Code and Codex); it is a guard rail, not a boundary.
+
+## Verify commands are a trust boundary {#verify}
+
+An entry's `verify:` field is a shell command from the repository, and running it is running repository code. Therefore:
+
+- a verify command runs only when `trust.toml` holds a pin of its text: `sha256(entry path, NUL, command)` under `[repos.<slug>.verify]`,
+- `kontext trust --verify <id>` (or `--all`) pins from an interactive terminal only and prints each command it pins. No MCP tool and no `ctx_api` operation pins,
+- without a pin, `kontext verify`, `drafts.verify` and `ctx_verify` run nothing and return `untrusted_verify` with the command, its hash and the line to pin it. Editing the command drops the pin,
+- over MCP an unpinned command is returned to the agent, which runs it in its own sandbox; the result is recorded as an `agent` stamp, not as a passed check,
+- the command runs with an environment allowlist: `PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`, `TERM`, plus the names in `[verify] pass_env` from your user or local config (the shared config cannot add any),
+- `output_tail` is redacted, a dirty tree is recorded in the ledger, and the process group is killed at the timeout, when stdout stays open 2 s after the shell exits, and when the MCP request is cancelled or stdin closes,
+- `ctx_verify` is annotated `destructiveHint: true` and `openWorldHint: true`, so hosts ask before calling it.
+
+What the pin does **not** cover:
+
+- **The pin binds consent to the command text, not to the code it executes.** `cargo test` or `npm test` runs whatever the working tree contains; a branch can change the tests without changing the command.
+- **`HOME` stays readable and the network open.** The allowlist removes tokens from the environment, not access to files or the network.
+- **In Codex, `ctx_verify` runs inside the MCP server, outside the agent's sandbox.** Prefer that the agent runs the returned command itself.
+
+The only path where a pull request cannot smuggle a command into a run with CI credentials is running the base revision's text in CI; see [CI](../guides/07-ci.md).
 
 ## Secret scanning
 
@@ -36,6 +63,7 @@ Every staged knowledge file is scanned by the pre-commit hook; high-confidence f
 
 - `secrets.scan = "staged"` extends the scan to every staged text file (not only knowledge).
 - A line containing `kontext:allow-secret`, or matching a regex in `secrets.allow`, is ignored.
+- `secrets.redact` and `secrets.allow` from your user or local config are joined with the repository's, never replaced by them.
 - `ctx_capture` and deepen submissions redact findings automatically (`[redacted:<rule>]`).
 
 ## Files kontext never reads
@@ -44,9 +72,12 @@ Every staged knowledge file is scanned by the pre-commit hook; high-confidence f
 
 ## Agents and the repository
 
-- `ctx_read` only returns files inside the repository.
-- Tools that write (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`) modify the working tree and the git index only, never history, never remotes.
-- Commands run by adapters receive arguments as an argument vector, never through a shell.
+- `ctx_read` only returns files inside the repository, and refuses `.git/`, `.git-credentials` and `.ssh`.
+- `ctx_threads` reads only `claude:`, `codex:`, `superset:`, `last` and paths under known transcript roots.
+- `dir` is confined to this repository, its worktrees and its submodules.
+- Tools that write (`ctx_capture`, `ctx_inbox promote`, `ctx_prepare_commit`, `ctx_init_submit`, `ctx_confirm`, `ctx_challenge`) modify the working tree and the git index only, never history, never remotes. `ctx_inbox drop` removes only your own candidates.
+- `ctx_verify` runs a pinned command (see [above](#verify)); hosts should ask before it.
+- Commands run by adapters receive arguments as an argument vector, never through a shell. Adapter error messages carry no query string or userinfo.
 
 ## Reporting a vulnerability
 

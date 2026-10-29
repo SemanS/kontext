@@ -11,6 +11,7 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Hlavička | projekt, ID repozitára, vetva, *About* (zhrnutie prehľadu), *Stack* |
 | Pravidlá pre agentov | `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, inštrukcie pre Copilot a vnorené súbory `AGENTS.md` na cestách vo focuse |
 | Zmenené od … | znalosti pridané, zmenené alebo odobrané od posledného briefu v tomto worktree, najviac päť riadkov ([nižšie](#changed)) |
+| Governs &lt;focus&gt; (N) | pri focuse každý aktívny záznam, ktorého `paths` ho riadia, jeden kompaktný riadok na záznam, pred všetkým ostatným ([nižšie](#governing)) |
 | Rozhodnutia | aktívne rozhodnutia, najrelevantnejšie pre focus ako prvé, každé na jeden riadok (najviac `brief.max_decisions`) |
 | Konvencie · Poznatky a úskalia · Incidenty | každé na jeden riadok, zoradené podľa focusu |
 | Flows cez focus | pri focuse [flows](02-knowledge-store.md#flows), ktorých `paths` sa s ním prekrývajú (najviac štyri, s počtom krokov); brief bez focusu povie v jednom riadku, koľko flows existuje |
@@ -22,6 +23,16 @@ Agenti platia za každý prečítaný token. kontext odpovedá v malých, vrstve
 | Stav | počty v inboxe, postup zavádzania, záznamy na kontrolu, záznamy na prehodnotenie, chýbajúce git hooky, varovania; miesto pre ňu je vyhradené, takže ju plný brief nevytlačí |
 
 `focus` prijíma cesty (súbory alebo adresáre) a slová k téme. Záznamy, ktorých `paths` sa prekrývajú s cestou vo focuse, idú prvé; slová k téme sa porovnávajú s titulkami, zhrnutiami a štítkami. Keď všetky cesty vo focuse ležia v inom repozitári, brief je briefom toho repozitára ([Viac repozitárov](09-several-repositories.md)).
+
+Položka focusu s `/`, glob znakom alebo známou príponou súboru je cesta, aj keď súbor ešte neexistuje, takže agent, ktorý ide vytvoriť `src/billing/refunds.rs`, dostane záznamy riadiace `src/billing/**`. Prekryv funguje oboma smermi: focus na adresár zodpovedá vzoru pod ním, aj vzorom, ktoré začínajú wildcardom (`**/migrations/*.sql` voči `src/db`) alebo úvodným lomítkom.
+
+### Čo riadi focus {#governing}
+
+Brief s focusom nikdy ticho nevyhodí riadiaci záznam. Sekcia *Governs &lt;focus&gt; (N)* je rezervovaná pred všetkými ostatnými a vypíše jeden riadok na záznam: plné id, názov, značky a `· N commits since`. Je zoradená podľa toho, ako špecificky `paths` záznamu menujú focus (súbor, potom adresár, potom glob, potom `**`), a potom od najstaršieho, lebo najstaršie obmedzenia nová zmena porušuje najčastejšie. Poradie neurčuje žiadny zoznam slov („never“, „must“).
+
+Keď sa sekcia do rozpočtu nezmestí, záznamy, ktoré sa nezmestili, vymenuje jeden riadok, ktorý sa vytlačí vždy: `also governing: [id] [id] …`. Pod veľkosťou samotnej sekcie sa tlačia len id. Ostatné druhy sa potom orezávajú po riadkoch a každá orezaná sekcia končí riadkom s počtom: `… 7 more (2 govern your focus)`. Celá sekcia nikdy nezmizne bez tohto riadku. Päta, ktorá agentovi povie, kde hľadať ďalej, sa ráta do rozpočtu a nahradené dokumenty modulov sa vynechajú.
+
+Rozpočty sú v praxi od 200 do 1 400 tokenov: orchestrátor ako Peer posiela `max(200, 1500 − už minuté tokeny)`, takže 200 až 1 000 je bežný prípad, nie okraj. Riadok *Čo sa odvtedy zmenilo* pod riadiacim záznamom stojí asi 25 tokenov; pri 200 tokenoch sú v riadiacej sekcii len id.
 
 ### Značky {#marks}
 
@@ -43,9 +54,9 @@ Každý brief si zapamätá commit, ktorý videl, v cache lokálneho stavu workt
 
 Sekcia má vlastný malý rozpočet a plný brief ju vypustí ako prvú; cache sa posunie, len keď sa sekcia ukázala, takže vypustená zmena príde v ďalšom briefe.
 
-Na záznam sa odkazuje najkratšou jednoznačnou predponou jeho id (`[2026-09-28-adapters]` namiesto id, ktoré opakuje celý titulok), alebo číslom ADR. `ctx_read` rozpozná oboje.
+Na záznam sa odkazuje plným id (`[2026-09-28-adapters-are-configuration]`) alebo číslom ADR. Kratšia predpona by prestala byť jednoznačná, keď pribudne dlhšie id, a agenti tieto odkazy kopírujú do `supersedes` a `[[odkazov]]`.
 
-Claude Code môže dostať brief automaticky na začiatku session. Pozri [Claude Code](../agent-integrations/02-claude-code.md).
+Claude Code, Codex a Cursor môžu dostať brief automaticky na začiatku session a riadiace záznamy pred úpravou: pozri [Hooky](../guides/09-hooks.md). Hooky a `ctx_brief` čerpajú z jedného rozpočtu `[hooks] session_budget_tokens` na session.
 
 ### Aktuálnosť {#freshness}
 
@@ -55,7 +66,7 @@ Záznam sa zapíše raz, ale kód, ktorý riadi, sa ďalej mení. *Stav* v brief
 - May need a refresh (20+ commits on their paths since they were made, edited or confirmed): [0007] Prices are integer cents (34 commits), … — check them: confirm what still holds (`ctx_confirm`), supersede what no longer does.
 ```
 
-Počíta sa od najneskoršieho z troch okamihov: `date` záznamu, jeho potvrdenie [`checked`](./02-knowledge-store.md#checked) a posledný commit, ktorý zmenil súbor záznamu (aj úprava je pohľad naň). Commity z dňa dátumu (alebo potvrdenia zapísaného ako deň), commity do sekundy potvrdenia a merge commity sa nepočítajú. Commit sa počíta raz, nech sa zhoduje koľkokoľvek jeho súborov, a započíta sa aj presun kódu mimo riadenej cesty. Záznamy bez `paths` alebo bez `date` či `checked`, od ktorých by sa dalo počítať, sa neoznačia nikdy; incidenty a dokumenty modulov sa nesledujú. Označenie je výzva na kontrolu, nie verdikt: ak záznam stále platí, potvrď ho (`kontext confirm <id>`) a počíta sa odznova; ak nie, nahraď ho novým (supersede) alebo ho vyraď.
+Počíta sa od najneskoršieho z troch okamihov: `date` záznamu, jeho potvrdenie [`checked`](./02-knowledge-store.md#checked) a posledný commit, ktorý zmenil súbor záznamu (aj úprava je pohľad naň). Commity z dňa dátumu (alebo potvrdenia zapísaného ako deň), commity do sekundy potvrdenia a merge commity sa nepočítajú. Pri potvrdení alebo kontrole, ktorá uvádza commit, sa počíta podľa predkov: commity, ktoré `HEAD` dosiahne a ten commit nie, takže sa zaráta aj vetva zlúčená po pohľade. Zlyhaná kontrola nie je pohľad a počet nevynuluje; pečiatka agenta alebo bulk je pohľad. Commit sa počíta raz, nech sa zhoduje koľkokoľvek jeho súborov, a započíta sa aj presun kódu mimo riadenej cesty. Záznamy bez `paths` alebo bez `date` či `checked`, od ktorých by sa dalo počítať, sa neoznačia nikdy; incidenty a dokumenty modulov sa nesledujú. Označenie je výzva na kontrolu, nie verdikt: ak záznam stále platí, potvrď ho (`kontext confirm <id>`) a počíta sa odznova; ak nie, nahraď ho novým (supersede) alebo ho vyraď.
 
 Pre rozsah commitov namiesto celej histórie pozri [drift](./03-capture-and-review.md#drift).
 
@@ -92,5 +103,6 @@ Každý výsledok nesie URI. `ctx_read` ho vráti v úrovni, o ktorú agent pož
 - `ctx_why` drží každú sekciu krátku: najviac `limit` položiek na sekciu.
 - `ctx_threads` vracia prepis po častiach veľkých `budget_chars` (predvolene 20000), aby sa každá zmestila do jedného výsledku nástroja.
 - Sekcie adaptérov v briefe dostanú každá najviac tretinu zvyšného rozpočtu.
+- Hooky hostiteľov zdieľajú jeden rozpočet `[hooks] session_budget_tokens` s `ctx_brief`; hook pri úprave zopakuje len záznamy, ktoré v session ešte nezazneli alebo ktorých blob sa zmenil.
 
 Počty tokenov sa odhadujú na štyri znaky na token, zámerne jednoducho a konzervatívne.

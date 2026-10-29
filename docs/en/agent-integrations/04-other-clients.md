@@ -12,6 +12,10 @@ kontext connect cursor --write     # writes .cursor/mcp.json
 
 Cursor also reads `.cursorrules`; kontext's brief lists it under *Rules for agents*. `kontext connect agents-md --write` adds the working rules to `AGENTS.md`.
 
+**Hooks.** `kontext connect cursor --hooks --write` writes `.cursor/hooks.json`: a session-start hook and a hook after a file edit (`postToolUse`), both running `kontext hook --host cursor`. Cursor also reads Claude Code hooks from `.claude/settings.json`; install one set, not both. Opt-in until the A/B report; see [Hooks](../guides/09-hooks.md).
+
+**Skills.** Cursor reads `SKILL.md` files from `.claude/skills/`, where `kontext connect skills --write` puts them.
+
 ## OpenCode
 
 ```sh
@@ -24,6 +28,8 @@ kontext connect opencode --write   # writes opencode.json
   "mcp": { "kontext": { "type": "local", "command": ["kontext", "mcp"], "enabled": true } }
 }
 ```
+
+OpenCode reads `AGENTS.md` and the skills in `.claude/skills/`. It has no hook protocol kontext writes to; the agent gets the brief by calling `ctx_brief`, as the `AGENTS.md` block tells it.
 
 ## Superset and other orchestrators
 

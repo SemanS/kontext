@@ -8,7 +8,7 @@ kontext is a single static-ish binary. It needs **git 2.31 or newer** at runtime
 curl -fsSL https://raw.githubusercontent.com/SemanS/kontext/main/scripts/install.sh | sh
 ```
 
-The script downloads the prebuilt binary for your platform from the latest [release](https://github.com/SemanS/kontext/releases) into `~/.local/bin/kontext`. When no binary matches your platform it builds from source with `cargo`.
+The script downloads the prebuilt binary for your platform from the latest [release](https://github.com/SemanS/kontext/releases) into `~/.local/bin/kontext` and checks it against the release's `SHA256SUMS`; a mismatch stops the install. When no binary matches your platform it builds that release's tag from source with `cargo --locked`. A failed download stops with an error; it never falls back to building `main`. The script ends non-zero when the installed binary does not run (`kontext --version`).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -16,17 +16,17 @@ The script downloads the prebuilt binary for your platform from the latest [rele
 | `KONTEXT_VERSION` | `latest` | a release tag such as `v0.1.0` |
 | `KONTEXT_REPO` | `SemanS/kontext` | install from a fork |
 
-Prebuilt binaries: macOS (Apple Silicon and Intel) and Linux x86_64.
+Prebuilt binaries: macOS (Apple Silicon and Intel), Linux x86_64 and ARM64 (glibc 2.34 or newer: Ubuntu 22.04, Debian 12, RHEL 9 and later), and Windows x86_64. Every release carries `SHA256SUMS`; to check by hand: `shasum -a 256 -c SHA256SUMS --ignore-missing`.
 
 ## From source
 
-Requires Rust **1.88** or newer ([rustup.rs](https://rustup.rs)).
+Requires Rust **1.90** or newer ([rustup.rs](https://rustup.rs)); CI checks this version against `Cargo.lock`.
 
 ```sh
 cargo install --locked --git https://github.com/SemanS/kontext --root ~/.local
 # or from a checkout
 git clone https://github.com/SemanS/kontext && cd kontext
-cargo build --release && install -m 755 target/release/kontext ~/.local/bin/
+cargo build --release --locked && install -m 755 target/release/kontext ~/.local/bin/
 ```
 
 ## Check the installation
@@ -41,7 +41,7 @@ Make sure the directory is on your `PATH`. Git hooks installed by kontext also l
 ## Platforms
 
 - **macOS** and **Linux** are supported.
-- **Windows** is not supported natively (hooks are POSIX shell scripts); WSL works like Linux.
+- **Windows**: the binary builds and the brief, search, MCP server and CLI work. Git hooks, agent host hooks and `verify` commands run through `sh` and are untested on native Windows. WSL works like Linux.
 
 ## Updating
 

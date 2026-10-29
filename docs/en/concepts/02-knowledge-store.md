@@ -91,6 +91,8 @@ Repositories that already keep ADRs usually write them like this, and kontext re
 
 Recognized fields: Status, Date, Review by, Checked, Tags, Paths, Supersedes, Superseded by, Summary, Commits, Author/Authors/Deciders/Owner. `Status: Superseded by 0009` sets both the status and the link.
 
+ADRs written with adr-tools keep the status in a `## Status` section (`Accepted`, `Superseded by [9. …](0009-….md)`). kontext reads that section and, on supersede or retire, writes it in the same style. A fields-style entry without a Status line gets one when its status changes.
+
 ## Ids and file names
 
 | Numbering | File name | Typical for |
@@ -99,13 +101,19 @@ Recognized fields: Status, Date, Review by, Checked, Tags, Paths, Supersedes, Su
 | `sequential` | `0008-orders-live-in-postgresql.md` | existing ADR directories |
 | `none` | `prices-are-integer-cents.md` | conventions, learnings |
 
-The id is the file stem (or the front-matter `id`). Anywhere an id is expected you can use a unique prefix or, for sequential ADRs, the number (`0007`).
+The id is the file stem (or the front-matter `id`). Reading tools (`ctx_read`, `kontext read`, `confirm`, `challenge`) accept a unique prefix or, for sequential ADRs, the number (`0007`). What is written into an entry (`supersedes`, `extends`, `[[links]]`) is canonicalised to the full id, since a prefix that is unique today stops being unique when a longer id is added; an ambiguous target is refused. The brief prints full ids for the same reason. A duplicate ADR number is an error naming both files, and a new id is allocated across all kinds. A title without Latin letters gets a short hash id.
 
 ## Statuses and supersession
 
 Entries are *active* unless `superseded`, `deprecated` or `rejected`. Capturing an entry with `supersedes: [0003]` marks the old entry `superseded` and links it back (`superseded_by`); for fields-style ADRs the `**Status:**` line is edited in place. `kontext log --all` shows the chains. This works for every kind, not only decisions.
 
+Supersession is derived from the active successor, not only from the old file: an entry named in the `supersedes` of an active entry is superseded, and `superseded_by` is filled in when the store is read, even if the old file was never edited (a merge took one side, someone wrote the new entry by hand). `kontext check` reports such a one-sided supersede, and `kontext repair` (`--dry-run` to preview) writes the missing `status` and `superseded_by` lines. Those are edited as single lines, so nested YAML and comments survive.
+
 An entry that no longer holds and has no replacement is *retired*: its status becomes `deprecated` and a `## Retired` section with the date and the reason is appended, so the claim and why it was dropped stay readable. Nothing is rewritten in place. Retirement goes through review like any change: an agent [challenges](./03-capture-and-review.md#challenges) the entry, and the retirement is staged with the commit (`ctx_prepare_commit retire=[id]`, or `drafts.retire` in the [application API](../reference/05-application-api.md#retire)).
+
+## Amendments only add {#amendments}
+
+Reviewed text is never rewritten in place. A convention, learning or incident grows by dated additions: a `## Added <YYYY-MM-DD>` section appended below the body, which is what `drafts.extend` drafts and `drafts.stage amends` writes. An amendment that changes the existing body is refused (`amend_not_additive`); change the claim by superseding the entry instead. A decision is never amended: a finding that builds on one is a new entry with `extends: [<id>]`, which `ctx_capture` and the inbox carry through to promotion. No model writes into an entry. The only in-place edits are metadata lines: `verify`, `checked`, and `status` / `superseded_by` on retire, supersede and `kontext repair`.
 
 ## Review dates {#review-by}
 
@@ -149,6 +157,16 @@ A file reference without a revision drifts as the file changes, so `code:` alway
 
 The brief says only how many sources an entry has (`(3 sources)`); `ctx_read` at level 1 lists them. E-mail addresses and session ids do not belong in references.
 
+## How entries are parsed {#parsing}
+
+Front matter is read the way people and formatters write it:
+
+- lists as flow lists (`[a, b]`), also wrapped over several lines (as prettier does), or as block lists (`- a`),
+- trailing `# comments`, a UTF-8 BOM, CRLF line endings (kept when a line is edited),
+- statuses `retired` and `archived`, and statuses with an emoji, read as `deprecated` with a warning.
+
+A literal path in `paths` is anchored at the repository root; a bracketed segment such as `app/[slug]/page.tsx` matches the literal file first and then as a glob, the way git does, regardless of what the working tree holds. An entry that does not parse is an error in `kontext check`, never skipped silently.
+
 ## Keep entries brief
 
 Entries are meant to be read by agents inside a token budget. `kontext check` warns when a body exceeds `store.max_body_lines` (80 non-empty lines by default). Move details to regular docs and link them.
@@ -163,6 +181,6 @@ Entries are meant to be read by agents inside a token budget. `kontext check` wa
 
 | Level | Check |
 | --- | --- |
-| error | missing title, unknown kind, duplicate id, a malformed `review_by` or one before the entry's date, a `checked` that is not a date or lies in the future, a `verify` that is not one line of at most 500 characters, high-confidence secret |
-| warning | decision without status or date, unusual status, malformed date, long entry, `supersedes` pointing nowhere, a `paths` pattern matching no tracked file, a `checked` behind its [ledger](./03-capture-and-review.md#verifications) (all entries only), medium-confidence secret |
+| error | an entry that does not parse, missing title, unknown kind, duplicate id or ADR number, an ambiguous `supersedes` or `extends` target, a malformed `review_by` or one before the entry's date, a `checked` that is not a date or lies in the future, a `verify` that is not one line of at most 500 characters, high-confidence secret |
+| warning | decision without status or date, unusual status, malformed date, long entry, `supersedes` pointing nowhere, a one-sided supersede (`kontext repair` fixes it), a status read as `deprecated`, unparsable or future lines in the ledger, a `paths` pattern matching no tracked file, a `checked` behind its [ledger](./03-capture-and-review.md#verifications) (all entries only), medium-confidence secret |
 | info | an active entry links to one that is superseded, retired or deprecated (a [changed premise](./03-capture-and-review.md#premises); all entries only) |
