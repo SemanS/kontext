@@ -717,6 +717,7 @@ fn repo_with_store(s: &Sandbox, dir: &Path, name: &str, decisions: &[(&str, &str
 }
 
 #[test]
+#[cfg(unix)]
 fn routing_edges() {
     let s = Sandbox::new("edges");
     let lib = s.root.join("lib-src");

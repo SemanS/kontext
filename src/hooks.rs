@@ -107,6 +107,8 @@ fn remove_partial_block(text: &str) -> Option<String> {
 }
 
 fn make_executable(p: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = p;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

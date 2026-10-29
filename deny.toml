@@ -8,7 +8,13 @@ all-features = true
 version = 2
 # RustSec advisories fail the advisories check (its CI job does not block a merge: a new advisory
 # turns it red without a change here). Ignore one only with its id and a reason.
-ignore = []
+ignore = [
+    # zstd 0.13 / zstd-safe 7 are pinned by tantivy 0.26; the fixed lines (0.14.3, 8.2.0) need a tantivy
+    # upgrade. kontext uses zstd only for its own derived index's docstore, never on untrusted input.
+    { id = "RUSTSEC-2026-0391", reason = "zstd 0.14.3 is unreachable behind tantivy 0.26; only the local index is compressed" },
+    { id = "RUSTSEC-2026-0398", reason = "zstd-safe 8.2.0 is unreachable behind tantivy 0.26; only the local index is compressed" },
+    { id = "RUSTSEC-2026-0403", reason = "zstd-safe 8.2.0 is unreachable behind tantivy 0.26; only the local index is compressed" },
+]
 
 [licenses]
 version = 2

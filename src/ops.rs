@@ -458,7 +458,7 @@ fn read_full(app: &App, uri: &str, level: u8) -> Result<String> {
             };
             let rel = plain.trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
             let exists = !rel.is_empty() && !rel.split('/').any(|s| s == "..") && app.repo.abs(rel).exists();
-            if exists && !found.is_some_and(|e| e.rel_path == rel) {
+            if exists && found.is_none_or(|e| e.rel_path != rel) {
                 let text = read_file(app, rel, anchor, level)?;
                 return Ok(match found {
                     Some(e) => format!("(the file {rel}; the entry of that name is `kx:{}`)\n{text}", e.id),
@@ -1201,10 +1201,10 @@ struct EntryChange {
 fn entry_changes(app: &App, base: Option<&str>, head: &str) -> Option<Vec<EntryChange>> {
     let wanted = |e: &Entry| crate::drift::DEFAULT_KINDS.contains(&e.kind.as_str());
     let before: Vec<Entry> = match base {
-        Some(b) => crate::drift::entries_at(app, b).ok()?.into_iter().filter(|e| wanted(e)).collect(),
+        Some(b) => crate::drift::entries_at(app, b).ok()?.into_iter().filter(&wanted).collect(),
         None => Vec::new(),
     };
-    let after: Vec<Entry> = crate::drift::entries_at(app, head).ok()?.into_iter().filter(|e| wanted(e)).collect();
+    let after: Vec<Entry> = crate::drift::entries_at(app, head).ok()?.into_iter().filter(&wanted).collect();
     let content = |e: &Entry| {
         let mut e = e.clone();
         e.checked = None;

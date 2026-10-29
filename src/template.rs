@@ -33,7 +33,7 @@ pub fn render_value(v: &Value, ctx: &Value) -> Value {
     match v {
         Value::String(s) => {
             let t = s.trim();
-            if t.starts_with("{{") && t.ends_with("}}") && t[2..t.len() - 2].find("{{").is_none() && t.matches("}}").count() == 1 {
+            if t.starts_with("{{") && t.ends_with("}}") && !t[2..t.len() - 2].contains("{{") && t.matches("}}").count() == 1 {
                 return eval(&t[2..t.len() - 2], ctx);
             }
             Value::String(render_str(s, ctx))

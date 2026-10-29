@@ -415,8 +415,8 @@ fn changed(app: &App, input: &Value) -> Result<Value> {
     let wanted = |e: &Entry| {
         if kinds.is_empty() { crate::drift::DEFAULT_KINDS.contains(&e.kind.as_str()) } else { kinds.contains(&e.kind) }
     };
-    let before: Vec<Entry> = committed_entries_at(app, &base)?.into_iter().filter(|e| wanted(e)).collect();
-    let after: Vec<Entry> = committed_entries_at(app, &head)?.into_iter().filter(|e| wanted(e)).collect();
+    let before: Vec<Entry> = committed_entries_at(app, &base)?.into_iter().filter(&wanted).collect();
+    let after: Vec<Entry> = committed_entries_at(app, &head)?.into_iter().filter(&wanted).collect();
     let content = |e: &Entry| {
         let mut e = e.clone();
         e.checked = None;
