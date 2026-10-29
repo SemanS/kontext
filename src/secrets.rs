@@ -711,7 +711,10 @@ mod tests {
 
     #[test]
     fn urls_in_errors_lose_their_secrets() {
-        assert_eq!(strip_url_secrets(&format!("https://{}@api.example.com/v1/search?key={}#frag", "user:pw", "abc123")), "https://api.example.com/v1/search");
+        assert_eq!(
+            strip_url_secrets(&format!("https://{}@api.example.com/v1/search?key={}#frag", "user:pw", "abc123")),
+            "https://api.example.com/v1/search"
+        );
         let webhook = strip_url_secrets(&["https://hooks.slack.com/services/", "T0000AAAA/B0000BBBB/aB3dE5fG7hJ9kL1mN3pQ5rS7"].concat());
         assert_eq!(webhook, "[redacted:slack-webhook]");
         let err = scrub_error(&format!("adapter 'x': GET https://api.example.com/q?api_key={} failed: HTTP 401", "Zx9Lq2Wr8Tb4Np6M"));
