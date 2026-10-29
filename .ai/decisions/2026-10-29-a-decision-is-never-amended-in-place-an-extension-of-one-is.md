@@ -2,12 +2,13 @@
 id: 2026-10-29-a-decision-is-never-amended-in-place-an-extension-of-one-is
 kind: decision
 title: A decision is never amended in place; an extension of one is a new linked entry
-status: accepted
+status: superseded
 date: 2026-10-29
 verify: cargo test --lib extend_refuses_decisions
 paths: [src/api_write.rs]
 author: SemanS
 origin: agent
+superseded_by: [2026-10-29-an-amendment-only-appends-a-dated-section-a-model-never]
 ---
 
 ## Decision
