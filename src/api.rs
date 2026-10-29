@@ -25,9 +25,20 @@ pub const OPERATIONS: &[&str] = &[
     "drafts.confirm",
     "drafts.verify",
     "drafts.revise",
+    "drafts.extend",
     "guidance.propose",
     "operations.get",
 ];
+
+/// Inputs an operation gained after it shipped, named `<operation>.<input>`, so a client can tell
+/// an older binary that would ignore or refuse them. `status.capabilities` lists them after the
+/// operations.
+pub const FEATURES: &[&str] = &["drafts.stage.amends", "drafts.stage.extends"];
+
+/// The operations and the later inputs this binary supports.
+pub fn capabilities() -> Vec<&'static str> {
+    OPERATIONS.iter().chain(FEATURES).copied().collect()
+}
 
 #[derive(Debug)]
 struct ApiError {

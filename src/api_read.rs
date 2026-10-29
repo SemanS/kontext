@@ -255,7 +255,7 @@ fn status(app: &App) -> Result<Value> {
     };
     let available = selected.is_some();
     Ok(json!({"api_version":1,"version":env!("CARGO_PKG_VERSION"),"root":app.repo.root,
-        "store":{"configured":app.is_set_up() || app.cfg().kind_names().iter().any(|kind|app.repo.abs(&app.cfg().kind_path(kind)).is_dir()),"dir":app.store().dir()},"capabilities":crate::api::OPERATIONS,
+        "store":{"configured":app.is_set_up() || app.cfg().kind_names().iter().any(|kind|app.repo.abs(&app.cfg().kind_path(kind)).is_dir()),"dir":app.store().dir()},"capabilities":crate::api::capabilities(),
         "llm":{"available":available,"adapters":adapters,"selected":selected,"configured":configured,"requires_selection":configured.is_none() && adapters.len()>1},"revision":app.repo.head()}))
 }
 

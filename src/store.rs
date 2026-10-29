@@ -859,6 +859,28 @@ impl<'a> Store<'a> {
         }
     }
 
+    /// The text of `old` with its body replaced by `body` and every byte before the body (front
+    /// matter or ADR fields, the title heading) left as it was, so the review diff is the body alone.
+    /// Falls back to the canonical writer when the body is not the end of the file.
+    pub(crate) fn amended_text(old: &Entry, body: &str, text: &str) -> String {
+        let body = format!("{}\n", body.trim_matches('\n').trim_end());
+        let current = old.body.as_str();
+        if !current.trim().is_empty() && text.ends_with(current) {
+            let head = &text[..text.len() - current.len()];
+            let sep = if head.ends_with("\n\n") || head.is_empty() {
+                ""
+            } else if head.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            return format!("{head}{sep}{body}");
+        }
+        let mut e = old.clone();
+        e.body = body;
+        e.markdown()
+    }
+
     /// The text of `entry` confirmed on `date`: its `checked` field set (or added) and every other
     /// byte left as it was, so the review diff is the one line. The canonical writer would reorder keys,
     /// requote values and reflow lists.
@@ -1194,6 +1216,17 @@ fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn amended_text_replaces_only_the_body() {
+        let fm = "---\nid: a\nkind: learning\ntitle: A\ntags: [x,  y]\n---\n\nOld body.\n";
+        let e = Entry::parse(".ai/learnings/a.md", fm, "learning");
+        assert_eq!(Store::amended_text(&e, "New body.", fm), "---\nid: a\nkind: learning\ntitle: A\ntags: [x,  y]\n---\n\nNew body.\n");
+        let adr = "# 0002 — Use a queue\n\n**Status:** accepted\n**Paths:** src/**\n\n## Decision\n\nQueue it.\n";
+        let e = Entry::parse("docs/adr/0002-use-a-queue.md", adr, "decision");
+        let out = Store::amended_text(&e, "## Decision\n\nQueue it, retry twice.", adr);
+        assert_eq!(out, "# 0002 — Use a queue\n\n**Status:** accepted\n**Paths:** src/**\n\n## Decision\n\nQueue it, retry twice.\n");
+    }
 
     #[test]
     fn frontmatter_roundtrip() {
