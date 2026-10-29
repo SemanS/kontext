@@ -534,3 +534,100 @@ format = "text"
 [[scenario.step]]
 run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
 expect = ['"supersedes":["2026-02-20-round-prices-half-even-on-invoices"]', '"status":"proposed"', '"paths":["src/pricing/**"]']
+
+# ------------------------------------------------------------------------- search ranking
+# Decision 13: ranking changes land with graded evidence (tests/eval/qrels.tsv, queries.toml).
+
+[[scenario]]
+name = "a superseded hit names its successor"
+item = "3.3"
+[[scenario.step]]
+write = ".ai/decisions/2026-05-02-cache-product-pages-for-one-minute.md"
+content = """---
+id: 2026-05-02-cache-product-pages-for-one-minute
+kind: decision
+title: Cache product pages for one minute
+status: accepted
+date: 2026-05-02
+supersedes: [2026-05-01-cache-product-pages-for-an-hour]
+paths: [src/catalog/**]
+---
+
+## Decision
+
+Product pages are cached for one minute at the edge, so a price change shows within a minute.
+"""
+[[scenario.step]]
+write = ".ai/decisions/2026-05-01-cache-product-pages-for-an-hour.md"
+content = """---
+id: 2026-05-01-cache-product-pages-for-an-hour
+kind: decision
+title: Cache product pages for an hour at the edge
+status: superseded
+superseded_by: [2026-05-02-cache-product-pages-for-one-minute]
+date: 2026-05-01
+paths: [src/catalog/**]
+---
+
+## Decision
+
+Product pages are cached for an hour at the edge; product pages at the edge cache well.
+"""
+[[scenario.step]]
+run = ["search", "cache product pages at the edge"]
+expect = ["→ superseded by [2026-05-02-cache-product-pages-for-one-minute] Cache product pages for one minute"]
+keep = ["<kx:2026-05-01-cache-product-pages-for-an-hour>"]
+rank = { "<kx:2026-05-02-cache-product-pages-for-one-minute>" = 1 }
+
+[[scenario]]
+name = "a decision outranks a doc chunk for its own title words"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "retry payments with idempotency keys"]
+keep = ["<file:docs/payments.md#retrying-payments>"]
+rank = { "<kx:2026-02-03-retry-payments-with-idempotency-keys>" = 1 }
+
+[[scenario]]
+name = "namietka finds námietka"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "namietka"]
+rank = { "<file:docs/sk/namietky.md>" = 1 }
+
+[[scenario]]
+name = "a singular query finds the plural"
+item = "3.3"
+[[scenario.step]]
+run = ["search", "outages", "-k", "incident"]
+expect = ["<kx:2026-04-02-checkout-outage-from-an-expired-certificate>"]
+[[scenario.step]]
+run = ["search", "webhook retry"]
+keep = ["<kx:webhook-retries-arrive-twice-from-the-provider>", "<kx:webhook-retries-arrive-twice-from-the-carrier>"]
+
+[[scenario]]
+name = "phrase with identifier ranks exact wording first"
+item = "3.3"
+[[scenario.step]]
+write = ".ai/learnings/importer-holds-the-catalog-lock.md"
+content = """---
+id: importer-holds-the-catalog-lock
+kind: learning
+title: Importer holds the catalog lock
+---
+
+The importer runs its snapshotUpsert retry loop only while it holds the catalog lock, so two concurrent imports never interleave their writes to the catalog tables.
+"""
+[[scenario.step]]
+write = ".ai/learnings/exports-are-safe-to-repeat.md"
+content = """---
+id: exports-are-safe-to-repeat
+kind: learning
+title: Exports are safe to repeat
+---
+
+Retry an export freely: snapshotUpsert is idempotent.
+"""
+[[scenario.step]]
+run = ["search", "snapshotUpsert retry"]
+keep = ["<kx:exports-are-safe-to-repeat>"]
+rank = { "<kx:importer-holds-the-catalog-lock>" = 1 }
