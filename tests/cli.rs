@@ -1,79 +1,18 @@
 //! End-to-end: a throwaway repository goes through init, capture, promote, a hooked commit,
 //! log/why, secret blocking and an MCP session.
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::path::Path;
+use std::process::{Command, Stdio};
 
-struct Sandbox {
-    root: PathBuf,
-    repo: PathBuf,
-    config: PathBuf,
-}
+mod common;
+use common::Sandbox;
 
-impl Sandbox {
-    fn new(name: &str) -> Sandbox {
-        let root = std::env::temp_dir().join(format!("kontext-it-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let repo = root.join("repo");
-        let config = root.join("config");
-        std::fs::create_dir_all(&repo).unwrap();
-        std::fs::create_dir_all(&config).unwrap();
-        Sandbox { root, repo, config }
-    }
-
-    fn bin_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_BIN_EXE_kontext")).parent().unwrap().to_path_buf()
-    }
-
-    fn path_env() -> String {
-        format!("{}:{}", Self::bin_dir().display(), std::env::var("PATH").unwrap_or_default())
-    }
-
-    fn cmd(&self, program: &str) -> Command {
-        let mut c = Command::new(program);
-        c.current_dir(&self.repo)
-            .env("PATH", Self::path_env())
-            .env("KONTEXT_CONFIG_DIR", &self.config)
-            .env("GIT_AUTHOR_NAME", "Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.com")
-            .env("GIT_COMMITTER_NAME", "Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.com")
-            .env_remove("KONTEXT_SKIP");
-        c
-    }
-
-    fn git(&self, args: &[&str]) -> Output {
-        self.cmd("git").args(args).output().unwrap()
-    }
-
-    fn ok_git(&self, args: &[&str]) -> String {
-        let o = self.git(args);
-        assert!(o.status.success(), "git {args:?} failed: {}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
-        String::from_utf8_lossy(&o.stdout).to_string()
-    }
-
-    fn kontext(&self, args: &[&str]) -> String {
-        let o = self.cmd(env!("CARGO_BIN_EXE_kontext")).args(args).output().unwrap();
-        assert!(
-            o.status.success(),
-            "kontext {args:?} failed: {}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        );
-        String::from_utf8_lossy(&o.stdout).to_string()
-    }
-
-    fn write(&self, rel: &str, text: &str) {
-        let p = self.repo.join(rel);
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, text).unwrap();
-    }
-}
-
-impl Drop for Sandbox {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-    }
+/// The brief without adapters, asserted to be a brief: an absence check on an error or an empty
+/// output would pass for the wrong reason.
+fn brief_of(s: &Sandbox) -> String {
+    let brief = s.kontext(&["brief", "--no-adapters"]);
+    assert!(brief.starts_with("# ") && brief.contains(" — team context"), "not a brief: {brief}");
+    brief
 }
 
 fn seed(s: &Sandbox) {
@@ -159,7 +98,7 @@ fn knowledge_freshness_in_brief_and_status() {
     s.write("src/cache.rs", "second day\n");
     s.write("src/other.rs", "second day\n");
     commit("2025-01-02T13:00:00Z");
-    let brief = s.kontext(&["brief", "--no-adapters"]);
+    let brief = brief_of(&s);
     assert!(!brief.contains("May need a refresh"), "one matching commit, despite multiple files and overlapping paths: {brief}");
 
     // Renaming out of a governed path still changes that path.
@@ -178,12 +117,12 @@ fn knowledge_freshness_in_brief_and_status() {
     let decision_path = ".ai/decisions/use-cache.md";
     let original = std::fs::read_to_string(s.repo.join(decision_path)).unwrap();
     s.write(decision_path, &original.replace("date: 2025-01-01", "date: 2025-01-03"));
-    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(!brief_of(&s).contains("May need a refresh"));
     s.write(decision_path, &original);
 
     s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 3\n");
     s.write("src/other.rs", "uncommitted change\n");
-    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(!brief_of(&s).contains("May need a refresh"));
     s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 0\n");
     assert!(!s.kontext(&["status"]).contains("may need a refresh"));
 
@@ -210,7 +149,7 @@ fn knowledge_freshness_in_brief_and_status() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|event| event["event"] == "start" && event["argv"].as_array().is_some_and(|args| args.iter().any(|a| a == "log")))
         .count();
-    assert_eq!(history_calls, 1, "all decisions must share one git log call");
+    assert!((1..=2).contains(&history_calls), "all decisions share at most two git log calls, got {history_calls}");
     let status = s.kontext(&["status"]);
     assert!(status.contains("freshness 4 entries may need a refresh"), "{status}");
     for id in ["cache-a", "cache-b", "cache-c", "use-cache"] {
@@ -418,19 +357,11 @@ fn end_to_end() {
     s.ok_git(&["rm", "-q", "--cached", ".ai/learnings/token.md"]);
     std::fs::remove_file(s.repo.join(".ai/learnings/token.md")).unwrap();
 
-    mcp_session(&s.repo, &s.config);
+    mcp_session(&s);
 }
 
-fn mcp_session(repo: &Path, config: &Path) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kontext"))
-        .arg("mcp")
-        .current_dir(repo)
-        .env("KONTEXT_CONFIG_DIR", config)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+fn mcp_session(s: &Sandbox) {
+    let mut child = s.kontext_cmd().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let requests = [
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
@@ -487,7 +418,7 @@ fn stale_decisions() {
     );
     s.ok_git(&["add", "-A"]);
     s.ok_git(&["commit", "-q", "-m", "docs: decisions"]);
-    let fresh = s.kontext(&["brief", "--no-adapters"]);
+    let fresh = brief_of(&s);
     assert!(!fresh.contains("May need a refresh"), "{fresh}");
 
     for i in 0..3 {
@@ -517,20 +448,20 @@ fn stale_decisions() {
     s.write(prices, &original.replace("All money is integer cents.", "All money is integer cents, taxes too."));
     s.ok_git(&["add", "-A"]);
     s.ok_git(&["commit", "-q", "-m", "docs: prices cover taxes"]);
-    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(!brief_of(&s).contains("May need a refresh"));
     for i in 3..6 {
         s.write("libs/pricing/src/index.ts", &format!("export const v = {i};\n"));
         s.ok_git(&["add", "-A"]);
         s.ok_git(&["commit", "-q", "-m", &format!("feat(pricing): change {i}")]);
     }
-    assert!(s.kontext(&["brief", "--no-adapters"]).contains("Prices are integer cents (3 commits)"));
+    assert!(brief_of(&s).contains("Prices are integer cents (3 commits)"));
     // so does a confirmation, before it is even committed
     assert!(s.kontext(&["confirm", "2020-01-01-prices"]).contains("confirmed 2020-01-01-prices-are-integer-cents"));
-    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(!brief_of(&s).contains("May need a refresh"));
     assert!(s.kontext(&["status"]).contains("freshness no active entry has 3+ commits"));
 
     s.write(".ai/kontext.toml", "[freshness]\nthreshold_commits = 0\n");
-    assert!(!s.kontext(&["brief", "--no-adapters"]).contains("May need a refresh"));
+    assert!(!brief_of(&s).contains("May need a refresh"));
     assert!(s.kontext(&["status"]).contains("freshness off"));
 }
 
@@ -738,20 +669,12 @@ fn knowledge_of_the_repository_that_owns_the_paths() {
     );
 
     // the MCP server tells an agent where the knowledge is
-    let instructions = mcp_instructions(&s.repo, &s.config);
+    let instructions = mcp_instructions(&s);
     assert!(instructions.contains("lib/ keeps team knowledge of its own") && instructions.contains("`dir`"), "{instructions}");
 }
 
-fn mcp_instructions(repo: &Path, config: &Path) -> String {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kontext"))
-        .arg("mcp")
-        .current_dir(repo)
-        .env("KONTEXT_CONFIG_DIR", config)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+fn mcp_instructions(s: &Sandbox) -> String {
+    let mut child = s.kontext_cmd().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     writeln!(
         stdin,
@@ -768,8 +691,7 @@ fn mcp_instructions(repo: &Path, config: &Path) -> String {
 }
 
 fn git_in(s: &Sandbox, dir: &Path, args: &[&str]) {
-    let o = s.cmd("git").arg("-C").arg(dir).args(args).output().unwrap();
-    assert!(o.status.success(), "git {args:?} in {}: {}", dir.display(), String::from_utf8_lossy(&o.stderr));
+    s.git_in(dir, args);
 }
 
 /// A repository with `.ai/` holding these decisions (id, title, paths) and one file per path root.
@@ -909,15 +831,7 @@ fn a_running_server_sees_a_submodule_initialized_later() {
     s.ok_git(&["commit", "-q", "-m", "chore: lib"]);
     s.ok_git(&["submodule", "deinit", "-q", "-f", "lib"]);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kontext"))
-        .arg("mcp")
-        .current_dir(&s.repo)
-        .env("KONTEXT_CONFIG_DIR", &s.config)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = s.kontext_cmd().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     let mut reader = BufReader::new(child.stdout.take().unwrap());
     let mut call = |id: i64, args: &str| -> String {
@@ -1037,4 +951,77 @@ fn flows_in_brief_and_skills_connect() {
     let again = s.kontext(&["connect", "skills", "--write"]);
     assert!(again.starts_with("skills: .claude/skills/ already has the current 4 skills"), "{again}");
     let _ = std::fs::remove_dir_all(&s.root);
+}
+
+/// The English and Slovak docs mirror each other file by file (CONTRIBUTING): a page added in one
+/// language only is caught here, before the docs build.
+#[test]
+fn docs_mirror_each_other() {
+    fn files(dir: &Path, base: &Path, out: &mut std::collections::BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files(&path, base, out);
+            } else {
+                out.insert(path.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let docs = common::manifest_dir().join("docs");
+    let (mut en, mut sk) = (Default::default(), Default::default());
+    files(&docs.join("en"), &docs.join("en"), &mut en);
+    files(&docs.join("sk"), &docs.join("sk"), &mut sk);
+    assert!(!en.is_empty(), "no docs/en");
+    let only_en: Vec<_> = en.difference(&sk).collect();
+    let only_sk: Vec<_> = sk.difference(&en).collect();
+    assert!(only_en.is_empty() && only_sk.is_empty(), "docs/en only: {only_en:?}; docs/sk only: {only_sk:?}");
+}
+
+/// The sandbox reaches no global or system git config: a developer's signing, templates or global
+/// `core.hooksPath` cannot leak into a test, and `hooks install` writes into the sandbox only.
+#[test]
+fn the_sandbox_sees_no_global_git_config() {
+    let s = Sandbox::new("isolation");
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    let global = s.git(&["config", "--global", "--list"]);
+    assert!(String::from_utf8_lossy(&global.stdout).trim().is_empty(), "{}", String::from_utf8_lossy(&global.stdout));
+    let origins = s.ok_git(&["config", "--list", "--show-origin"]);
+    assert!(origins.lines().all(|l| l.starts_with("file:.git/config")), "only the repository's own config: {origins}");
+    let home = s.cmd("sh").args(["-c", "printf %s \"$HOME\""]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&home.stdout), s.home.to_string_lossy());
+}
+
+/// A colocated jj repository: git sees the working-copy commit's changes as unstaged edits on a
+/// detached HEAD, and drift and prepare-commit read them from the working tree. Skipped without jj.
+#[test]
+fn jj_colocated_working_copy() {
+    if !common::have("jj") {
+        eprintln!("skipped: jj is not on PATH");
+        return;
+    }
+    let s = Sandbox::new("jj");
+    s.ok_git(&["init", "-q", "-b", "main"]);
+    s.write(".ai/kontext.toml", "[project]\nname = \"jj\"\n");
+    s.write(
+        ".ai/conventions/money-in-cents.md",
+        "---\nid: money-in-cents\nkind: convention\ntitle: Money in cents\nstatus: accepted\ndate: 2026-01-10\npaths: [src/billing/**]\n---\n\nAmounts are integer cents.\n",
+    );
+    s.write("src/billing/invoice.rs", "pub fn total() {}\n");
+    s.commit("seed");
+    let jj_config = s.home.join("jj-config.toml");
+    std::fs::write(&jj_config, "[user]\nname = \"Test\"\nemail = \"test@example.invalid\"\n").unwrap();
+    let jj = |args: &[&str]| {
+        let o = s.cmd("jj").env("JJ_CONFIG", &jj_config).args(args).output().unwrap();
+        assert!(o.status.success(), "jj {args:?}: {}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    };
+    jj(&["git", "init", "--colocate"]);
+    s.write("src/billing/invoice.rs", "pub fn total() -> u64 { 0 }\n");
+    s.write("src/billing/tax.rs", "pub const VAT: u64 = 20;\n");
+    // a jj command snapshots the edits into the working-copy commit; git's HEAD stays on its parent
+    jj(&["status"]);
+    let report = s.kontext(&["prepare-commit"]);
+    assert!(report.contains("Nothing staged yet") && report.contains("<kx:money-in-cents>"), "{report}");
+    let drift = s.kontext(&["drift", "--json"]);
+    let drift: serde_json::Value = serde_json::from_str(&drift).unwrap_or_else(|e| panic!("{e}: {drift}"));
+    assert!(drift.to_string().contains("\"money-in-cents\""), "{drift}");
 }

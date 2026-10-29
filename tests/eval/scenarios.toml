@@ -12,6 +12,7 @@
 #     forbid = [..]   must not appear (noise)
 #     rank = { "needle" = N }         the first numbered hit containing needle is within the top N
 #     max_tokens = N                  output size limit (chars / 4)
+#     expect_exit = N                 the exit status it must end with (default 0; any other fails the step)
 # `pending = "<item>"` marks behaviour not built yet: reported, not asserted.
 
 # ------------------------------------------------------------------------------------- 1.1
@@ -292,6 +293,7 @@ Reports over a year time out.
 [[scenario.step]]
 run = ["check"]
 expect = ["error: .ai/learnings/reports-time-out.md: review_by"]
+expect_exit = 1
 
 [[scenario]]
 name = "per-kind review default applies to new incidents"
@@ -415,6 +417,7 @@ item = "2.3"
 [[scenario.step]]
 run = ["api", "drafts.retire", '{"operation_id":"rt-1","entry_id":"log-with-request-ids","entry_revision":"0000000000000000000000000000000000000000","reason":"Tracing replaced it."}']
 expect = ["operation_conflict"]
+expect_exit = 1
 [[scenario.step]]
 write = ".ai/conventions/log-with-request-ids.md"
 content = """---
@@ -428,6 +431,7 @@ Every log line carries the trace id.
 [[scenario.step]]
 run = ["api", "drafts.retire", '{"operation_id":"rt-2","entry_id":"log-with-request-ids","entry_revision":"{head}","reason":"Tracing replaced it."}']
 expect = ["operation_conflict"]
+expect_exit = 1
 
 [[scenario]]
 name = "retire and supersede work for every kind"
@@ -512,6 +516,7 @@ item = "3.2"
 [[scenario.step]]
 run = ["api", "drafts.revise", '{"entry_id":"2026-02-20-round-prices-half-even-on-invoices","entry_revision":"{head}","objections":["Accounting now sums unrounded lines."]}']
 expect = ["model_unavailable"]
+expect_exit = 1
 
 [[scenario]]
 name = "revise drafts a superseding entry"

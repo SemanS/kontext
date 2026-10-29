@@ -3,25 +3,62 @@ on:
   push:
     tags: ["v*"]
 
+# read-only by default; only the publish job may write the release
 permissions:
-  contents: write
+  contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
+# Actions are pinned by commit SHA; the comment names the tag or branch it was taken from.
 jobs:
+  version:
+    name: tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The tag is v<version in Cargo.toml>
+        run: |
+          version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -n 1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version (expected v$version)"
+            exit 1
+          fi
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --locked
+
   build:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
         include:
           - { os: macos-14, target: aarch64-apple-darwin, artifact_target: mac-arm64, binary: kontext }
           - { os: macos-14, target: x86_64-apple-darwin, artifact_target: mac-x64, binary: kontext }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, artifact_target: linux-x64, binary: kontext }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, artifact_target: linux-arm64, binary: kontext }
+          # Linux builds on the oldest supported image: the binary needs the glibc it was linked against
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, artifact_target: linux-x64, binary: kontext }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, artifact_target: linux-arm64, binary: kontext }
           - { os: windows-latest, target: x86_64-pc-windows-msvc, artifact_target: win-x64, binary: kontext.exe }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Describe the exact standalone engine artifact
@@ -36,11 +73,41 @@ jobs:
               'source_revision': os.environ['GITHUB_SHA'],
           }
           pathlib.Path('kontext-${{ matrix.target }}.manifest.json').write_text(json.dumps(manifest) + '\n')
+      - name: glibc floor
+        if: runner.os == 'Linux'
+        run: |
+          floor=$(objdump -T "target/${{ matrix.target }}/release/${{ matrix.binary }}" | grep -o 'GLIBC_[0-9][0-9.]*' | sort -u -V | tail -n 1)
+          echo "${{ matrix.target }}: highest glibc symbol ${floor:-none} (the oldest glibc this binary runs on)" | tee -a "$GITHUB_STEP_SUMMARY"
       - run: tar -czf kontext-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.binary }}
         shell: bash
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: |
+          name: kontext-${{ matrix.target }}
+          path: |
             kontext-${{ matrix.target }}.tar.gz
             kontext-${{ matrix.target }}.manifest.json
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: kontext-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum kontext-*.tar.gz > SHA256SUMS
+          { echo '```'; cat SHA256SUMS; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            dist/kontext-*.tar.gz
+            dist/kontext-*.manifest.json
+            dist/SHA256SUMS
           generate_release_notes: true
