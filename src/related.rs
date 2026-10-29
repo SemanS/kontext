@@ -30,8 +30,8 @@ pub struct Candidate {
     pub status: Option<String>,
     pub reason: String,
     pub label: &'static str,
-    #[serde(skip)]
-    revision: String,
+    /// What a client sends back as `entry_revision` / `amends.revision`: a short hash of the entry's Markdown.
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
