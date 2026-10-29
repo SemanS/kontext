@@ -485,7 +485,8 @@ fn process_info(pid: u32) -> Option<(u32, Vec<String>)> {
     }
 }
 
-/// Compare knowledge at HEAD with the last synced snapshot and queue `sync` events for changes.
+/// Compare knowledge at HEAD with the last synced snapshot and queue `sync` events for changes and
+/// `remove` events for paths that disappeared (a rename is both).
 /// The first run only records the snapshot (use `backfill` to mirror everything once).
 pub fn sync_events(app: &App, backfill: bool) -> Result<usize> {
     let snap_path = app.repo.worktree_state_dir().join("synced.json");
@@ -510,12 +511,22 @@ pub fn sync_events(app: &App, backfill: bool) -> Result<usize> {
             current.insert(path.to_string(), sha.to_string());
         }
     }
-    let subscribed = app.cfg().adapters.values().any(|a| a.on.iter().any(|o| o.event == "sync"));
+    let subscribed = app.cfg().adapters.values().any(|a| a.on.iter().any(|o| o.event == "sync" || o.event == "remove"));
     let mut n = 0;
     if subscribed && (old.is_some() || backfill) {
         let outbox = Outbox::open(&app.repo);
         let empty = BTreeMap::new();
         let prev = if backfill { &empty } else { old.as_ref().unwrap() };
+        // a path that disappeared (deleted, or renamed: its new path is synced below) is removed
+        // from mirrors, with the entry it held when the old blob can still be read
+        if !backfill {
+            for (path, sha) in prev.iter().filter(|(path, _)| !current.contains_key(*path)) {
+                let kind = store.kind_for_path(path).unwrap_or_default();
+                let old = app.repo.git(&["cat-file", "blob", sha]).ok().map(|text| Entry::parse(path, &text, &kind));
+                outbox.push("remove", events::removal_payload(&app.repo, path, old.as_ref()))?;
+                n += 1;
+            }
+        }
         for (path, sha) in &current {
             if prev.get(path) == Some(sha) {
                 continue;

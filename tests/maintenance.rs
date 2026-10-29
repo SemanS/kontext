@@ -325,3 +325,255 @@ fn related_entries_ask_the_model_once_and_trust_only_shown_entries() {
         assert!(status["capabilities"].as_array().unwrap().iter().any(|c| c == op), "{op}");
     }
 }
+
+// ------------------------------------------------- verification by ancestry, outbox, distill
+
+/// A ledger line as kontext writes it, appended by hand (a check run elsewhere): dated
+/// `offset_secs` from now, naming HEAD.
+fn f_ledger_line(r: &Repo, id: &str, kind: &str, passed: &str, offset_secs: i64) -> String {
+    let at = (chrono::Utc::now() + chrono::Duration::seconds(offset_secs)).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let head = r.git(&["rev-parse", "HEAD"]);
+    let path = r.0.join(".ai/confirmations.log");
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    text.push_str(&format!("{at}\t{id}\t{kind}\t{head}\tTest\t{passed}\tran it\n"));
+    std::fs::write(path, text).unwrap();
+    at
+}
+
+/// Commit everything with author and committer dates `secs_ago` in the past.
+fn f_commit_dated(r: &Repo, message: &str, secs_ago: i64) -> String {
+    let date = format!("@{} +0000", chrono::Utc::now().timestamp() - secs_ago);
+    r.git(&["add", "-A"]);
+    let o = r.cmd("git").env("GIT_AUTHOR_DATE", &date).env("GIT_COMMITTER_DATE", &date).args(["commit", "-qm", message]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    r.git(&["rev-parse", "HEAD"])
+}
+
+fn f_entry(r: &Repo, id: &str) -> Value {
+    r.ok("entries.get", json!({"id": id}))["entry"].clone()
+}
+
+/// A feature branch with an older commit on governed code, merged with a merge commit after the
+/// main line looked at the entry.
+fn f_merge_older_branch(r: &Repo, on_main: &dyn Fn()) -> String {
+    r.git(&["checkout", "-q", "-b", "feature"]);
+    r.write("src/feature.rs", "pub fn x() {}\n");
+    let feature = f_commit_dated(r, "feat: x", 3600);
+    r.git(&["checkout", "-q", "main"]);
+    on_main();
+    r.git(&["merge", "-q", "--no-ff", "--no-edit", "feature"]);
+    feature
+}
+
+#[test]
+fn since_counts_branch_merged_after_the_look() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "");
+    r.commit("seed");
+    let landed = std::cell::RefCell::new(String::new());
+    let feature = f_merge_older_branch(&r, &|| {
+        r.ok("drafts.confirm", json!({"id":"rule","kind":"read"}));
+        *landed.borrow_mut() = r.commit("docs: rule holds");
+    });
+    let e = f_entry(&r, "rule");
+    assert_eq!(e["verification"]["kind"], "read");
+    assert_eq!(e["verification"]["landed"], landed.borrow().as_str());
+    assert_eq!(e["since"]["commits"], 1, "the branch was merged after the look: {e}");
+    assert_eq!(e["since"]["recent"][0]["sha"], feature.as_str());
+    assert_eq!(e["last_verified"]["kind"], "read");
+    assert_eq!(e["since_verified"]["commits"], 1);
+}
+
+#[test]
+fn freshness_counts_branch_merged_after_an_edit() {
+    let r = Repo::new();
+    r.write(".ai/kontext.toml", "[project]\nname = \"maint\"\n[freshness]\nthreshold_commits = 1\n");
+    r.decision("rule", "Rule", "accepted", "");
+    r.commit("seed");
+    let path = ".ai/decisions/rule.md";
+    f_merge_older_branch(&r, &|| {
+        r.write(path, &r.read(path).replace("for the record", "for the record, reworded"));
+        r.commit("docs: reword the rule");
+        assert!(!r.kontext(&["status"]).contains("may need a refresh"), "nothing on main since the edit");
+    });
+    let status = r.kontext(&["status"]);
+    assert!(status.contains("freshness 1 entry may need a refresh") && status.contains("[rule]"), "{status}");
+}
+
+#[test]
+fn failed_verify_does_not_reset_since() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "");
+    r.commit("seed");
+    r.ok("drafts.confirm", json!({"id":"rule","kind":"read"}));
+    r.commit("docs: rule holds");
+    r.write("src/lib.rs", "pub fn f() -> u8 { 1 }\n");
+    let change = r.commit("feat: f returns one");
+    f_ledger_line(&r, "rule", "verify", "0", 2);
+    r.commit("chore: the check failed");
+    let e = f_entry(&r, "rule");
+    assert_eq!((e["verification"]["kind"].as_str(), e["verification"]["verified"].as_bool()), (Some("verify"), Some(false)));
+    assert_eq!(e["failing"], true);
+    assert_eq!(e["since"]["commits"], 1, "a failed verify is shown, never a look: {e}");
+    assert_eq!(e["since"]["recent"][0]["sha"], change.as_str());
+}
+
+#[test]
+fn failed_verify_keeps_last_verified() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "");
+    r.commit("seed");
+    let read = r.ok("drafts.confirm", json!({"id":"rule","kind":"read"}))["ledger"]["at"].as_str().unwrap().to_string();
+    let read_landed = r.commit("docs: rule holds");
+    r.write("src/lib.rs", "pub fn f() -> u8 { 1 }\n");
+    r.commit("feat: f returns one");
+    f_ledger_line(&r, "rule", "verify", "0", 2);
+    r.commit("chore: the check failed");
+    let e = f_entry(&r, "rule");
+    assert_eq!(e["last_verified"], json!({"kind":"read","at":read,"commit":e["last_verified"]["commit"],"landed":read_landed}));
+    assert_eq!(e["since_verified"]["commits"], 1);
+    assert_eq!((e["failing"].as_bool(), e["amended_since"].as_bool()), (Some(true), Some(false)));
+
+    // a pass ends the failure and is the new verification
+    f_ledger_line(&r, "rule", "verify", "1", 4);
+    let pass = r.commit("chore: the check passes");
+    let e = f_entry(&r, "rule");
+    assert_eq!(e["failing"], false);
+    assert_eq!((e["last_verified"]["kind"].as_str(), e["last_verified"]["landed"].as_str()), (Some("verify"), Some(pass.as_str())));
+    assert_eq!((e["since"]["commits"].as_u64(), e["since_verified"]["commits"].as_u64()), (Some(0), Some(0)));
+
+    // a stamp only rewrites `checked`; a changed body after the verification is an amendment
+    r.ok("drafts.confirm", json!({"id":"rule"}));
+    r.commit("docs: stamped");
+    assert_eq!(f_entry(&r, "rule")["amended_since"], false);
+    let path = ".ai/decisions/rule.md";
+    r.write(path, &r.read(path).replace("for the record", "for the record, and taxes too"));
+    r.commit("docs: the rule covers taxes");
+    let e = f_entry(&r, "rule");
+    assert_eq!(e["amended_since"], true, "{e}");
+    assert_eq!(e["last_verified"]["kind"], "verify");
+}
+
+#[test]
+fn cache_only_checked_is_not_verified() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "checked: 2026-10-20\n");
+    r.commit("seed");
+    let e = f_entry(&r, "rule");
+    assert_eq!(
+        (e["verification"]["kind"].as_str(), e["verification"]["source"].as_str(), e["verification"]["verified"].as_bool()),
+        (Some("cache"), Some("frontmatter"), Some(false))
+    );
+    assert_eq!(e["checked"], "2026-10-20", "the cache is still reported");
+    assert_eq!(e["last_verified"], Value::Null);
+    assert_eq!(e["since_verified"], Value::Null);
+}
+
+#[test]
+fn migrate_legacy_writes_bulk_lines() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "checked: 2026-10-20\n");
+    r.decision("plain", "Plain", "accepted", "");
+    let seed = r.commit("seed");
+    let out = r.kontext(&["confirm", "--migrate-legacy"]);
+    assert!(out.contains("migrated rule — bulk stamp dated 2026-10-20T00:00:00Z in .ai/confirmations.log (staged)"), "{out}");
+    assert!(!out.contains("plain"), "{out}");
+    let ledger = r.read(".ai/confirmations.log");
+    let fields: Vec<&str> = ledger.trim_end().split('\t').collect();
+    assert_eq!(&fields[..4], &["2026-10-20T00:00:00Z", "rule", "bulk", seed.as_str()], "{ledger}");
+    assert!(r.git(&["diff", "--cached", "--name-only"]).contains(".ai/confirmations.log"));
+    let e = f_entry(&r, "rule");
+    assert_eq!((e["verification"]["kind"].as_str(), e["verification"]["source"].as_str()), (Some("bulk"), Some("ledger")));
+    assert!(r.read(".ai/decisions/rule.md").contains("checked: 2026-10-20\n"), "the cache is kept");
+    assert!(r.kontext(&["confirm", "--migrate-legacy"]).contains("nothing to migrate"));
+}
+
+#[test]
+fn cli_confirm_without_tty_is_agent() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "");
+    r.commit("seed");
+    let kind = |r: &Repo| r.read(".ai/confirmations.log").lines().last().unwrap().split('\t').nth(2).unwrap().to_string();
+    r.kontext(&["confirm", "rule"]);
+    assert_eq!(kind(&r), "agent", "no terminal: an agent's stamp");
+    assert_eq!(f_entry(&r, "rule")["verification"]["verified"], false);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let o = r.cmd(env!("CARGO_BIN_EXE_kontext")).args(["confirm", "rule", "--kind", "read"]).output().unwrap();
+    assert!(o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("--kind read without an interactive terminal"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(kind(&r), "read");
+    assert_eq!(f_entry(&r, "rule")["verification"]["verified"], true);
+    let bad = r.cmd(env!("CARGO_BIN_EXE_kontext")).args(["confirm", "rule", "--kind", "bulk"]).output().unwrap();
+    assert!(!bad.status.success());
+}
+
+fn f_event(id: &str) -> String {
+    json!({"id":id,"event":"capture","at":"2026-10-29T10:00:00Z","payload":{"id":id,"kind":"learning","visibility":"team"}}).to_string()
+}
+
+#[test]
+fn outbox_dead_letters_after_repeated_failures_and_retry() {
+    let r = Repo::new();
+    r.commit("seed");
+    r.write(
+        ".git/kontext/config.toml",
+        "[adapters.down]\ndriver = \"command\"\non = [{ event = \"capture\", op = \"store\" }]\n[adapters.down.ops.store]\ncommand = [\"sh\", \"-c\", \"exit 3\"]\nformat = \"text\"\n",
+    );
+    r.write(".git/kontext/outbox.jsonl", &format!("{}\n{}\n", f_event("first"), f_event("second")));
+    for _ in 0..8 {
+        r.kontext(&["outbox", "flush"]);
+    }
+    let list = r.kontext(&["outbox"]);
+    assert!(list.contains("1 event(s) ran out of attempts") && list.contains(" capture first attempts=8"), "{list}");
+    assert!(list.contains(" capture second attempts=0"), "an adapter that failed is not tried again in the same flush: {list}");
+    assert!(r.kontext(&["status"]).contains("1 ran out of attempts"));
+    let retry = r.kontext(&["outbox", "retry"]);
+    assert!(retry.contains("queued 1 dead event(s) again"), "{retry}");
+    assert!(!r.0.join(".git/kontext/outbox.dead.jsonl").exists());
+    let list = r.kontext(&["outbox"]);
+    assert!(!list.contains("ran out of attempts") && list.contains(" capture first attempts="), "{list}");
+}
+
+#[test]
+fn when_skipped_events_stay_queued() {
+    let r = Repo::new();
+    r.commit("seed");
+    let root = r.0.display();
+    r.write(
+        ".git/kontext/config.toml",
+        &format!(
+            "[adapters.sink]\ndriver = \"command\"\non = [{{ event = \"capture\", op = \"store\" }}]\n[adapters.sink.when]\nenv = \"KONTEXT_TEST_SINK_ON\"\n[adapters.sink.ops.store]\ncommand = [\"sh\", \"-c\", \"echo got >> {root}/.git/sink.txt\"]\nformat = \"text\"\n"
+        ),
+    );
+    r.write(".git/kontext/outbox.jsonl", &format!("{}\n", f_event("kept")));
+    let out = r.kontext(&["outbox", "flush"]);
+    assert!(out.contains("0 delivered, 0 failed, 1 remaining"), "{out}");
+    assert!(r.kontext(&["outbox"]).contains(" capture kept attempts=0"));
+    let o = r.cmd(env!("CARGO_BIN_EXE_kontext")).env("KONTEXT_TEST_SINK_ON", "1").args(["outbox", "flush"]).output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("1 delivered, 0 failed, 0 remaining"), "{out}");
+    assert!(r.0.join(".git/sink.txt").exists());
+}
+
+#[test]
+fn rename_emits_remove_and_add() {
+    let r = Repo::new();
+    r.decision("rule", "Rule", "accepted", "");
+    r.commit("seed");
+    r.write(
+        ".git/kontext/config.toml",
+        "[adapters.mirror]\ndriver = \"command\"\non = [{ event = \"sync\", op = \"store\" }, { event = \"remove\", op = \"store\" }]\n[adapters.mirror.ops.store]\ncommand = [\"sh\", \"-c\", \"exit 3\"]\nformat = \"text\"\n",
+    );
+    assert!(r.kontext(&["sync"]).contains("queued 0 sync event(s)"), "the first run records the snapshot");
+    r.git(&["mv", ".ai/decisions/rule.md", ".ai/decisions/rule-moved.md"]);
+    r.commit("docs: move the rule");
+    let out = r.kontext(&["sync"]);
+    assert!(out.contains("queued 2 sync event(s)"), "{out}");
+    let list = r.kontext(&["outbox"]);
+    assert!(list.contains(" remove rule attempts="), "{list}");
+    assert!(list.contains(" sync rule attempts="), "{list}");
+}

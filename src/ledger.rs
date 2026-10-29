@@ -91,6 +91,108 @@ impl Line {
     pub fn is_confirmation(&self) -> bool {
         self.kind != "verify"
     }
+
+    /// Whether this line is a look at the entry: anything but a `verify` that did not pass. A failed
+    /// check is shown, never counted as having looked.
+    pub fn is_look(&self) -> bool {
+        self.kind != "verify" || self.passed == Some(true)
+    }
+
+    /// Whether this line verifies the entry: a person's `read` or a passed `verify`.
+    pub fn is_verifying(&self) -> bool {
+        self.kind == "read" || (self.kind == "verify" && self.passed == Some(true))
+    }
+}
+
+/// An entry's lines as readers use them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Looks<'a> {
+    /// The newest line of any kind.
+    pub newest: Option<&'a Line>,
+    /// The newest look: any line but a failed `verify`.
+    pub look: Option<&'a Line>,
+    /// The newest verifying line: a `read` or a passed `verify`.
+    pub verified: Option<&'a Line>,
+    /// The newest `verify` failed: true until a later one passes.
+    pub failing: bool,
+}
+
+/// Per entry id: its newest line, newest look, newest verification and whether its check is
+/// failing. Newer by time; of equal times the line written later.
+pub fn looks(lines: &[Line]) -> HashMap<&str, Looks<'_>> {
+    let newer = |prev: Option<&Line>, l: &Line| prev.is_none_or(|p| p.at <= l.at);
+    let mut out: HashMap<&str, Looks> = HashMap::new();
+    let mut last_verify: HashMap<&str, &Line> = HashMap::new();
+    for l in lines {
+        let e = out.entry(l.id.as_str()).or_default();
+        if newer(e.newest, l) {
+            e.newest = Some(l);
+        }
+        if l.is_look() && newer(e.look, l) {
+            e.look = Some(l);
+        }
+        if l.is_verifying() && newer(e.verified, l) {
+            e.verified = Some(l);
+        }
+        if l.kind == "verify" && newer(last_verify.get(l.id.as_str()).copied(), l) {
+            last_verify.insert(l.id.as_str(), l);
+        }
+    }
+    for (id, v) in last_verify {
+        if let Some(e) = out.get_mut(id) {
+            e.failing = v.passed != Some(true);
+        }
+    }
+    out
+}
+
+/// A ledger line that readers skip or that misleads them.
+#[allow(dead_code)] // wired by the integrator
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Issue {
+    /// 1-based line number in the ledger.
+    pub line: usize,
+    pub msg: String,
+}
+
+/// How far ahead of the clock a line may be dated (clock skew between machines).
+#[allow(dead_code)] // wired by the integrator
+const FUTURE_TOLERANCE_SECS: i64 = 300;
+
+/// Conflict markers, unreadable lines and lines dated in the future (they would outrank every later
+/// look). For `kontext check`; nothing is rewritten.
+#[allow(dead_code)] // wired by the integrator
+pub fn audit(text: &str) -> Vec<Issue> {
+    audit_at(text, chrono::Utc::now().timestamp())
+}
+
+/// [`audit`] against the given clock (UTC seconds).
+#[allow(dead_code)] // wired by the integrator
+pub fn audit_at(text: &str, now: i64) -> Vec<Issue> {
+    let mut out = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let n = i + 1;
+        let line = raw.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            continue;
+        }
+        if ["<<<<<<<", "=======", ">>>>>>>", "|||||||"].iter().any(|m| line.starts_with(m)) {
+            out.push(Issue { line: n, msg: format!("{FILE}:{n}: merge conflict marker; keep both sides' lines and remove the markers") });
+            continue;
+        }
+        let Some(parsed) = Line::parse(line) else {
+            out.push(Issue { line: n, msg: format!("{FILE}:{n}: unreadable line, skipped by every reader") });
+            continue;
+        };
+        let Some(crate::store::Checked::At(at)) = crate::store::parse_checked(&parsed.at) else { continue };
+        if at.timestamp() > now + FUTURE_TOLERANCE_SECS {
+            out.push(Issue {
+                line: n,
+                msg: format!("{FILE}:{n}: {} is dated in the future ({}); it would outrank every later look", parsed.id, parsed.at),
+            });
+        }
+    }
+    out
 }
 
 /// The ledger's path relative to the repository root.
@@ -250,5 +352,45 @@ mod tests {
         ];
         assert_eq!(latest(&lines, false)["a"].kind, "verify");
         assert_eq!(latest(&lines, true)["a"].kind, "read");
+    }
+
+    #[test]
+    fn a_failed_verify_is_shown_but_is_not_a_look() {
+        let mk = |at: &str, kind: &str, passed: Option<bool>| Line {
+            at: at.into(),
+            id: "a".into(),
+            kind: kind.into(),
+            commit: None,
+            by: None,
+            passed,
+            because: String::new(),
+        };
+        let lines = vec![
+            mk("2026-10-20T10:00:00Z", "read", None),
+            mk("2026-10-21T10:00:00Z", "bulk", None),
+            mk("2026-10-22T10:00:00Z", "verify", Some(false)),
+        ];
+        let l = looks(&lines)["a"];
+        assert_eq!(l.newest.unwrap().kind, "verify");
+        assert_eq!(l.look.unwrap().kind, "bulk", "a failed verify is not a look");
+        assert_eq!(l.verified.unwrap().kind, "read");
+        assert!(l.failing);
+        let mut more = lines.clone();
+        more.push(mk("2026-10-23T10:00:00Z", "verify", Some(true)));
+        let l = looks(&more)["a"];
+        assert!(!l.failing, "a later pass ends it");
+        assert_eq!((l.look.unwrap().kind.as_str(), l.verified.unwrap().kind.as_str()), ("verify", "verify"));
+    }
+
+    #[test]
+    fn audit_reports_conflict_markers_unreadable_and_future_lines() {
+        let now = 1_800_000_000; // 2027-01-15T08:00:00Z
+        let text = "2026-10-27T09:30:00Z\ta\tread\t-\t-\t-\t\n<<<<<<< HEAD\n2026-10-27T09:31:00Z\tb\tread\t-\t-\t-\t\n=======\n>>>>>>> side\nnot a line\n2030-01-01T00:00:00Z\tc\tread\t-\t-\t-\t\n\n";
+        let issues = audit_at(text, now);
+        assert_eq!(issues.iter().map(|i| i.line).collect::<Vec<_>>(), vec![2, 4, 5, 6, 7]);
+        assert!(issues[0].msg.contains("conflict marker"));
+        assert!(issues[3].msg.contains("unreadable"));
+        assert!(issues[4].msg.contains("c is dated in the future"));
+        assert!(audit_at("2027-01-15T08:04:00Z\ta\tread\t-\t-\t-\t\n", now).is_empty(), "a few minutes of skew is tolerated");
     }
 }
