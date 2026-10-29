@@ -8,7 +8,7 @@ summary: "kontext trust pins sha256 over the canonical TOML of the shared adapte
 tags: [security, trust, adapters]
 paths: [src/config.rs, src/cli.rs, src/connect.rs, src/adapters/mod.rs]
 supersedes: [2026-09-28-repository-declared-adapters-run-only-after-kontext-trust]
-verify: cargo test --test cli trust_gate_skips_untrusted_and_revokes_on_edit
+verify: cargo test --test maintenance trust_gate_skips_untrusted_and_revokes_on_edit
 author: SemanS
 origin: agent
 ---
