@@ -846,7 +846,12 @@ impl Refs {
 
     pub fn of(&self, e: &Entry) -> String {
         let short = e.short_id();
-        if short != e.id { short } else { self.prefix(&e.id) }
+        if short == e.id {
+            return self.prefix(&e.id);
+        }
+        // an ADR number two files share (parallel branches, two sequential kinds) names neither
+        let shared = self.sorted.iter().filter(|x| x.as_str() != e.id && Store::ref_matches(x, &short)).count() > 0;
+        if shared { e.id.clone() } else { short }
     }
 
     pub fn prefix(&self, id: &str) -> String {
@@ -1868,13 +1873,105 @@ pub fn check_staged(app: &App) -> Result<CheckReport> {
             let kind = store.kind_for_path(&path).unwrap_or_default();
             let e = Entry::parse(&path, &text, &kind);
             ids.insert(e.id.clone());
-            if let Some(other) = seen_ids.insert(e.id.clone(), path.clone()) {
+            // the same rule as check_all: an id is unique across the whole store, not only among staged files
+            let elsewhere = entries.iter().find(|o| o.id == e.id && o.rel_path != path).map(|o| o.rel_path.clone());
+            if let Some(other) = seen_ids.insert(e.id.clone(), path.clone()).or(elsewhere) {
                 rep.issues.push(Issue { level: Level::Error, path: path.clone(), msg: format!("duplicate id '{}' (also {other})", e.id) });
             }
             rep.issues.extend(store.validate(&e, &ids, Some(&tracked)));
+            rep.issues.extend(staged_supersession_issues(&e, &entries));
         }
     }
     Ok(rep)
+}
+
+/// A staged entry that takes part in a one-sided supersession: it supersedes an entry whose file
+/// still says it holds, or it is such an entry.
+fn staged_supersession_issues(e: &Entry, entries: &[Entry]) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    for s in &e.supersedes {
+        if let Ok(old) = Store::find_strict(entries, s)
+            && old.derived_superseded
+            && old.rel_path != e.rel_path
+        {
+            issues.push(Issue {
+                level: Level::Error,
+                path: e.rel_path.clone(),
+                msg: format!(
+                    "supersedes {}, whose file still says {}: run kontext repair",
+                    old.id,
+                    old.file_status.as_deref().unwrap_or("no status")
+                ),
+            });
+        }
+    }
+    if let Some(own) = entries.iter().find(|o| o.rel_path == e.rel_path)
+        && own.derived_superseded
+        && !matches!(e.status.as_deref(), Some("superseded"))
+    {
+        issues.push(Issue {
+            level: Level::Error,
+            path: e.rel_path.clone(),
+            msg: format!("{} is superseded by {} but its file says otherwise: run kontext repair", e.id, own.derived_by.join(", ")),
+        });
+    }
+    issues
+}
+
+/// One-sided supersessions across the store: an entry an active successor supersedes whose file
+/// still says it holds is an error; one that is superseded but does not name the successor a warning.
+/// Returns the issues and how many supersessions are one-sided.
+fn supersession_issues(entries: &[Entry]) -> (Vec<Issue>, usize) {
+    let mut issues = Vec::new();
+    let mut count = 0;
+    for e in entries {
+        let by = if e.derived_by.is_empty() { e.superseded_by.join(", ") } else { e.derived_by.join(", ") };
+        if e.derived_superseded {
+            count += 1;
+            issues.push(Issue {
+                level: Level::Error,
+                path: e.rel_path.clone(),
+                msg: format!(
+                    "{} is superseded by {by} but its file still says {}: run kontext repair",
+                    e.id,
+                    e.file_status.as_deref().unwrap_or("no status")
+                ),
+            });
+        } else if !e.derived_by.is_empty() {
+            count += 1;
+            issues.push(Issue {
+                level: Level::Warn,
+                path: e.rel_path.clone(),
+                msg: format!("{} is superseded but its superseded_by does not name {by}: run kontext repair", e.id),
+            });
+        }
+    }
+    (issues, count)
+}
+
+/// Sequential ADR numbers two files of one kind share (parallel branches both took the next one):
+/// a reference by number names neither.
+fn duplicate_numbers(entries: &[Entry]) -> Vec<Issue> {
+    let mut by: BTreeMap<(String, u64), Vec<&Entry>> = BTreeMap::new();
+    for e in entries {
+        let short = e.short_id();
+        if short != e.id
+            && let Ok(n) = short.parse::<u64>()
+        {
+            by.entry((e.kind.clone(), n)).or_default().push(e);
+        }
+    }
+    by.into_iter()
+        .filter(|(_, v)| v.len() > 1)
+        .flat_map(|((_, _), v)| {
+            let files: Vec<String> = v.iter().map(|e| e.rel_path.clone()).collect();
+            v.into_iter().map(move |e| Issue {
+                level: Level::Error,
+                path: e.rel_path.clone(),
+                msg: format!("ADR number {} is shared by {}: renumber one of them", e.short_id(), files.join(", ")),
+            })
+        })
+        .collect()
 }
 
 /// Validate every entry in the working tree.
@@ -1905,6 +2002,19 @@ pub fn check_all(app: &App) -> CheckReport {
             }
         }
     }
+    let (one_sided, count) = supersession_issues(&entries);
+    rep.issues.extend(one_sided);
+    rep.issues.extend(duplicate_numbers(&entries));
+    let ambiguous = rep.issues.iter().filter(|i| i.level == Level::Error && i.msg.contains("' is ambiguous: it matches ")).count();
+    if count + ambiguous > 0 {
+        rep.issues.push(Issue {
+            level: Level::Info,
+            path: store.dir(),
+            msg: format!(
+                "{count} one-sided supersession(s), {ambiguous} ambiguous reference(s); `kontext repair --dry-run` shows the supersession edits"
+            ),
+        });
+    }
     rep.issues.extend(ledger_issues(app, &entries));
     rep
 }
@@ -1913,7 +2023,7 @@ pub fn check_all(app: &App) -> CheckReport {
 /// took the older side) is a warning; a link to an entry that no longer holds is worth knowing, and
 /// never changes the entry that links to it.
 fn ledger_issues(app: &App, entries: &[Entry]) -> Vec<Issue> {
-    let mut issues = Vec::new();
+    let mut issues = ledger_file_issues(app);
     let lines = crate::ledger::read(app);
     let newest = crate::ledger::latest(&lines, true);
     for e in entries.iter().filter(|e| e.is_active()) {
@@ -1940,6 +2050,62 @@ fn ledger_issues(app: &App, entries: &[Entry]) -> Vec<Issue> {
                 msg: format!("{} links to {}, {what}: does it still hold?", e.id, p.id),
             });
         }
+    }
+    issues
+}
+
+/// Lines of the ledger no reader takes: conflict markers (jj ignores the union merge driver and writes
+/// its own), hand edits, and looks dated more than five minutes ahead, which would win every later
+/// look. Readers skip the first and trust the second, so both are said here.
+fn ledger_file_issues(app: &App) -> Vec<Issue> {
+    let rel = crate::ledger::rel_path(app);
+    let Ok(text) = std::fs::read_to_string(app.repo.abs(&rel)) else { return Vec::new() };
+    let horizon = chrono::Utc::now() + chrono::Duration::minutes(5);
+    let mut unreadable: Vec<usize> = Vec::new();
+    let mut conflict = false;
+    let mut future: Vec<(usize, String)> = Vec::new();
+    for (n, raw) in text.lines().enumerate() {
+        let t = raw.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        match crate::ledger::Line::parse(raw) {
+            Some(line) => {
+                if let Some(crate::store::Checked::At(at)) = crate::store::parse_checked(&line.at)
+                    && at > horizon
+                {
+                    future.push((n + 1, line.at.clone()));
+                }
+            }
+            None => {
+                conflict |= ["<<<<<<<", ">>>>>>>", "=======", "%%%%%%%", "+++++++", "-------"].iter().any(|m| t.starts_with(m));
+                unreadable.push(n + 1);
+            }
+        }
+    }
+    let list = |v: &[usize]| {
+        let mut s: Vec<String> = v.iter().take(8).map(usize::to_string).collect();
+        if v.len() > 8 {
+            s.push(format!("… {} more", v.len() - 8));
+        }
+        s.join(", ")
+    };
+    let mut issues = Vec::new();
+    if !unreadable.is_empty() {
+        let why = if conflict { "a merge conflict (resolve it by keeping every line of both sides)" } else { "not ledger lines" };
+        issues.push(Issue {
+            level: Level::Warn,
+            path: rel.clone(),
+            msg: format!("{} line(s) no reader takes, {why}: line {}", unreadable.len(), list(&unreadable)),
+        });
+    }
+    if !future.is_empty() {
+        let lines: Vec<usize> = future.iter().map(|(n, _)| *n).collect();
+        issues.push(Issue {
+            level: Level::Warn,
+            path: rel,
+            msg: format!("{} line(s) dated in the future (first {}): a clock ahead; line {}", future.len(), future[0].1, list(&lines)),
+        });
     }
     issues
 }
