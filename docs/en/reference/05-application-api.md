@@ -35,6 +35,34 @@ An installed kontext binary alone does not establish that an LLM adapter is conf
 should provide or locate a compatible binary and retain their last successful snapshot with an
 explicit stale state when it cannot be refreshed.
 
+### Compatibility policy {#compatibility}
+
+Within `api_version: 1`:
+
+- **May be added:** operations, optional inputs, response fields, error codes, enum values and
+  capability strings. Clients ignore what they do not know.
+- **Bumps the version:** removing or renaming an operation, input or field, or changing a field's
+  type or meaning.
+- **Narrowing an input** is allowed only where the old behaviour contradicted a recorded decision or a
+  security promise. It is announced with a capability string and a migration note in the changelog.
+  The narrowings so far: `drafts.stage amends` accepts only additive bodies (`amend_not_additive`,
+  capability `drafts.stage.amends.additive`); a revision guard refuses `HEAD` and other moving names
+  (`stale_entry`); `drafts.verify` runs only pinned commands (`untrusted_verify`, capability
+  `verify.trust`).
+
+Parameters gain aliases, never renames. `api.describe {}` returns the JSON Schema of every
+operation's input, `{"operations": {"<name>": {"input": {…}}}}`, so a client can check what an installed
+binary accepts. Capability strings to look for in `status.capabilities` besides the operation names:
+`api.describe`, `verify.trust`, `drafts.stage.amends`, `drafts.stage.amends.additive`,
+`drafts.stage.extends`, `verification.last_verified`, `drift.ordered`.
+
+**One notion of revision.** A revision is a blob id: `revision` from `entries.related` and
+`entries.changed`, `entry_revision` in `drafts.extend`, `drafts.revise` and `retire`, and
+`amends.revision` all take the entry file's blob id or a full commit hash whose file content equals
+the current one. A moved revision is `stale_entry` everywhere; the older `operation_conflict` for a
+moved revision stays as an alias in `error.details.alias`.
+
+
 ## Operations
 
 | Operation | Input | Result |
@@ -172,6 +200,12 @@ are added as for the other reads ([below](#verification)). `commits` are the non
 uncommitted. With an explicit `head` the entries are read as committed at `head`. Entries are ordered
 by id. The answer involves no model.
 
+Added in 0.10.0 (capability `drift.ordered`): the result carries `base_source` (`input`, `merge_base`
+or `none`). With `none` there was no baseline: `entries` is empty and `reason` says why, and
+`kontext drift --fail` exits non-zero instead of reporting no drift. An entry counts as looked at only
+when a look (an edit, a confirmation or a passed check) is at or after the last commit in the range
+that changed its governed files; a look before that change no longer covers it.
+
 ### Confirming an entry {#confirm}
 
 `drafts.confirm {id}` records that an entry still holds: it sets `checked` to the current UTC
@@ -216,6 +250,14 @@ repository root, stdin closed, stopped after `KONTEXT_VERIFY_TIMEOUT_SECS` (defa
 inactive one is `operation_conflict` and its command never runs; an unknown one is `not_found`. The
 command runs without the write lock, so other writes wait only for the append.
 
+The command runs only when its text is pinned in the user's `trust.toml` (`kontext trust --verify <id>`
+from a terminal; no operation pins). Otherwise nothing runs and the error is `untrusted_verify` with
+`details: {command, hash, pin: "kontext trust --verify <id>"}`; show the command to a person, do not
+retry. The command gets an environment allowlist (`PATH`, `HOME`, `USER`, `LANG`, `LC_*`, `TMPDIR`,
+`TERM` and the user's `[verify] pass_env`), its process group is killed at the timeout or 2 s after
+the shell exits with stdout still open, `output_tail` is redacted, and the ledger line carries
+`dirty: true` when the working tree had changes. See [Security](../concepts/08-security.md#verify).
+
 ### Verification, what changed since, premises {#verification}
 
 Added after 0.5.0. Every entry returned by `entries.list`, `entries.get`, `entries.search`,
@@ -255,6 +297,23 @@ Added after 0.5.0. Every entry returned by `entries.list`, `entries.get`, `entri
 - `premises` lists the entries this active entry links to (`[[id]]` in its body, `supersedes`, an
   `extends` field) that are superseded, retired or deprecated, except the one it superseded itself.
   Empty when there are none. Nothing is rewritten in either entry.
+
+Added in 0.10.0 (capability `verification.last_verified`), beside the fields above:
+
+- `verification.kind` is also `cache`: a `checked` date with no ledger line. It reports
+  `verified: false`; `kontext confirm --migrate-legacy` records `bulk` lines for such entries.
+  `checked` is still written, since clients read it.
+- `verification.by` is `application:<name>` for a `read` written through `kontext api`, so it can be
+  told apart from a read at a terminal.
+- `last_verified` is the newest look that counts as verification (a `read` or a passed `verify`), in
+  the shape of `verification`, or null; `since_verified` counts commits from it the way `since` does.
+- `failing: true` when the newest `verify` line failed. A failed check is shown but is not a look: it
+  neither replaces an earlier look nor resets `since`.
+- `amended_since: true` when the entry's body changed after its last verifying look.
+- `since` counts by ancestry: the non-merge commits on governed paths reachable from `HEAD` and not
+  from the commit of the look, so a branch merged after a confirmation is counted. Time is used only
+  without such a commit. `since.truncated` is true when `index.max_commits` cut the walk, and
+  `since.lower_bound` in a shallow clone.
 
 One `git log` and one `git log -p` of the ledger cover every entry, cached per `HEAD`; a list costs a
 `rev-parse` while nothing is committed. `landed` adds, per `HEAD`, a `git log` of the files whose
@@ -296,17 +355,17 @@ Added in 0.9.0 (`status.capabilities` lists `drafts.extend`, `drafts.stage.amend
 `drafts.extend {entry_id, entry_revision, text, llm?}` drafts the entry with a finding added to it. It
 writes nothing. The result is `{entry, old_body, as_written, notes, amends}`: `entry` keeps the id,
 file, kind, paths, tags and every other field and has the new body; `old_body` is the body it
-replaces; `amends` is `{id, revision}` to pass to `drafts.stage`. With `llm: true` (or an adapter name)
-the model folds the finding into the body. Without `llm`, without a model, when the model fails or
-when it returns the old body, the finding is added as written under `## Added <YYYY-MM-DD>`,
-`as_written` is true and `notes` says why. `text` holds at most 4000 characters.
+replaces; `amends` is `{id, revision}` to pass to `drafts.stage`. The finding is always added as
+written under `## Added <YYYY-MM-DD>` and `as_written` is true; a model never writes into an entry.
+`llm` is still accepted, so existing clients keep working, and `notes` says the finding was added as
+written. The shape of the result is unchanged. `text` holds at most 4000 characters.
 
 Only conventions, learnings and incidents are amended. A decision (or `adr`) is refused with
 `decision_not_amended`: a decision changes only by supersession, so a finding that builds on one is
 kept as a new entry that `extends` it. Another kind is `invalid_input`, an inactive entry
-`operation_conflict`. `entry_revision` is the candidate's `revision` from `entries.related`, a commit
-that holds the same file content as HEAD, or the file's blob; anything else is `stale_entry`
-(compare again). A file with local, staged or uncommitted changes is `operation_conflict`.
+`operation_conflict`. `entry_revision` is the candidate's `revision` from `entries.related` (the file's
+blob id) or a full commit hash that holds the same file content; `HEAD`, a branch name, a short hash
+or anything else is `stale_entry` (compare again). A file with local, staged or uncommitted changes is `operation_conflict`.
 
 ### Amending and linking on staging {#amend}
 
@@ -318,7 +377,12 @@ that holds the same file content as HEAD, or the file's blob; anything else is `
 it; the rest of `entry` is ignored. Everything before the body (front matter or ADR fields, the title)
 stays byte for byte, so the review diff is the body. The revision is checked again as in
 `drafts.extend` (`stale_entry`, `decision_not_amended`, `operation_conflict`); a body equal to the
-current one is `invalid_input`. `amends` with `supersedes` or `extends` on the same draft, or with
+current one is `invalid_input`. An amendment only adds: the current body must be a byte prefix of
+`entry.body` and the rest must be `## Added <YYYY-MM-DD>` sections; anything else is
+`amend_not_additive`, which points to supersession. After the splice the entry is parsed again and the
+title and every field outside the body must be unchanged. The only in-place edits kontext makes to
+reviewed text are metadata lines: `verify`, `checked`, and `status` / `superseded_by` on retire,
+supersede and `kontext repair`. `amends` with `supersedes` or `extends` on the same draft, or with
 `candidate_id`, is `invalid_input`. The result is the usual staging result with `amended: <id>`;
 challenges against the entry stay open, since an addition does not answer them. It needs an
 `operation_id` and replays like any staging.
@@ -347,6 +411,13 @@ model, and returns `{base, head, changes}` with the resolved commits. Each chang
 `revision` is the entry's revision at `head` (for a removed entry, at `base`), in the form
 `entries.related` gives. `kinds` defaults to decisions, conventions, learnings and incidents. Both
 sides read committed trees: the working tree and staged files are never part of the answer.
+
+Added in 0.10.0: each change also carries `status` (the entry's status at `head`, or at `base` for a
+removed entry), and each side is read with the configuration committed at that revision, so a kind
+moved to another directory between `base` and `head` is not reported as removed and added.
+
+Committed entries in any read (`CommittedEntry`) carry `date`, `verify`, `review_by`, `supersedes`,
+`commits` and `author` besides the earlier fields.
 
 ## Rust embedding
 
@@ -406,8 +477,10 @@ receipt to write into another checkout.
 ```
 
 Give each logical write a stable operation ID. Retrying after a client restart or a remote queue
-failure returns the original result with `replayed: true`. Reusing the ID with different input is a
-conflict. The engine coordinates concurrent application writes and persists the operation plan and
+failure returns the original result with `replayed: true`, also after a later legitimate edit of the
+same entry: a replay returns the stored receipt and never stages again. Reusing the ID with different
+input is a conflict. `operations.get` also finds the receipt of a capture that was routed to another
+repository's store. The engine coordinates concurrent application writes and persists the operation plan and
 result locally. The client still owns reconciliation with its remote queue: local Git and a remote
 service do not form one transaction.
 

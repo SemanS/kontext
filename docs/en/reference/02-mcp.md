@@ -1,18 +1,35 @@
 # MCP tools, prompts and resources
 
-Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Protocol versions 2024-11-05, 2025-03-26, 2025-06-18 and 2025-11-25 (the client's version is echoed when supported). Capabilities: `tools`, `prompts`, `resources`, `logging`. Existing agent tools return text; `ctx_api` also returns structured data. Errors are returned as `isError: true` results.
+Server: `kontext mcp`, JSON-RPC 2.0 over stdio, newline-delimited. Capabilities: `tools`, `prompts`, `resources`. Tool failures are returned as `isError: true` results; an unknown tool is the protocol error `-32602`, a panic inside one request `-32603`.
+
+## Protocol {#protocol}
+
+The server answers both eras of MCP:
+
+- **Stateless (2026-07-28).** `server/discover` returns the capabilities, instructions and server info; every request may carry `_meta` with the protocol version instead of an `initialize` handshake. Results carry `resultType`, and list results carry `ttlMs` and `cacheScope`. An unknown version is `-32022`.
+- **Legacy handshake.** `initialize` with 2024-11-05, 2025-03-26, 2025-06-18 or 2025-11-25 echoes the client's version; an unknown one falls back to 2025-11-25.
+
+Lists are returned in a deterministic order. `resources/list` pages with a cursor. `tools.listChanged` is true only when adapters `expose` tools. `notifications/cancelled` stops the request and kills a running verify command.
+
+**Instructions.** The first 512 characters of the server instructions stand alone (what kontext holds, call `ctx_brief` first, when to search); the whole stays under 4 096 characters. `ctx_brief` carries `_meta["anthropic/alwaysLoad"]: true`, so hosts that defer tools behind tool search still load it; `ctx_read` and `ctx_api` carry `maxResultSizeChars`.
 
 ## Tools
 
 [`ctx_api`](./05-application-api.md) exposes the versioned application service with `operation`,
 `input` and optional `dir`. It returns `structuredContent` and `outputSchema` as well as a complete
-JSON text copy. Existing tools below retain their text results.
+JSON text copy.
 
-Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
+There are sixteen tools: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift`, `ctx_threads`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init`, `ctx_init_submit` and `ctx_api`.
+
+**Structured results.** `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_inbox` and `ctx_drift` declare an `outputSchema` and return `structuredContent` beside the text, which stays as it was. Hits and governing entries also come as `resource_link` blocks to `kontext://entry/{id}`. The other tools return text.
+
+**Parameter aliases.** Parameters gain aliases, never renames: `id` and `uri` are interchangeable where a tool names one entry, `focus` and `paths`, `limit` and `max`, `budget_tokens` everywhere (`budget_chars` stays on `ctx_threads`), and `reason`, `why` and `because`.
+
+Every tool carries MCP annotations, which clients use to decide what needs approval: `ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_drift` and `ctx_threads` are `readOnlyHint: true`; `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_inbox`, `ctx_prepare_commit`, `ctx_init` and `ctx_init_submit` write only the local inbox, the working tree and the git index and are `destructiveHint: false`. These tools retain `openWorldHint: false`. `ctx_verify` runs a pinned shell command and is `destructiveHint: true`, `openWorldHint: true`. The mixed `ctx_api` surface is conservatively `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`: configured LLM and event adapters may access external services.
 
 ### Another repository: `dir` {#dir}
 
-`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
+`ctx_brief`, `ctx_search`, `ctx_read`, `ctx_why`, `ctx_log`, `ctx_capture`, `ctx_challenge`, `ctx_confirm`, `ctx_verify`, `ctx_drift`, `ctx_inbox` and `ctx_prepare_commit` take `dir`: a path inside another worktree, submodule or repository, absolute or relative to this root. It must lie in this repository, one of its worktrees or submodules, or a repository below the same root; anything else is refused. Without it, the paths a tool is given decide which repository answers. See [Several repositories](../concepts/09-several-repositories.md).
 
 ### `ctx_brief`
 
@@ -22,7 +39,7 @@ Every tool carries MCP annotations, which clients use to decide what needs appro
 | `budget_tokens` | integer | `brief.budget_tokens` (1400) | approximate size |
 | `adapters` | boolean | true | include adapter `brief` sections |
 
-References in brackets are the shortest unique prefix of an id (`[2026-09-28-adapters]`), which `ctx_read` resolves. A line is marked when the entry is anything short of accepted, approved knowledge: its status when it is not `accepted` (`(proposed)`), `local, unapproved` when its file is new, edited or staged in the working tree, `review due`, `challenged locally`, and `N sources` when it carries evidence, e.g. `Move search to OpenSearch (proposed; 2 sources)`. An accepted, committed entry has no mark. `## Changed since <rev>` lists what changed since this worktree's last brief (at most five lines; *Changed in the last 14 days* without one). The brief also lists *Local notes* (this clone's inbox) and, without a store, *Related docs and history*. See [Context layers](../concepts/04-context-layers.md).
+With a focus, a *Governs &lt;focus&gt; (N)* section comes first and is never dropped silently: one line per governing entry (full id, title, marks, commits since), ordered by path specificity, then oldest first; what does not fit is named on an `also governing:` line. Other sections end with `… N more (K govern your focus)` when trimmed. A focus item with `/`, a glob character or a known extension is a path even before the file exists. References in brackets are full ids (`[2026-09-28-adapters-are-configuration]`); copy them as they are into `supersedes` and `[[links]]`. A line is marked when the entry is anything short of accepted, approved knowledge: its status when it is not `accepted` (`(proposed)`), `local, unapproved` when its file is new, edited or staged in the working tree, `review due`, `challenged locally`, and `N sources` when it carries evidence, e.g. `Move search to OpenSearch (proposed; 2 sources)`. An accepted, committed entry has no mark. `## Changed since <rev>` lists what changed since this worktree's last brief (at most five lines; *Changed in the last 14 days* without one). The brief also lists *Local notes* (this clone's inbox) and, without a store, *Related docs and history*. See [Context layers](../concepts/04-context-layers.md).
 
 ### `ctx_search`
 
@@ -35,7 +52,7 @@ References in brackets are the shortest unique prefix of an id (`[2026-09-28-ada
 | `adapters` | boolean | `[search] adapters` | `true` asks the search adapters even when local hits suffice, `false` never asks them |
 | `budget_tokens` | integer | 1200 | approximate size of the answer |
 
-Each hit: `N. title — snippet [kind · status · date · source] <uri>`. The status is left out when it is `accepted`; marks such as `local, unapproved` and `review due` follow it. A hit that only opens like the one above it (the same first words, a different claim) is not dropped: it follows as `↳ similar, differs: … <uri>` with the part that differs. Only proven copies are dropped: the same URI, an adapter's copy of a local entry and a hit whose whole text equals an earlier one.
+Each hit: `N. title — snippet [kind · status · date · source] <uri>`. The status is left out when it is `accepted`; marks such as `local, unapproved` and `review due` follow it. A hit that only opens like the one above it (the same first words, a different claim) is not dropped: it follows as `↳ similar, differs: … <uri>` with the part that differs. Only proven copies are dropped: the same URI, an adapter's copy of a local entry and a hit whose whole normalised text equals an earlier one; a superseded twin is never kept over its active successor. Reviewed entries rank above doc chunks at equal score (`[search] weights`); a superseded hit is demoted and shown with `→ superseded by [id]`, never hidden.
 
 The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *local note*) and submodules that keep their own team knowledge (marked with their path).
 
@@ -45,6 +62,9 @@ The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *
 | --- | --- | --- | --- |
 | `uri` | string | required | `kx:<id>`, `file:<path>[#section]`, `git:<sha>`, `inbox:<id>`, an adapter URI, or a plain path |
 | `level` | 0 \| 1 \| 2 | 1 | one line, overview, full |
+| `offset`, `part` | integer | | page through a long file |
+
+`id` is an alias of `uri`. A plain argument prefers an existing path and the answer says what it resolved to. Levels 0 and 1 show `superseded_by` with a link and the marks (local, challenged, review due). `file:` refuses `.git/`, `.git-credentials` and `.ssh`.
 
 ### `ctx_why`
 
@@ -72,7 +92,8 @@ The local source also covers notes in this clone's inbox (`inbox:<id>`, marked *
 | `paths` | string[] | | paths or globs it governs |
 | `tags` | string[] | | |
 | `visibility` | `team` \| `private` | `capture.default_visibility` | |
-| `supersedes` | string[] | | ids of entries it replaces |
+| `supersedes` | string[] | | full ids of entries it replaces; an ambiguous id is refused |
+| `extends` | string[] | | full ids of entries it builds on; kept through the inbox and promotion |
 | `status` | string | `accepted` for decisions | |
 | `promote` | boolean | false | write into the store now instead of the inbox |
 | `commits` | string[] | | short shas of the commits it came from |
@@ -88,10 +109,10 @@ The answer lists related entries as notes (`related, check: <title> <kx:id> — 
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
 | `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
-| `why` | string | required | why it no longer holds |
+| `why` | string | required | why it no longer holds (aliases `reason`, `because`) |
 | `visibility` | `team` \| `private` | `team` | |
 
-Records that an entry no longer holds, as a local inbox candidate of kind `challenge` (against the entry and the commit it was read at). Nothing changes until review: the brief marks the entry `challenged locally`, and `ctx_prepare_commit` offers to retire it or to record a replacement that supersedes it.
+Records that an entry no longer holds, as a local inbox candidate of kind `challenge` (against the entry and the commit it was read at). Nothing changes until review: the brief marks the entry `challenged locally`, and `ctx_prepare_commit` offers to retire it or to record a replacement that supersedes it. The challenge stays *resolving* until the entry's new blob lands in `HEAD`.
 
 ### `ctx_confirm`
 
@@ -101,7 +122,7 @@ Records that an entry no longer holds, as a local inbox candidate of kind `chall
 | `ids` | string[] | | several entries at once; more than five are recorded as `bulk` |
 | `because` | string | | one line: what the entry was checked against |
 
-Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) time to now (UTC, to the second), changes nothing else in the file, appends an `agent` line with `HEAD` and the reason to the [verification ledger](../concepts/03-capture-and-review.md#verifications), and stages both, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead. An agent's confirmation is shown as a stamp, not as a verification; `ctx_verify` proves more where the entry names a command.
+Records that an entry still holds after the code it governs changed: sets its [`checked`](../concepts/02-knowledge-store.md#checked) time to now (UTC, to the second), changes nothing else in the file, appends an `agent` line with `HEAD` and the reason to the [verification ledger](../concepts/03-capture-and-review.md#verifications), and stages both, so the confirmation is reviewed with the change. Freshness and drift count from it. An agent confirms only what it checked against the code; an entry that no longer holds is challenged or superseded instead. An agent's confirmation is shown as `stamped by agent`, not as a verification, and MCP never writes a `read` line; `ctx_verify` proves more where the entry names a pinned command.
 
 ### `ctx_verify`
 
@@ -110,7 +131,7 @@ Records that an entry still holds after the code it governs changed: sets its [`
 | `id` | string | required | the entry: `kx:<id>`, an id or its unique prefix |
 | `because` | string | | one line: why it was run |
 
-Runs the entry's [`verify`](../concepts/03-capture-and-review.md#verify) command from the repository root (with a timeout), appends a `verify` line with pass or fail and `HEAD` to the ledger and stages it, and answers with the outcome and the end of the output. An entry without a command, or an inactive one, is refused. Not read-only: it runs a command the repository names.
+Runs the entry's [`verify`](../concepts/03-capture-and-review.md#verify) command from the repository root, but only when the command text is pinned in your `trust.toml` (`kontext trust --verify <id>`, from a terminal). Pinned, it runs with an environment allowlist and a timeout, appends a `verify` line with pass or fail, `HEAD` and a dirty-tree mark to the ledger, stages it, and answers with the outcome and the redacted end of the output. Unpinned, nothing runs: the answer is `untrusted_verify` with the command, its hash and the pin line, and the agent may run the command in its own sandbox and record the result with `ctx_confirm`. An entry without a command, or an inactive one, is refused. `destructiveHint: true`, `openWorldHint: true`; see [Security](../concepts/08-security.md#verify).
 
 ### `ctx_drift`
 
@@ -126,7 +147,7 @@ The knowledge a change left behind: active entries whose `paths` cover files cha
 
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
-| `thread` | string | | `claude:<id>`, `codex:<id>`, `superset:<workspace>` (all its threads), a transcript file or `last`; without it, the recent threads are listed |
+| `thread` | string | | `claude:<id>`, `codex:<id>`, `superset:<workspace>` (all its threads), a transcript file under a known transcript root, or `last`; without it, the recent threads are listed. Any other path and `-` are refused |
 | `part` | integer | 1 | part of a long transcript |
 | `budget_chars` | integer | 20000 | characters per part (up to 80000) |
 
@@ -137,7 +158,7 @@ Compact, redacted transcripts of this repository's agent threads on this machine
 | Parameter | Type | Default | |
 | --- | --- | --- | --- |
 | `action` | `list` \| `show` \| `promote` \| `drop` \| `verify` | `list` | |
-| `ids` | string[] | | for show / promote / drop; one id for verify |
+| `ids` | string[] | | for show / promote / drop; one id for verify. Exact ids or a unique prefix; `drop` removes only this clone's own candidates |
 | `verify` | string | | for `action=verify`: the command that proved the draft (as in `ctx_capture`); `""` clears it. Promotion keeps it |
 
 ### `ctx_prepare_commit`
@@ -179,7 +200,7 @@ A capture whose paths all belong to another repository with team knowledge goes 
 
 ### Adapter tools
 
-Tools of MCP adapters with `expose` are listed with their original schemas (names prefixed with `<adapter>_` unless they already start with it); tools declared in adapter config are listed with the schema from `params`. Their descriptions start with `[adapter]`.
+Tools of MCP adapters with `expose` are listed with their original schemas (names prefixed with `<adapter>_` unless they already start with it); tools declared in adapter config are listed with the schema from `params`. Their descriptions start with `[adapter]`. Exposed tools keep their upstream title and annotations; missing ones default to `readOnlyHint: false`, `openWorldHint: true`.
 
 ## Prompts
 

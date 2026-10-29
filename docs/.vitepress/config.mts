@@ -68,6 +68,7 @@ const sections: Section[] = [
       ['06-autopilot', 'Deepen with an LLM', 'Prehĺbenie cez LLM'],
       ['07-ci', 'Validate knowledge in CI', 'Validácia znalostí v CI'],
       ['08-distill-threads', 'Knowledge from agent threads', 'Znalosti z vlákien agentov'],
+      ['09-hooks', 'Hooks: knowledge at the moment of an edit', 'Hooky: znalosti v momente úpravy'],
     ],
   },
   {

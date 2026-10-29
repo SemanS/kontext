@@ -11,7 +11,7 @@ git status -- .ai              # what was written
 kontext brief --no-adapters    # what an agent will see
 ```
 
-Nič sa necommituje a nič neopustí tvoj počítač. Ak sa ti výsledok nepáči, zmaž `.ai/` (a spusti `kontext hooks uninstall`). Žiadny ďalší stav netreba upratovať.
+Nič sa necommituje a nič neopustí tvoj počítač. Ak sa ti výsledok nepáči, zmaž `.ai/` a spusti `kontext hooks uninstall`. Lokálny index, inbox a cache v `.git/kontext/` odídu s klonom; [časté otázky](../about/01-faq.md#what-kontext-writes-where) vymenúvajú všetko, čo kontext zapisuje.
 
 ## Skontroluj detekciu
 
@@ -40,7 +40,21 @@ numbering = "sequential"
 trailer = "Decision"
 ```
 
-Existujúce ADR sa hneď zobrazia v `kontext log`, v briefe aj vo vyhľadávaní a nové rozhodnutia dostanú ďalšie číslo v rovnakom formáte. Commity, ktoré menia iba ADR, sa znova nevyťažujú.
+Existujúce ADR sa hneď zobrazia v `kontext log`, v briefe aj vo vyhľadávaní a nové rozhodnutia dostanú ďalšie číslo v rovnakom formáte. ADR písané cez adr-tools držia stav v sekcii `## Status`; kontext ju číta a zapisuje v rovnakom štýle, takže nahradené ADR sa neukáže ako aktívne. Duplicitné číslo ADR sa nahlási s menami oboch súborov. Commity, ktoré menia iba ADR, sa znova nevyťažujú.
+
+## História v inom jazyku a boti {#history-in-another-language-and-bots}
+
+Fáza history hľadá commity v tvare rozhodnutí. Jej slovné signály sú anglické; ak tvoj tím píše správy commitov v inom jazyku, pridaj svoje slová pred prvým behom:
+
+```toml
+[init]
+decision_words = ["rozhodli", "namiesto", "prechádzame", "lebo"]
+bot_authors = ["release-bot@example.com"]
+```
+
+Výmeny závislostí, typy Conventional Commits, značky breaking a trailery `Decision:` sa rátajú v každom jazyku. Commity botov (dependabot, renovate, `*[bot]` a `bot_authors`) sa vynechajú. Commity, ktoré existujúci záznam už cituje, sa znova neplánujú ako úlohy `dec:` a preskočená úloha, aj `mod:`, ostane preskočená pre celý tím.
+
+Opätovné `kontext init` po tom, čo si upravil `paths`, `tags` alebo `summary` dokumentu modulu, tvoje úpravy zachová; prepíše sa len blok generovaných faktov.
 
 ## Hooky v repozitároch, ktoré už hooky majú
 

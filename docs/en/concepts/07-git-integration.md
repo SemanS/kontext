@@ -39,6 +39,8 @@ For the team, put the gate where every commit passes, whatever made it: the chec
 
 `kontext confirm` and the promotions stage files in git's index; jj takes the files from the working copy and ignores the index, so this is harmless. Trailers are not added for you: write them into the description (`prepare-commit` lists them).
 
+Guards that look for a dirty tree (a `verify` run records `dirty: true`, `confirm` refuses a file with unstaged edits) see jj's working copy as uncommitted changes in git's terms. Run `jj commit` or `jj new` first, so the files you confirm are in a commit; a colocated jj smoke test runs in CI when `jj` is installed.
+
 ## Trailers
 
 For every knowledge file staged in a commit, `prepare-commit-msg` adds a trailer (`git interpret-trailers --if-exists addIfDifferent`):
@@ -68,7 +70,7 @@ After a commit, merge or rebase, kontext compares the knowledge files at `HEAD` 
 
 ## The outbox
 
-Hooks never talk to the network. Events are appended to `<git-common-dir>/kontext/outbox.jsonl` and a detached `kontext outbox flush` delivers them. Deliveries are tracked per adapter and op, retried up to eight times, and only one flush runs per clone. `kontext outbox` lists what is pending and the last error.
+Hooks never talk to the network. Events are appended to `<git-common-dir>/kontext/outbox.jsonl` and a detached `kontext outbox flush` delivers them. Deliveries are tracked per adapter and op, and only one flush runs per clone. An attempt counts only for the adapter that was actually tried, so one adapter's outage does not use up the others' retries; events for an adapter that `when` skipped stay queued. After eight failed attempts an event moves to `outbox.dead.jsonl`, which `kontext status` shows, and `kontext outbox retry` puts back. Nothing is dropped silently. `kontext outbox` lists what is pending and the last error; sync reports deletions and renames; adapter logs rotate.
 
 ## Merges
 

@@ -14,21 +14,27 @@ A [Tantivy](https://github.com/quickwit-oss/tantivy) index per worktree, derived
 
 Noise is filtered: "Merge branch …" commits, `Co-authored-by`/`Signed-off-by` lines, files over `sources.max_bytes`, and anything that looks like a secrets file.
 
-The index refreshes incrementally before a query (entries and docs by modification time and size, commits by SHA), at most once per second per process. `kontext reindex` rebuilds it from scratch.
+The index refreshes incrementally before a query (entries and docs by modification time and size, commits by SHA), at most once per second per process. When another process refreshed it (a CLI capture, `kontext status`, a second agent session in the same worktree), a long-running MCP server notices the changed manifest and reloads its reader before answering. A new schema version is built in a temporary directory and renamed into place, never by deleting a directory another process is building. `kontext reindex` rebuilds it from scratch.
 
 ### Identifiers
 
 Code-shaped words are expanded so both forms match: `orderTotal` also indexes `order total`, `user_account_balances` indexes `user account balances`. A query for an identifier additionally searches its words as a *phrase*, so `RunContext` finds "run context" without matching every document that says "run".
 
+### Folding and stemming
+
+Two shadow fields, `title_f` and `body_f`, hold the same text lower-cased, ASCII-folded and run through an English stemmer. They are searched beside the exact fields at a lower boost, so `namietka` finds `námietka`, `adapter` finds "Adapters are configuration", and an exact identifier still ranks first. There is no stemmer for Slovak; folding covers diacritics, not inflection.
+
 ### Ranking
 
-BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5) and body. The whole query also counts as a phrase (boost 2): it ranks an entry with the exact wording first without adding hits of its own. Local results have weight 1.0; adapters default to 0.9 (`weight` per adapter).
+BM25 over title (boost 2.5), identifier-expanded auxiliary text (1.5), body, and the folded shadow fields at a lower boost. The whole query also counts as a phrase (boost 2): it ranks an entry with the exact wording first without adding hits of its own. Local results have weight 1.0; adapters default to 0.9 (`weight` per adapter).
+
+Within the local source, `[search] weights` weigh by source: a reviewed entry ranks above a doc chunk or a commit at equal score. The defaults are set on the graded eval set (`tests/eval/qrels.tsv`, nDCG@5, recall@10, MRR); a change to ranking needs that measurement. A superseded or deprecated hit is demoted, never hidden, and shows its successor: `→ superseded by [id]`. The phrase bonus is computed from the cleaned query words, without the identifier expansions. A query that is exactly an entry id or a path takes a shortcut to that entry.
 
 ## Federated search
 
 `ctx_search` sends the query to every adapter with a `search` op, in parallel, with a 12-second deadline. With [`[search] adapters = "fallback"`](../reference/03-configuration.md#search) it does so only when the local sources found fewer than `min_local_hits` hits, or when the caller names an adapter or passes `adapters: true`; the default, `always`, asks them every time. Sources are fused by weighted reciprocal rank (each hit scores `weight / (8 + rank)`), so no source's score scale (BM25 here, cosine similarity there) crowds the others out, and a single source keeps its own order.
 
-Only proven copies are dropped: a hit with a URI seen before, an adapter's copy of a local entry (a `sync`ed `…/<id>.md`), and a hit whose whole normalized title and text equal an earlier one. Two claims with the same opening are not the same claim: a hit that only starts like an earlier one is kept and shown under it with the part that differs (`↳ similar, differs: …`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
+Only proven copies are dropped: a hit with a URI seen before, an adapter's copy of a local entry (a `sync`ed `…/<id>.md`), and a hit whose whole normalized title and text equal an earlier one. Of two such copies, a superseded one is never kept over its active successor. Adapter hits are ordered by their mapped score, not by the order of the response's buckets; hits from a nested store carry its marks. Two claims with the same opening are not the same claim: a hit that only starts like an earlier one is kept and shown under it with the part that differs (`↳ similar, differs: …`). A slow or failing adapter never blocks the answer: it is reported in a note and cools down for 30 seconds.
 
 Restrict a search with `kinds` (`decision`, `convention`, `learning`, `incident`, `architecture`, `doc`, `commit`) and `sources` (`local` and/or adapter names).
 

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are released for the latest minor version (currently 0.1.x). Please upgrade before reporting.
+Security fixes are released for the latest minor version (currently 0.10.x). Please upgrade before reporting.
 
 ## Reporting a vulnerability
 
@@ -17,9 +17,10 @@ You will get an acknowledgement within a few days and a fix or mitigation plan o
 
 kontext runs locally with the permissions of the user who starts it. Reports are especially welcome for:
 
-- ways a cloned repository could make kontext or its git hooks execute commands without `kontext trust`,
+- ways a cloned repository could make kontext or its git hooks execute commands without `kontext trust`, including a `verify:` command that runs without a pin (`kontext trust --verify`),
+- ways an MCP tool or a `ctx_api` operation could pin a command or an adapter,
 - secret-scanning bypasses that let credentials into committed knowledge files,
 - path traversal through `ctx_read` or other tools,
 - MCP tool inputs that lead to unintended writes outside the working tree, the git index or `.git/kontext/`.
 
-Adapters you configure yourself run what you tell them to run; misconfigured adapters are not vulnerabilities in kontext.
+Adapters you configure yourself run what you tell them to run; misconfigured adapters are not vulnerabilities in kontext. Neither are the documented limits of trust: a pin covers the command or table text, not the code or scripts it starts, and it is honour-based against a process that can edit `trust.toml` (see [Security and privacy](docs/en/concepts/08-security.md)).

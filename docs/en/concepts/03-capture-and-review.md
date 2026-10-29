@@ -30,7 +30,10 @@ Agents call `ctx_capture` with the same fields. On capture kontext:
 - warns when a similar entry already exists (so it can be updated instead),
 - defaults decisions to `status: accepted` and records the author (`git config user.name`) and origin (`agent` or `cli`),
 - queues a `capture` event for adapters that subscribe to it,
-- files it with the repository that owns its `paths`, such as a submodule with its own store ([Several repositories](09-several-repositories.md)).
+- files it with the repository that owns its `paths`, such as a submodule with its own store ([Several repositories](09-several-repositories.md)),
+- keeps `supersedes` and `extends` as full ids through the inbox and promotion; an ambiguous or unknown target is refused.
+
+A finding that builds on a decision is captured as a new entry with `extends: [<id>]` (`--extends` on the CLI); a decision itself is never amended. A convention, learning or incident can instead get a dated `## Added` section (see [Amendments only add](./02-knowledge-store.md#amendments)).
 
 A learning or decision you proved with a command carries that command, so it can be [proved again](#verify) later:
 
@@ -79,7 +82,7 @@ A capture also names the recorded entries it may duplicate, extend or contradict
 
 ## Drift: knowledge a change left behind {#drift}
 
-`ctx_prepare_commit` looks at one change. `kontext drift` (`ctx_drift`, `entries.drift`) looks at a range: it lists the active entries whose `paths` cover files changed in `base..head` and whose own file was **not** changed in the same range. Editing an entry, retiring it or [confirming](./02-knowledge-store.md#checked) it counts as having looked at it.
+`ctx_prepare_commit` looks at one change. `kontext drift` (`ctx_drift`, `entries.drift`) looks at a range: it lists the active entries whose `paths` cover files changed in `base..head` and whose own file was **not** changed in the same range. Editing an entry, retiring it, [confirming](./02-knowledge-store.md#checked) it or a passed check counts as having looked at it, but only when that look is at or after the last commit in the range that changed its governed files: a look before the change does not cover it. A failed check is not a look.
 
 ```text
 $ kontext drift
@@ -95,7 +98,7 @@ For each, read it against the change: if it still holds, confirm it (`kontext co
 - `--base` defaults to where `HEAD` left the remote's default branch (the merge base with `origin/HEAD`, else `origin/main`, else `origin/master`), and to `HEAD` without a remote.
 - Without `--head` the working tree counts as well: commits `base..HEAD` plus uncommitted and untracked changes. That is how a [jj](./07-git-integration.md#jj) working copy looks to git, so drift works without commits or hooks. With `--head` only committed changes count, and the entries are read as committed there.
 - Decisions, conventions, learnings and incidents are checked (`--kind` to choose); module docs are refreshed by `kontext init`, not confirmed.
-- No model is involved: the answer is a deterministic function of the repository. `--json` prints the `entries.drift` result; `--fail` exits with status 2 when an entry is listed. [`kontext ci`](../guides/07-ci.md) runs it in CI.
+- No model is involved: the answer is a deterministic function of the repository. `--json` prints the `entries.drift` result; `--fail` exits with status 2 when an entry is listed. Without a baseline (no remote, no merge base, no `--base`) drift says so instead of reporting no drift, and `--fail` exits non-zero. [`kontext ci`](../guides/07-ci.md) runs it in CI.
 - **Gate with it, not with a hook.** A team that commits with jj, or with clients that skip git hooks, gets no commit-time check, so the gate belongs in the team's check script (`bun run check`, `make check`) or CI: `kontext drift --fail` (or `kontext ci --strict`). kontext adds no hook that blocks a commit for drift.
 
 ## Verifications: the ledger {#verifications}
@@ -113,10 +116,13 @@ How an entry was looked at:
 
 | Kind | Written by | Counts as verified |
 | --- | --- | --- |
-| `read` | `kontext confirm` (a person at the terminal) | yes |
-| `agent` | `ctx_confirm`, and `drafts.confirm` unless it says `kind: read` | no: a stamp, kept and shown as one |
-| `bulk` | any confirmation of more than five entries in one call | no: a stamp |
-| `verify` | `kontext verify`, `ctx_verify`, `drafts.verify` | when the command passed |
+| `read` | `kontext confirm` on a terminal; `drafts.confirm` with `kind: read` (recorded `by: application:<name>`) | yes |
+| `agent` | `ctx_confirm`; `kontext confirm` without a terminal; `drafts.confirm` by default | no: a stamp, kept and shown as one |
+| `bulk` | any confirmation of more than five entries in one call; `kontext confirm --migrate-legacy` | no: a stamp |
+| `verify` | `kontext verify`, `ctx_verify`, `drafts.verify` (pinned commands only) | when the command passed |
+| `cache` | not written: a `checked:` date with no ledger line | no |
+
+MCP never writes `read`. `kontext confirm --kind read` forces it without a terminal and warns. A terminal is not proof that a person read the entry; it is the best signal a command line has, and the ledger records which path wrote the line.
 
 `kontext confirm <id…> --because "…"` (`because` in the tool and the API) stores the reason. The entry's `checked:` is still written and staged as before, so older readers keep working; it is a cache of the ledger, never the proof. When the cache is behind its ledger (a merge took the older side, or the line came from another branch), `kontext check` warns (`checked date … behind its ledger; run kontext confirm --repair`) and **`kontext confirm --repair`** rewrites the cached `checked:` of every such active entry from the ledger and stages the files. A `verify` line is not a confirmation and leaves the cache alone.
 
@@ -128,7 +134,7 @@ An entry may name one shell command that shows it still holds:
 verify: cargo test -p billing totals_are_integer_cents
 ```
 
-One line, at most 500 characters (a longer check belongs in a script the command calls); `kontext check` refuses anything else. `kontext verify <id…>` (`ctx_verify`, `drafts.verify`) runs it with `sh -c` from the repository root, stdin closed, stopped after 120 seconds (`KONTEXT_VERIFY_TIMEOUT_SECS` changes it), and appends a `verify` line with the outcome and the commit it ran against. It returns whether it passed, the exit code and the last 2 KB of the output. The command of a superseded or retired entry never runs, and an entry without `verify:` is refused: read it and confirm it instead. Machine-observable facts are best verified this way; what someone intended is confirmed by a person.
+One line, at most 500 characters (a longer check belongs in a script the command calls); `kontext check` refuses anything else. The command is code from the repository, so it runs only after you pin its text from a terminal: `kontext trust --verify <id>` (or `--all`). Without a pin `kontext verify <id…>` (`ctx_verify`, `drafts.verify`) runs nothing and returns `untrusted_verify` with the command; over MCP the agent may run it in its own sandbox and record the result with `ctx_confirm`. A pinned command runs with `sh -c` from the repository root, stdin closed, an environment allowlist, stopped after 120 seconds (`KONTEXT_VERIFY_TIMEOUT_SECS` changes it), and appends a `verify` line with the outcome, the commit it ran against and whether the tree was dirty. It returns whether it passed, the exit code and the redacted last 2 KB of the output. See [Security](./08-security.md#verify) for what the pin covers and what it does not. The command of a superseded or retired entry never runs, and an entry without `verify:` is refused: read it and confirm it instead. Machine-observable facts are best verified this way; what someone intended is confirmed by a person.
 
 ### What changed since {#since}
 
@@ -136,10 +142,22 @@ For each entry that governs the focus paths, [`ctx_brief`](./04-context-layers.m
 
 ```text
 - [prices-are-integer-cents] Prices are integer cents — Every amount is an integer number of cents.
-  verified read at a7450a5 (2026-10-27); 3 commits on its paths since: feat(billing): VAT per line; fix(billing): round totals; …
+  read by Jane Doe at a7450a5 (2026-10-27); 3 commits on its paths since: feat(billing): VAT per line; fix(billing): round totals; …
 ```
 
-The count starts at the commit the verification named, or at the commit that landed its ledger line if that is newer (the change it was reviewed with), and takes non-merge commits on the entry's governed files, knowledge files left out. A verification known only from a `checked:` date counts as freshness does. An entry never verified says `never verified`. When any listed entry has commits since, the brief adds once: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Unlike freshness there is no threshold: one commit on a governed path is already a reason to read.
+The first words say what the last look was, and "verified" is never used for a stamp:
+
+| Line | Meaning |
+| --- | --- |
+| `read by <who> at <commit>` | a person confirmed it (a `read` line) |
+| `check passed at <commit>` | its pinned `verify` command passed |
+| `stamped by agent at <commit>` | an agent confirmed it: a look, not a verification |
+| `bulk stamp at <commit>` | confirmed with more than five others at once |
+| `checked <date> (cache)` | only a `checked:` date, no ledger line |
+| `CHECK FAILING at <commit>` | the newest `verify` failed; shown beside the last look, which it does not replace |
+| `never verified` | no look at all |
+
+The count is by ancestry: the non-merge commits on the entry's governed files (knowledge files left out) that `HEAD` reaches and the commit of the look does not. A branch developed before a confirmation and merged after it is counted. The look's commit is the one the ledger line named, or the commit that landed the line if that is newer. Time is used only when there is no such commit. When any listed entry has commits since, the brief adds once: *Read these before changing their paths: an entry that limits the direction you are about to take outranks a fresh one.* Unlike freshness there is no threshold: one commit on a governed path is already a reason to read.
 
 The machine API returns the same with every entry (`entries.list`, `entries.get`, `entries.governing`, `entries.drift`): `verification`, `since`, `verify` and `premises`. See [the application API](../reference/05-application-api.md#verification).
 
@@ -156,7 +174,7 @@ Sometimes an agent finds that recorded knowledge no longer holds. It says so wit
 - **retire** the entry (`retire=[id]`): its file gets status `deprecated` and a `## Retired` note with the challenge as the reason, staged;
 - **replace** it: capture the new rule with `supersedes: [id]` and promote it.
 
-Either takes the challenge out of the inbox with the commit. If the entry changed since it was challenged, the report says so; drop a challenge that turned out wrong. A challenge is resolved only when the change is reviewed and merged, not when one worktree prepared it. Shared challenges with counting of independent voices belong to an application such as Peer Hub; kontext keeps the local, reviewed part.
+Either takes the challenge out of the inbox with the commit. If the entry changed since it was challenged, the report says so; drop a challenge that turned out wrong. A challenge is resolved only when the change is reviewed and merged, not when one worktree prepared it: it stays *resolving* until a new blob of the entry lands in `HEAD`, so a reset or an abandoned branch does not lose it. Shared challenges with counting of independent voices belong to an application such as Peer Hub; kontext keeps the local, reviewed part.
 
 ## Review
 

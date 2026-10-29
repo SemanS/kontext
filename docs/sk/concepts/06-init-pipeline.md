@@ -10,7 +10,7 @@
 [5/5] deepen   purpose · mod:<module> · dec:<area> · refresh:<module> tasks
 ```
 
-Opakované spustenie `kontext init` je bezpečné: generované fakty sa obnovia, všetko, čo napísali ľudia alebo agenti, zostane. Kým bootstrap čaká na svojej vetve na review, agenti na iných vetvách sa dozvedia, že existuje tam (brief), a `ctx_init` nezaloží druhý.
+Opakované spustenie `kontext init` je bezpečné: generované fakty sa obnovia, všetko, čo napísali ľudia alebo agenti, zostane, vrátane ručne upravených `paths`, `tags` a `summary` dokumentov modulov. Dva behy nad tým istým `HEAD` dajú rovnaké moduly aj id zhlukov. Kým bootstrap čaká na svojej vetve na review, agenti na iných vetvách sa dozvedia, že existuje tam (brief), a `ctx_init` nezaloží druhý.
 
 ## 1 · scan
 
@@ -36,7 +36,9 @@ Vyťaží posledných `init.history_max_commits` commitov bez merge (3000):
 - **churn** pre súbory a moduly a dátum poslednej zmeny,
 - **konvencie**: podiel Conventional Commits, kľúče tiketov v predmetoch.
 
-Commity, ktoré sa dotýkajú len existujúcich ADR alebo `.ai/`, sa preskočia (už sú znalosťami) a trailery s autorstvom (`Co-authored-by`, …) sa odstránia. Keď prah prejde málo commitov (história písaná ako pravidlá, nie „rozhodli sme sa“), doplnia sa ďalšie najlepšie až do štvrtiny histórie. Kandidáti sa zhlukujú podľa modulov; modul s jedným či dvoma sa pridá k nadradenému modulu a veľký zhluk sa rozdelí na chronologické časti po najviac 8 commitoch. Najsilnejšie zhluky sa stanú úlohami `dec:` (`init.max_decision_tasks`, predvolene 20).
+Slovné signály vyššie sú anglické. Jazykovo neutrálne signály (výmeny závislostí, typy Conventional Commits, značky breaking, dĺžka tela, trailery `Decision:`) fungujú v každom jazyku; slová v jazyku tvojho tímu pridáš cez `[init] decision_words` (napríklad `rozhodli`, `namiesto`, `prechádzame`). Commity botov (dependabot, renovate, autori končiaci `[bot]` a `[init] bot_authors`) sa do skórovania nerátajú, takže release notes sa nevydávajú za rozhodnutia.
+
+Commity, ktoré sa dotýkajú len existujúcich ADR alebo `.ai/`, sa preskočia (už sú znalosťami), rovnako commity, ktoré existujúci záznam cituje v `commits` alebo ktoré nesú trailer `Decision:`; trailery s autorstvom (`Co-authored-by`, …) sa odstránia. Keď prah prejde málo commitov (história písaná ako pravidlá, nie „rozhodli sme sa“), doplnia sa ďalšie najlepšie až do štvrtiny histórie. Kandidáti sa zhlukujú podľa modulov; modul s jedným či dvoma sa pridá k nadradenému modulu a veľký zhluk sa rozdelí na chronologické časti po najviac 8 commitoch. Najsilnejšie zhluky sa stanú úlohami `dec:` (`init.max_decision_tasks`, predvolene 20).
 
 ## 3 · render
 
@@ -45,13 +47,13 @@ Commity, ktoré sa dotýkajú len existujúcich ADR alebo `.ai/`, sa preskočia 
 - `.ai/architecture/modules/<module>.md` pre prvých `init.max_module_docs` modulov (40) podľa poradia, so zástupnou sekciou *Overview* a generovanými faktami: druh, jazyk, veľkosť, manifesty, závislosti, závislé moduly, kľúčové súbory, exporty, balíčky, dokumenty, aktivita,
 - `.ai/README.md` a `.ai/.gitattributes`.
 
-Generované fakty sú medzi `<!-- kontext:facts:start … -->` a `<!-- kontext:facts:end -->`. Pri ďalších spusteniach sa prepisuje len tento blok.
+Generované fakty sú medzi `<!-- kontext:facts:start … -->` a `<!-- kontext:facts:end -->`. Pri ďalších spusteniach sa prepisuje len tento blok; `paths`, `tags` a `summary` vo front matter, ktoré niekto upravil, ostanú. Fakty označia nesledované súbory a nesú dátum, kedy vznikli.
 
 Moduly sa zoraďujú podľa druhu (aplikácie a služby prvé), veľkosti, počtu modulov, ktoré od nich závisia, churnu a toho, či majú dokumentáciu.
 
 ## 4 · wire
 
-Nainštaluje [git hooky](./07-git-integration.md), ak nepoužiješ `--no-hooks`. `--connect claude,agents-md` pripojí aj klientov agentov.
+Nainštaluje [git hooky](./07-git-integration.md), ak nepoužiješ `--no-hooks`. Odmietnutie hookov pre klon zapíše len táto výslovná voľba; bootstrap cez `ctx_init` alebo API `setup` hooky preskočí bez zapísania odmietnutia. `--connect claude,agents-md` pripojí aj klientov agentov.
 
 ## 5 · deepen
 
@@ -66,7 +68,7 @@ Sémantická časť je rozdelená na úlohy, ktoré agent zvládne v jednom krok
 
 Poradie: purpose → prvých osem modulov → zhluky rozhodnutí → ostatné moduly → obnovy.
 
-**Postup žije v súboroch.** Dokument modulu nesie `deepened` a `deepened_fingerprint`; rozhodnutia nesú commity, z ktorých vznikli; preskočené úlohy sa zapisujú do spoločného adresára klonu. Zastaviť teda môžeš kedykoľvek, pokračovať v inom worktree alebo to po pulle dokončí kolega. Keď sa súbory modulu zmenia natoľko, že sa zmení jeho odtlačok, objaví sa úloha `refresh:`.
+**Postup žije v súboroch.** Dokument modulu nesie `deepened` a `deepened_fingerprint`; rozhodnutia nesú commity, z ktorých vznikli. Stav úloh `dec:` sa odvodzuje z gitu: zhluk, ktorého commity cituje záznam alebo pokrýva trailer `Decision:`, sa znova neplánuje, a commity, ktoré pokryla dokončená alebo preskočená úloha `dec:`, sa držia v logu pokrytých commitov v úložisku, commitnutom s bootstrapom. Kolega po pulle aj čerstvý klon tak vidia rovnaký front. `kontext init skip <task>` funguje pre každú úlohu vrátane `mod:<module>`. Zastaviť môžeš kedykoľvek, pokračovať v inom worktree alebo to po pulle dokončí kolega. Keď sa súbory modulu zmenia natoľko, že sa zmení jeho odtlačok, objaví sa úloha `refresh:`.
 
 Kto robí prácu:
 
