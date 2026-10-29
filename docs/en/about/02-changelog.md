@@ -2,6 +2,15 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## Unreleased
+
+**Additions amend entries in place, new entries link what they build on, and changes between commits are listed.**
+
+- **`drafts.extend`** drafts an entry with a finding added to its body: same id, file and fields, the old body beside it, nothing written. With `llm` the model folds the finding in; otherwise it is added as written under `## Added <date>` (`as_written: true`). Conventions, learnings and incidents only: a decision is refused with `decision_not_amended`, since it changes only by supersession. A moved revision is `stale_entry`. See [Adding to an entry](../reference/05-application-api.md#extend).
+- **`drafts.stage`** takes `amends: {id, revision}` to write that body into the entry's own file, with the front matter kept byte for byte (exclusive with `supersedes`), and `entry.extends: [ids]` to link a new entry to the entries it builds on (`unknown_entry` for an id the store lacks). See [Amending and linking](../reference/05-application-api.md#amend).
+- **`entries.changed {base, head}`** lists the committed entries added, revised, superseded (with `superseded_by`) or deprecated between two commits, without a model. See [Changed entries](../reference/05-application-api.md#changed).
+- `entries.related` candidates carry their `revision`, the value the two operations above take. `status.capabilities` lists `drafts.extend`, `entries.changed`, `drafts.stage.amends` and `drafts.stage.extends`. API version stays 1.
+
 ## 0.8.0 (2026-10-28)
 
 **Skills for knowledge maintenance, and flows in the brief.**

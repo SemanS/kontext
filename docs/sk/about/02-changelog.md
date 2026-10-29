@@ -2,6 +2,15 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## Nevydané
+
+**Doplnenia upravia záznam na mieste, nové záznamy sa prepoja s tým, na čom stavajú, a zmeny medzi commitmi sa dajú vypísať.**
+
+- **`drafts.extend`** pripraví návrh záznamu s poznatkom doplneným do tela: rovnaké id, súbor aj polia, staré telo vedľa, nič sa nezapíše. S `llm` poznatok zapracuje model; inak sa pridá doslovne pod `## Added <dátum>` (`as_written: true`). Len konvencie, poznatky a incidenty: rozhodnutie sa odmietne s `decision_not_amended`, lebo sa mení len nahradením. Posunutá revízia je `stale_entry`. Pozri [Doplnenie záznamu](../reference/05-application-api.md#extend).
+- **`drafts.stage`** prijíma `amends: {id, revision}`, ktoré zapíše toto telo do vlastného súboru záznamu a frontmatter ponechá bajt po bajte (vylučuje sa so `supersedes`), a `entry.extends: [ids]`, ktoré prepojí nový záznam so záznamami, na ktorých stavia (`unknown_entry` pre id, ktoré úložisko nemá). Pozri [Doplnenie a prepojenie](../reference/05-application-api.md#amend).
+- **`entries.changed {base, head}`** vypíše commitnuté záznamy pridané, upravené, nahradené (so `superseded_by`) alebo vyradené medzi dvoma commitmi, bez modelu. Pozri [Zmenené záznamy](../reference/05-application-api.md#changed).
+- Kandidáti z `entries.related` nesú `revision`, hodnotu, ktorú obe operácie vyššie prijímajú. `status.capabilities` uvádza `drafts.extend`, `entries.changed`, `drafts.stage.amends` a `drafts.stage.extends`. Verzia API ostáva 1.
+
 ## 0.8.0 (2026-10-28)
 
 **Skills na údržbu znalostí a flows v briefe.**

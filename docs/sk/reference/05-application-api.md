@@ -47,22 +47,24 @@ ak ju nemožno použiť, môže ponechať posledný úspešný snapshot s jasný
 | `entries.export` | `revision`, `review_ref`, `paths?` | commitnuté záznamy s presným Markdownom a hashmi blobov |
 | `entries.related` | `text`, `paths?`, `exclude_ids?`, `llm?` | najviac päť súvisiacich záznamov s dôvodom; s `llm` aj vzťahy podľa modelu ([podrobnosti](#related)) |
 | `entries.drift` | `base?`, `head?`, `kinds?` | záznamy, ktorých riadené súbory sa v rozsahu zmenili bez pohľadu na záznam ([podrobnosti](#drift)) |
+| `entries.changed` | `base`, `head`, `kinds?` | commitnuté záznamy pridané, upravené, nahradené alebo vyradené medzi dvoma commitmi ([podrobnosti](#changed)) |
 | `inbox.list` | `state?`: `pending` (predvolene), `dismissed`, `promoted`, `all` | kandidáti a zachovaná lokálna história |
 | `inbox.drop` | `id`, `reason?` | zamietnutie lokálneho kandidáta |
 | `inbox.verify` | `id`, `verify` (`""` ho odstráni) | `id`, `verify` a `entry`: návrh s príkazom, ktorý ho dokázal; povýšenie ho zachová ([podrobnosti](#inbox-verify)) |
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | kandidát v inboxe, poznámky, počet redakcií, `evidence` a `related_entries` |
-| `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?` | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
+| `drafts.stage` | `entry` alebo `candidate_id`, `operation_id`, `source?`, `requested_path?`, `amends?` ([podrobnosti](#amend)) | záznam, cesta, staging, poznámky, príznak opakovania, `evidence`, `related_entries` a `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | záznam stagnutý so stavom `deprecated` a poznámkou `## Retired` ([podrobnosti](#retire)) |
 | `drafts.confirm` | `id` alebo `ids`, `because?`, `kind?`; alebo `repair: true` | `id`, `path`, `checked` a `ledger`: záznam potvrdený teraz, jeho riadok v denníku, oboje stagnuté ([podrobnosti](#confirm)) |
 | `drafts.verify` | `id`, `because?` | výsledok príkazu `verify` záznamu, zapísaný do denníka a stagnutý ([podrobnosti](#verify)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | návrh, ktorý záznam nahrádza; nič nezapisuje ([podrobnosti](#revise)) |
+| `drafts.extend` | `entry_id`, `entry_revision`, `text`, `llm?` | záznam s poznatkom doplneným do tela, rovnaké id aj súbor; nič nezapisuje ([podrobnosti](#extend)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extrahovaní kandidáti bez zápisu |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulovaný záznam, poznámky a `related_entries` bez zápisu |
 | `guidance.propose` | `kept`, `dismissed`, `missed`, `current?`, `profile_tag?`, `llm?` | navrhnutá konvencia bez stagingu |
 | `operations.get` | `operation_id`, `fingerprint?` | pôvodný výsledok dokončeného zápisu alebo chyba nedokončenej/konfliktnej operácie |
 
 Objekt `entry` obsahuje `kind`, `title`, `body` a voliteľné `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, `commits`, `review_by`, `verify` a `evidence` ([nižšie](#maintenance)). `verify` je príkaz, ktorý
+`supersedes`, `extends`, `visibility`, `commits`, `review_by`, `verify` a `evidence` ([nižšie](#maintenance)). `verify` je príkaz, ktorý
 záznam dokázal: jeden riadok s najviac 500 znakmi, inak `invalid_input`. Cesty zostávajú po celý čas poľom. Formulovanie vybraného
 poznatku je oddelené od hľadania nových poznatkov, aby deduplikácia neodstránila to, čo človek
 výslovne vybral. Extrakcia a návrh konvencie vyžadujú použiteľný LLM; formulovanie bez vybraného
@@ -103,7 +105,9 @@ sessions nemajú v Gite čo robiť.
 `entries.related {text, paths?, exclude_ids?, llm?}` odpovie, ako text súvisí so zaznamenanými
 záznamami. Bez modelu vráti `candidates`: najviac päť aktívnych záznamov s podobným znením (lokálne
 BM25, blízko najlepšieho zásahu) alebo s prekrývajúcimi sa `paths`, každý ako
-`{id, title, kind, status?, reason, label}` s `label: "related, check"`. S `llm: true` (alebo menom
+`{id, title, kind, status?, reason, label, revision}` s `label: "related, check"`. `revision` je krátky
+hash Markdownu záznamu: klient ho vráti ako `entry_revision` pri `drafts.extend` alebo `amends.revision`
+pri `drafts.stage`. S `llm: true` (alebo menom
 adaptéra) sa model raz opýta otázkou, v ktorej je vzťah aj cieľ spolu; `relations` je zoznam
 `{relation, id?, title?, label}`, kde `relation` je `new`, `same`, `extends`, `conflicts` alebo
 `uncertain`, a platiť ich môže viac. Odpoveď o zázname, ktorý model nevidel, sa zahodí; ak nič
@@ -275,6 +279,71 @@ cesty a tagy záznamu, nastaví `supersedes: [entry_id]` a pri rozhodnutí má s
 ukáže človeku a stagne cez `drafts.stage`. Zastaraná `entry_revision` alebo zmenený súbor je
 `operation_conflict`, chýbajúci model `model_unavailable` a model, ktorý vráti staré telo nezmenené,
 `invalid_model_output`.
+
+### Doplnenie záznamu {#extend}
+
+Pribudlo vo verzii 0.9.0 (`status.capabilities` uvádza `drafts.extend`, `drafts.stage.amends` a
+`drafts.stage.extends`).
+
+```json
+{"entry_id":"2026-10-20-relay-tests-fake-the-node","entry_revision":"<revision kandidáta>","text":"Falošný server patrí za uzol.","llm":true}
+```
+
+`drafts.extend {entry_id, entry_revision, text, llm?}` pripraví návrh záznamu s doplneným poznatkom.
+Nič nezapisuje. Výsledok je `{entry, old_body, as_written, notes, amends}`: `entry` si zachová id, súbor,
+druh, cesty, tagy aj ostatné polia a má nové telo; `old_body` je telo, ktoré nahrádza; `amends` je
+`{id, revision}` pre `drafts.stage`. S `llm: true` (alebo menom adaptéra) model poznatok zapracuje do
+tela. Bez `llm`, bez modelu, pri chybe modelu alebo keď model vráti staré telo, sa poznatok pridá
+doslovne pod `## Added <YYYY-MM-DD>`, `as_written` je true a `notes` hovorí prečo. `text` má najviac
+4000 znakov.
+
+Dopĺňajú sa len konvencie, poznatky (learning) a incidenty. Rozhodnutie (alebo `adr`) sa odmietne s
+`decision_not_amended`: rozhodnutie sa mení len nahradením, preto sa poznatok, ktorý na ňom stavia,
+uloží ako nový záznam, ktorý ho `extends`. Iný druh je `invalid_input`, neaktívny záznam
+`operation_conflict`. `entry_revision` je `revision` kandidáta z `entries.related`, commit s rovnakým
+obsahom súboru ako HEAD alebo blob súboru; čokoľvek iné je `stale_entry` (porovnajte znova). Súbor s
+lokálnymi, stagnutými alebo necommitnutými zmenami je `operation_conflict`.
+
+### Doplnenie a prepojenie pri stagingu {#amend}
+
+```json
+{"operation_id":"amend-42","amends":{"id":"2026-10-20-relay-tests-fake-the-node","revision":"<revision kandidáta>"},"entry":{"body":"<telo z drafts.extend>"}}
+```
+
+`drafts.stage` s `amends: {id, revision}` zapíše `entry.body` do vlastného súboru záznamu a stagne ho;
+zvyšok `entry` sa ignoruje. Všetko pred telom (frontmatter alebo polia ADR, nadpis) ostane bajt po
+bajte, takže diff v review je len telo. Revízia sa overí znova ako pri `drafts.extend`
+(`stale_entry`, `decision_not_amended`, `operation_conflict`); telo zhodné so súčasným je
+`invalid_input`. `amends` spolu so `supersedes` alebo `extends` v tom istom návrhu, alebo s
+`candidate_id`, je `invalid_input`. Výsledok je bežný výsledok stagingu s `amended: <id>`; námietky
+voči záznamu ostávajú otvorené, doplnenie na ne neodpovedá. Vyžaduje `operation_id` a opakuje sa ako
+každý staging.
+
+`entry.extends: [<ids>]` pri novom zázname ho prepojí so záznamami, na ktorých stavia: id (celé id,
+jednoznačný prefix, číslo ADR alebo cesta) sa vyhodnotia a zapíšu do frontmatteru ako
+`extends: [...]`, najviac 20. Id, ktoré úložisko nemá, je `unknown_entry`. Keď sa niektorý z nich
+neskôr nahradí alebo vyradí, označí sa zmenený predpoklad ([overenie](#verification)). V `extra` sa
+`extends` neprijíma.
+
+### Zmenené záznamy {#changed}
+
+Pribudlo vo verzii 0.9.0 (`status.capabilities` uvádza `entries.changed`).
+
+`entries.changed {base, head, kinds?}` porovná záznamy commitnuté v dvoch revíziách, bez modelu, a vráti
+`{base, head, changes}` s vyhodnotenými commitmi. Každá zmena je
+`{id, kind, title, file, paths, revision, change, superseded_by?}`, zoradené podľa id, kde `change` je:
+
+- `added`: id v `base` nie je;
+- `revised`: rovnaké id s iným obsahom (doplnený záznam); samotná zmena `checked` je pohľad, nie
+  úprava, a vynechá sa;
+- `superseded`: aktívny v `base`, v `head` nahradený; `superseded_by` uvádza záznamy v `head`, ktoré
+  ho nahrádzajú;
+- `deprecated`: aktívny v `base`, potom vyradený (deprecated, retired, rejected) alebo odstránený
+  (`removed: true`).
+
+`revision` je revízia záznamu v `head` (pri odstránenom v `base`) v tvare, aký dáva `entries.related`.
+`kinds` sú predvolene rozhodnutia, konvencie, poznatky a incidenty. Obe strany čítajú commitnuté
+stromy: pracovný strom ani stagnuté súbory do odpovede nepatria.
 
 ## Vloženie do Rust aplikácie {#rust-embedding}
 

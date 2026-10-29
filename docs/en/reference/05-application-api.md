@@ -48,22 +48,24 @@ explicit stale state when it cannot be refreshed.
 | `entries.export` | `revision`, `review_ref`, `paths?` | committed entries with exact Markdown, revision and Git blob hashes |
 | `entries.related` | `text`, `paths?`, `exclude_ids?`, `llm?` | up to five related entries with reasons; with `llm`, the model's relations ([details](#related)) |
 | `entries.drift` | `base?`, `head?`, `kinds?` | entries whose governed files changed in the range without a look at the entry ([details](#drift)) |
+| `entries.changed` | `base`, `head`, `kinds?` | committed entries added, revised, superseded or deprecated between two commits ([details](#changed)) |
 | `inbox.list` | `state?`: `pending` (default), `dismissed`, `promoted`, `all` | local candidates and retained workflow history |
 | `inbox.drop` | `id`, `reason?` | dismiss a local candidate |
 | `inbox.verify` | `id`, `verify` (`""` clears it) | `id`, `verify` and `entry`: the draft with the command that proved it; promotion keeps it ([details](#inbox-verify)) |
 | `drafts.capture` | `entry`, `source?`, `operation_id?` | inbox candidate, notes, redaction count, `evidence` and `related_entries` |
-| `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?` | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
+| `drafts.stage` | `entry` or `candidate_id`, `operation_id`, `source?`, `requested_path?`, `amends?` ([details](#amend)) | entry, path, staging result, notes, replay flag, `evidence`, `related_entries` and `resolved_challenges` |
 | `drafts.retire` | `operation_id`, `entry_id`, `entry_revision`, `reason` | the entry staged with status `deprecated` and a `## Retired` note ([details](#retire)) |
 | `drafts.confirm` | `id` or `ids`, `because?`, `kind?`; or `repair: true` | `id`, `path`, `checked` and `ledger`: the entry confirmed now, its ledger line appended, both staged ([details](#confirm)) |
 | `drafts.verify` | `id`, `because?` | the outcome of the entry's `verify` command, recorded in the ledger and staged ([details](#verify)) |
 | `drafts.revise` | `entry_id`, `entry_revision`, `objections`, `llm?` | a draft that supersedes the entry; no writes ([details](#revise)) |
+| `drafts.extend` | `entry_id`, `entry_revision`, `text`, `llm?` | the entry with a finding added to its body, same id and file; no writes ([details](#extend)) |
 | `drafts.extract` | `text`, `source?`, `llm?`, `max?` | extracted candidates and notes; no capture or staging |
 | `drafts.formalize` | `entry`, `sources?`, `context?`, `llm?` | formulated entry, notes and `related_entries`; no capture or staging |
 | `guidance.propose` | `kept`, `dismissed`, `missed`, `current?`, `profile_tag?`, `llm?` | proposed convention; no staging |
 | `operations.get` | `operation_id`, `fingerprint?` | the original completed write result, or an explicit incomplete/conflict error |
 
 The `entry` object includes `kind`, `title`, `body`, and optional `summary`, `paths`, `tags`, `status`,
-`supersedes`, `visibility`, `commits`, `review_by`, `verify` and `evidence` ([below](#maintenance)). `verify` is the command that
+`supersedes`, `extends`, `visibility`, `commits`, `review_by`, `verify` and `evidence` ([below](#maintenance)). `verify` is the command that
 proved the entry: one line of at most 500 characters, else `invalid_input`. Keep paths as arrays throughout the workflow. A selected
 finding can be formalized separately from extracting new findings, so deduplication does not discard
 something the user explicitly chose to keep. Extraction and guidance generation require a usable LLM;
@@ -104,8 +106,9 @@ not belong in Git.
 
 `entries.related {text, paths?, exclude_ids?, llm?}` answers how a text relates to recorded entries.
 Without a model it returns `candidates`: at most five active entries that read alike (local BM25,
-near the best hit) or govern overlapping `paths`, each `{id, title, kind, status?, reason, label}`
-with `label: "related, check"`. With `llm: true` (or an adapter name) one model question names the
+near the best hit) or govern overlapping `paths`, each `{id, title, kind, status?, reason, label, revision}`
+with `label: "related, check"`. `revision` is a short hash of the entry's Markdown: pass it back as
+`entry_revision` of `drafts.extend` or `amends.revision` of `drafts.stage`. With `llm: true` (or an adapter name) one model question names the
 relation and the entry together; `relations` is a list of `{relation, id?, title?, label}` where
 `relation` is `new`, `same`, `extends`, `conflicts` or `uncertain` and several may apply. An answer
 about an entry the model was not shown is dropped; with nothing left the answer is `uncertain`.
@@ -280,6 +283,70 @@ the entry's kind, paths and tags, sets `supersedes: [entry_id]` and is `proposed
 decision; the client shows it to a person and stages it with `drafts.stage`. A stale
 `entry_revision` or a dirty file is `operation_conflict`, no model is `model_unavailable`, and a
 model that returns the old body unchanged is `invalid_model_output`.
+
+### Adding to an entry {#extend}
+
+Added in 0.9.0 (`status.capabilities` lists `drafts.extend`, `drafts.stage.amends` and
+`drafts.stage.extends`).
+
+```json
+{"entry_id":"2026-10-20-relay-tests-fake-the-node","entry_revision":"<candidate revision>","text":"Put the fake server behind the node.","llm":true}
+```
+
+`drafts.extend {entry_id, entry_revision, text, llm?}` drafts the entry with a finding added to it. It
+writes nothing. The result is `{entry, old_body, as_written, notes, amends}`: `entry` keeps the id,
+file, kind, paths, tags and every other field and has the new body; `old_body` is the body it
+replaces; `amends` is `{id, revision}` to pass to `drafts.stage`. With `llm: true` (or an adapter name)
+the model folds the finding into the body. Without `llm`, without a model, when the model fails or
+when it returns the old body, the finding is added as written under `## Added <YYYY-MM-DD>`,
+`as_written` is true and `notes` says why. `text` holds at most 4000 characters.
+
+Only conventions, learnings and incidents are amended. A decision (or `adr`) is refused with
+`decision_not_amended`: a decision changes only by supersession, so a finding that builds on one is
+kept as a new entry that `extends` it. Another kind is `invalid_input`, an inactive entry
+`operation_conflict`. `entry_revision` is the candidate's `revision` from `entries.related`, a commit
+that holds the same file content as HEAD, or the file's blob; anything else is `stale_entry`
+(compare again). A file with local, staged or uncommitted changes is `operation_conflict`.
+
+### Amending and linking on staging {#amend}
+
+```json
+{"operation_id":"amend-42","amends":{"id":"2026-10-20-relay-tests-fake-the-node","revision":"<candidate revision>"},"entry":{"body":"<the body drafts.extend returned>"}}
+```
+
+`drafts.stage` with `amends: {id, revision}` writes `entry.body` into that entry's own file and stages
+it; the rest of `entry` is ignored. Everything before the body (front matter or ADR fields, the title)
+stays byte for byte, so the review diff is the body. The revision is checked again as in
+`drafts.extend` (`stale_entry`, `decision_not_amended`, `operation_conflict`); a body equal to the
+current one is `invalid_input`. `amends` with `supersedes` or `extends` on the same draft, or with
+`candidate_id`, is `invalid_input`. The result is the usual staging result with `amended: <id>`;
+challenges against the entry stay open, since an addition does not answer them. It needs an
+`operation_id` and replays like any staging.
+
+`entry.extends: [<ids>]` on a new entry links it to the entries it builds on: the ids (a full id, a
+unique prefix, an ADR number or a path) are resolved and written as `extends: [...]` in its front
+matter, at most 20. An id the store does not have is `unknown_entry`. A changed premise is flagged
+when one of them is later superseded or retired ([verification](#verification)). `extends` is not
+accepted in `extra`.
+
+### Changed entries {#changed}
+
+Added in 0.9.0 (`status.capabilities` lists `entries.changed`).
+
+`entries.changed {base, head, kinds?}` compares the entries committed at two revisions, without a
+model, and returns `{base, head, changes}` with the resolved commits. Each change is
+`{id, kind, title, file, paths, revision, change, superseded_by?}`, ordered by id, where `change` is:
+
+- `added`: the id is not at `base`;
+- `revised`: the same id with other content (an amended entry); a change of `checked` alone is a look,
+  not a revision, and is left out;
+- `superseded`: active at `base`, superseded at `head`; `superseded_by` lists the entries at `head`
+  that supersede it;
+- `deprecated`: active at `base`, then deprecated, retired or rejected, or removed (`removed: true`).
+
+`revision` is the entry's revision at `head` (for a removed entry, at `base`), in the form
+`entries.related` gives. `kinds` defaults to decisions, conventions, learnings and incidents. Both
+sides read committed trees: the working tree and staged files are never part of the answer.
 
 ## Rust embedding
 
