@@ -46,7 +46,14 @@ static RS_SYMBOLS: LazyLock<Vec<Pat>> = LazyLock::new(|| {
         p(r"(?m)^\s*pub(?:\([^)]*\))?\s+(?:struct|enum|trait|type)\s+([A-Za-z_]\w*)", "type", 1),
     ]
 });
-static RS_IMPORTS: LazyLock<Vec<Regex>> = LazyLock::new(|| vec![Regex::new(r"(?m)^\s*(?:pub\s+)?use\s+([A-Za-z_]\w*)::").unwrap()]);
+/// The whole path (`crate::init::scan`), so `crate::` imports can resolve to a module.
+static RS_IMPORTS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    vec![
+        Regex::new(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)::").unwrap(),
+        // `use crate::init;` names the module itself
+        Regex::new(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+(crate::[A-Za-z_]\w*)\s*(?:;|\s+as\s)").unwrap(),
+    ]
+});
 static GO_SYMBOLS: LazyLock<Vec<Pat>> = LazyLock::new(|| {
     vec![p(r"(?m)^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)", "func", 1), p(r"(?m)^type\s+([A-Z]\w*)\s+(?:struct|interface)", "type", 1)]
 });
@@ -88,6 +95,10 @@ pub fn extract(lang: &str, text: &str) -> FileFacts {
     for re in imps {
         for c in re.captures_iter(text) {
             if let Some(m) = c.get(1) {
+                // a bare `crate` / `self` / `super` names no module
+                if lang == "Rust" && matches!(m.as_str(), "crate" | "self" | "super") {
+                    continue;
+                }
                 f.imports.push(m.as_str().to_string());
             }
         }
@@ -115,6 +126,8 @@ mod tests {
         let f = extract("Rust", rs);
         assert_eq!(f.symbols, vec!["fn run", "type Parser"]);
         assert_eq!(f.imports, vec!["storage_core"]);
+        let f = extract("Rust", "use crate::init::scan::Inventory;\nuse crate::signals;\npub(crate) use crate::store::{Entry, Store};\n");
+        assert_eq!(f.imports, vec!["crate::init::scan", "crate::signals", "crate::store"]);
         let py = "from shop.io import read\nimport os\ndef main():\n    pass\ndef _hidden(): pass\nclass Agent:\n    pass\n";
         let f = extract("Python", py);
         assert_eq!(f.symbols, vec!["def main", "class Agent"]);

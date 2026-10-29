@@ -10,7 +10,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Inventory {
     pub generated_at: String,
+    /// Files scanned: tracked plus untracked-but-not-ignored.
     pub files: usize,
+    /// How many of `files` are untracked (not in the index): facts name them apart.
+    #[serde(default)]
+    pub untracked_files: usize,
     pub source_files: usize,
     pub lines: usize,
     pub languages: Vec<LangStat>,
@@ -567,6 +571,10 @@ fn adr_style(repo: &Repo, files: &[&String]) -> (String, String) {
 pub fn scan(repo: &Repo, exclude_extra: &[String], min_module_files: usize, key_files_max: usize) -> Result<Inventory> {
     let mut inv = Inventory { generated_at: util::now_iso(), ..Default::default() };
     let tracked = repo.tracked_files()?;
+    let untracked: BTreeSet<String> = repo
+        .git_bytes(&["ls-files", "-z", "--others", "--exclude-standard"])
+        .map(|b| b.split(|c| *c == 0).filter(|r| !r.is_empty()).map(|r| String::from_utf8_lossy(r).to_string()).collect())
+        .unwrap_or_default();
     let mut excl: Vec<String> = DEFAULT_EXCLUDE.iter().map(|s| s.to_string()).collect();
     excl.extend(exclude_extra.iter().cloned());
     let exclude = GlobSet::new(&excl);
@@ -583,6 +591,9 @@ pub fn scan(repo: &Repo, exclude_extra: &[String], min_module_files: usize, key_
             continue;
         }
         inv.files += 1;
+        if untracked.contains(&t.path) {
+            inv.untracked_files += 1;
+        }
         let Some(lang) = language_of(&t.path) else { continue };
         let abs = repo.abs(&t.path);
         let Ok(md) = std::fs::metadata(&abs) else { continue };
@@ -1002,6 +1013,14 @@ fn detect_modules(
     by_pkg_name.sort_by_key(|x| std::cmp::Reverse(x.0.len()));
     by_dir_name.sort_by_key(|x| std::cmp::Reverse(x.0.len()));
     let aliases = ts_path_aliases(repo);
+    // Cargo package directories ("" for the root), longest first: `crate::` resolves inside the nearest one
+    let mut cargo_dirs: Vec<String> = inv
+        .manifests
+        .iter()
+        .filter(|m| m.kind == "cargo")
+        .map(|m| m.path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default())
+        .collect();
+    cargo_dirs.sort_by_key(|d| std::cmp::Reverse(d.len()));
     let owners: HashMap<&str, String> = code_files.iter().filter_map(|f| owner(&roots, &f.0).map(|o| (f.0.as_str(), o))).collect();
 
     let mut modules: Vec<Module> = Vec::new();
@@ -1115,7 +1134,12 @@ fn detect_modules(
             }
         }
         for (file, spec) in &imports_all {
-            let resolved: Option<String> = if spec.starts_with('.') {
+            let resolved: Option<String> = if let Some(rest) = spec.strip_prefix("crate::") {
+                rust_crate_path(&cargo_dirs, file, rest)
+                    .and_then(|p| owner(&roots, &format!("{p}/x")).or_else(|| owner(&roots, &format!("{p}.rs"))))
+            } else if spec.starts_with('.') && language_of(file) == Some("Python") {
+                python_relative(file, spec).and_then(|p| owner(&roots, &format!("{p}/x")).or_else(|| owner(&roots, &format!("{p}.py"))))
+            } else if spec.starts_with('.') {
                 let base = file.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
                 let joined = normalize_join(base, spec);
                 owner(&roots, &format!("{joined}/x")).or_else(|| owner(&roots, &joined))
@@ -1181,6 +1205,16 @@ fn detect_modules(
             rank: 0,
         });
     }
+    // two paths that slug alike (`libs/shared-ui`, `libs/shared/ui`) get a short hash of the path
+    let mut by_id: BTreeMap<String, usize> = BTreeMap::new();
+    for m in &modules {
+        *by_id.entry(m.id.clone()).or_default() += 1;
+    }
+    for m in modules.iter_mut() {
+        if by_id.get(&m.id).copied().unwrap_or(0) > 1 {
+            m.id = format!("{}-{:06x}", m.id, util::fnv1a64(m.path.as_bytes()) & 0xff_ffff);
+        }
+    }
     // dependents
     let snapshot: Vec<(String, Vec<String>)> = modules.iter().map(|m| (m.path.clone(), m.deps.clone())).collect();
     for m in modules.iter_mut() {
@@ -1190,6 +1224,32 @@ fn detect_modules(
 }
 
 struct FileSym(Vec<String>);
+
+/// `crate::a::b` in `file`: the directory or file `a` under the `src/` of the nearest Cargo package.
+fn rust_crate_path(cargo_dirs: &[String], file: &str, rest: &str) -> Option<String> {
+    let first = rest.split("::").next().filter(|s| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_'))?;
+    let dir = cargo_dirs.iter().find(|d| d.is_empty() || file.starts_with(&format!("{d}/")))?;
+    let src = if dir.is_empty() { "src".to_string() } else { format!("{dir}/src") };
+    file.starts_with(&format!("{src}/")).then(|| format!("{src}/{first}"))
+}
+
+/// `from .x import y` / `from ..pkg import z` in `file`: one leading dot is the file's package,
+/// each further dot one package up.
+fn python_relative(file: &str, spec: &str) -> Option<String> {
+    let dots = spec.chars().take_while(|c| *c == '.').count();
+    let rest = &spec[dots..];
+    let mut parts: Vec<&str> = file.split('/').collect();
+    parts.pop(); // the file itself
+    for _ in 1..dots {
+        parts.pop()?;
+    }
+    let mut p = parts.join("/");
+    if !rest.is_empty() {
+        let tail = rest.replace('.', "/");
+        p = if p.is_empty() { tail } else { format!("{p}/{tail}") };
+    }
+    (!p.is_empty()).then_some(p)
+}
 
 fn normalize_join(base: &str, rel: &str) -> String {
     let mut parts: Vec<&str> = if base.is_empty() { Vec::new() } else { base.split('/').collect() };
@@ -1318,6 +1378,19 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&strip_jsonc(s)).unwrap();
         assert_eq!(v["a"], "http://x");
         assert_eq!(v["b"][1], 2);
+    }
+
+    #[test]
+    fn crate_and_python_relative_imports() {
+        let dirs = vec!["".to_string()];
+        assert_eq!(rust_crate_path(&dirs, "src/ops.rs", "init::scan::Inventory").as_deref(), Some("src/init"));
+        assert_eq!(rust_crate_path(&dirs, "tests/x.rs", "init"), None);
+        let dirs = vec!["crates/core".to_string(), "".to_string()];
+        assert_eq!(rust_crate_path(&dirs, "crates/core/src/lib.rs", "store::Entry").as_deref(), Some("crates/core/src/store"));
+        assert_eq!(python_relative("app/api/views.py", ".models").as_deref(), Some("app/api/models"));
+        assert_eq!(python_relative("app/api/views.py", "..core.db").as_deref(), Some("app/core/db"));
+        assert_eq!(python_relative("app/api/views.py", ".").as_deref(), Some("app/api"));
+        assert_eq!(python_relative("views.py", "..x"), None);
     }
 
     #[test]
