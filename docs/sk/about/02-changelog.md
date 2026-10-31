@@ -2,6 +2,12 @@
 
 Tu sú uvedené všetky podstatné zmeny. Projekt sa riadi [sémantickým verzovaním](https://semver.org/); do verzie 1.0 môžu minor verzie meniť konfiguráciu alebo formát záznamov, vždy s poznámkou k migrácii.
 
+## 0.10.2 (2026-11-01)
+
+**Brief, ktorý sa dá prečítať.** Keď sa riadiace záznamy nezmestili, zameraný brief vypísal stenu identifikátorov. Kým sa zmestia všetky, vypíše ich ako doteraz; potom vypíše toľko kompaktných riadkov, koľko sa zmestí, od najbližších, a nakoniec `+N more governing: ctx_why <path>`. Nič riadiace nezmizne potichu: počet hovorí, koľko ostáva a ako to zobraziť.
+
+**`ctx_brief` stojí toľko, koľko hovorí jeho rozpočet.** Štruktúrovaný výsledok je `{text, entries}` a entries sú tie, ktoré text menuje. Zoznam `governing` opakoval riadky každej cesty vedľa textu, čo na veľkom úložisku posunulo jedno volanie cez 60 KB.
+
 ## 0.10.1 (2026-10-29)
 
 **Oprava: necommitnutá úprava záznamu človekom je konflikt, nie zastaraná revízia.** `drafts.extend`, `drafts.stage` s `amends`, `drafts.retire` a `drafts.revise` najprv porovnali revíziu, takže súbor záznamu s necommitnutými úpravami v checkoute odpovedal `stale_entry` („prečítaj ho znova“) namiesto `operation_conflict` („stage-ni alebo vráť svoje úpravy“), ako hovorila 0.9.0. Teraz sa nestage-nutá alebo nesledovaná zmena súboru záznamu hlási prvá, ako `operation_conflict` so slovom „unstaged“ v správe; revízia, ktorá sa posunula commitom alebo tým, čo kontext sám stage-ol, je stále `stale_entry`. Nič iné sa nemení.

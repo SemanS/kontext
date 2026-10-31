@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The project follows [Semantic Versioning](https://semver.org/); until 1.0 minor versions may change configuration or the entry format, always with a migration note.
 
+## 0.10.2 (2026-11-01)
+
+**A brief you can read.** With more governing entries than fit, a focused brief printed a wall of ids. Where every id fits it still prints them; past that it prints as many compact lines as fit, closest first, then `+N more governing: ctx_why <path>`. Nothing governing is dropped silently: the count says how many are left and how to see them.
+
+**`ctx_brief` costs what its budget says.** Its structured result is `{text, entries}`, and entries are those the text names. The `governing` list repeated each focus path's lines beside the text, which took one call past 60 KB on a large store.
+
 ## 0.10.1 (2026-10-29)
 
 **Fix: a person's unstaged edit of an entry is a conflict, not a stale revision.** `drafts.extend`, `drafts.stage` with `amends`, `drafts.retire` and `drafts.revise` checked the revision first, so an entry file with uncommitted edits in the checkout answered `stale_entry` ("read it again") instead of `operation_conflict` ("stage or revert your edits"), which 0.9.0 said. Now an unstaged or untracked change to the entry's file is reported first, as `operation_conflict` with "unstaged" in the message; a revision that moved in a commit or in what kontext itself staged is still `stale_entry`. Nothing else changes.

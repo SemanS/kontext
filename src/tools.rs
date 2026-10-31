@@ -862,7 +862,7 @@ impl ToolOutput {
 /// `outputSchema` of the tools that return `structuredContent` (JSON Schema 2020-12, the MCP
 /// default dialect). Kept to the required fields (tools/list is in every session's context);
 /// results carry more, and the schemas allow it:
-/// - ctx_brief `{text, entries: [full id], focus, budget_tokens}`
+/// - ctx_brief `{text, entries: [full id]}`
 /// - ctx_search `{query, hits: [{uri, title, source, snippet, kind?, score, date?, status?}], notes}`
 /// - ctx_read `{uri, text, level, entry?}`; ctx_why `{target, text, entries}`
 /// - ctx_inbox `{action, text, items?: [{id, kind, title, visibility, source}]}` (items for list)
@@ -982,20 +982,8 @@ fn structure(app: &App, name: &str, args: &Value, text: String) -> ToolOutput {
             links = named.iter().map(|e| entry_link(&e.id, &e.title)).collect();
             let ids: Vec<&str> = named.iter().map(|e| e.id.as_str()).collect();
             if name == "ctx_brief" {
-                let focus = list_arg(args, "focus");
-                let budget = int_arg(args, "budget_tokens").unwrap_or(app.cfg().brief.budget_tokens);
-                // what governs each focus path, the same lines the edit hook gives
-                let governing: Vec<Value> = focus
-                    .iter()
-                    .map(|f| crate::route::focus_path(f))
-                    .filter(|f| f.contains('/') || f.contains('.') || crate::glob::is_glob(f))
-                    .filter_map(|p| {
-                        let lines = ops::governing_lines(app, p, budget);
-                        let ids: Vec<String> = named_entries(&entries, &lines).iter().map(|e| e.id.clone()).collect();
-                        (!lines.is_empty()).then(|| json!({"path": p, "text": lines, "entries": ids}))
-                    })
-                    .collect();
-                json!({"text": text, "focus": focus, "budget_tokens": budget, "entries": ids, "governing": governing})
+                // The budget is what the agent reads: what the text names, and nothing beside it.
+                json!({"text": text, "entries": ids})
             } else {
                 json!({"target": str_arg(args, "target").unwrap_or_default(), "text": text, "entries": ids})
             }

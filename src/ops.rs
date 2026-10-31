@@ -1471,8 +1471,10 @@ fn render_governing(header: &str, lines: &[GovLine], forms: &[Form]) -> String {
 
 /// The governing section within `budget` tokens: every entry at least by id on one `also
 /// governing` line, as many as fit as compact lines (in order), and as many of those as fit in
-/// full. Below even the ids, as many ids as fit and a count; it never exceeds the budget.
-fn governing_block(header: &str, lines: &[GovLine], budget: isize, compact_only: bool) -> (String, Vec<Form>) {
+/// full. Where even the ids do not fit, ids alone say nothing an agent can use: as many compact
+/// lines as fit, closest first, and the count of the rest with how to see them. It never exceeds
+/// the budget.
+fn governing_block(header: &str, lines: &[GovLine], budget: isize) -> (String, Vec<Form>) {
     let n = lines.len();
     let cost = |forms: &[Form]| util::est_tokens(&render_governing(header, lines, forms)) as isize;
     let mut forms = vec![Form::Id; n];
@@ -1480,24 +1482,18 @@ fn governing_block(header: &str, lines: &[GovLine], budget: isize, compact_only:
         return (String::new(), forms);
     }
     if cost(&forms) > budget {
-        let mut s = format!("{header}- also governing:");
-        let mut shown = 0;
-        for l in lines {
-            let piece = format!(" [{}]", l.id);
-            let rest = n - shown - 1;
-            let tail = if rest > 0 { format!(" +{rest} more\n") } else { "\n".to_string() };
-            if util::est_tokens(&format!("{s}{piece}{tail}")) as isize > budget {
+        let more = |shown: usize| format!("- +{} more governing: ctx_why <path>\n", n - shown);
+        let mut s = header.to_string();
+        for (i, l) in lines.iter().enumerate() {
+            let next = format!("{s}{}", l.compact);
+            if util::est_tokens(&format!("{next}{}", more(i + 1))) as isize > budget {
                 break;
             }
-            s.push_str(&piece);
-            shown += 1;
+            s = next;
+            forms[i] = Form::Compact;
         }
-        if shown < n {
-            let _ = writeln!(s, " +{} more", n - shown);
-        } else {
-            s.push('\n');
-        }
-        return if util::est_tokens(&s) as isize > budget { (String::new(), forms) } else { (s, forms) };
+        s.push_str(&more(forms.iter().filter(|f| **f != Form::Id).count()));
+        return if util::est_tokens(&s) as isize > budget { (String::new(), vec![Form::Id; n]) } else { (s, forms) };
     }
     for i in 0..n {
         forms[i] = Form::Compact;
@@ -1506,47 +1502,16 @@ fn governing_block(header: &str, lines: &[GovLine], budget: isize, compact_only:
             break;
         }
     }
-    if !compact_only {
-        for i in 0..n {
-            if forms[i] != Form::Compact {
-                break;
-            }
-            forms[i] = Form::Full;
-            if cost(&forms) > budget {
-                forms[i] = Form::Compact;
-            }
+    for i in 0..n {
+        if forms[i] != Form::Compact {
+            break;
+        }
+        forms[i] = Form::Full;
+        if cost(&forms) > budget {
+            forms[i] = Form::Compact;
         }
     }
     (render_governing(header, lines, &forms), forms)
-}
-
-/// The compact governing lines for one path (a file about to be edited, existing or not), within
-/// `budget_tokens`: `- [id] Title (marks) · N commits since`, then `- also governing: [id] …` for
-/// what does not fit. Empty when nothing governs it. A path may be absolute inside the repository.
-pub fn governing_lines(app: &App, path: &str, budget_tokens: usize) -> String {
-    let p = std::path::Path::new(path.trim());
-    let rel = if p.is_absolute() {
-        match crate::route::rel_to(&app.repo.root, p) {
-            Some(r) => r,
-            None => return String::new(),
-        }
-    } else {
-        path.trim().to_string()
-    };
-    // always a path here, whatever its name looks like
-    let rel = rel.trim_start_matches("./").trim_start_matches('/').trim_end_matches('/');
-    if rel.is_empty() || rel == "." {
-        return String::new();
-    }
-    let focus = Focus { paths: vec![rel.to_string()], words: Vec::new() };
-    let (entries, _) = app.entries();
-    let gov = governing_entries(app, &entries, &focus);
-    if gov.is_empty() {
-        return String::new();
-    }
-    let marks = Marks::load(app, &entries);
-    let lines = governing_line_forms(app, &entries, &gov, &marks, "");
-    governing_block("", &lines, budget_tokens as isize, true).0
 }
 
 fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, part: Part, elsewhere: &[Elsewhere]) -> String {
@@ -1737,10 +1702,10 @@ fn brief_in(app: &App, focus: &[String], budget: usize, with_adapters: bool, par
         let header = format!("\n{h2} Governs {label} ({})\n", governing.len());
         let lines = governing_line_forms(app, &entries, &governing, &marks, part.prefix);
         let room = budget_left - stub_cost.iter().sum::<isize>();
-        let (mut text, mut forms) = governing_block(&header, &lines, room, false);
-        if forms.iter().all(|f| *f == Form::Id) && budget_left > room {
+        let (mut text, mut forms) = governing_block(&header, &lines, room);
+        if (forms.iter().all(|f| *f == Form::Id) || text.contains(" more governing:")) && budget_left > room {
             // not one line beside the other kinds' count lines: the governing entries come first
-            (text, forms) = governing_block(&header, &lines, budget_left, false);
+            (text, forms) = governing_block(&header, &lines, budget_left);
         }
         if add(&mut out, &text, &mut budget_left) {
             for (l, f) in lines.iter().zip(&forms) {
@@ -3140,13 +3105,6 @@ mod tests {
             assert!(brief.contains(&format!("[{id}]")), "{id} missing:\n{brief}");
         }
         assert!(util::est_tokens(&brief) <= 200, "{}: {brief}", util::est_tokens(&brief));
-
-        // the hook's form: compact lines only
-        let lines = governing_lines(&app, &r.0.join("src/checkout/total.rs").to_string_lossy(), 400);
-        assert!(lines.starts_with("- [file-old] Rule file-old\n"), "{lines}");
-        assert!(!lines.contains("never verified"), "{lines}");
-        // a file not written yet: `docs/**` names its directory, `**` everything
-        assert_eq!(governing_lines(&app, "docs/guide.md", 400), "- [elsewhere] Rule elsewhere\n- [anything] Rule anything\n");
     }
 
     #[test]
@@ -3162,18 +3120,18 @@ mod tests {
             .collect();
         let header = "\n## Governs src/a.rs (12)\n";
         for budget in [10, 40, 60, 100, 200, 400, 1000] {
-            let (text, forms) = governing_block(header, &lines, budget, false);
+            let (text, _) = governing_block(header, &lines, budget);
             assert!(util::est_tokens(&text) as isize <= budget, "{budget}: {text}");
-            if forms.iter().any(|f| *f != Form::Id) {
-                for l in &lines {
-                    assert!(text.contains(&format!("[{}]", l.id)), "{budget}: {text}");
-                }
-            }
+            let named = text.matches("[entry-number-").count();
+            let counted = text.contains(&format!("+{} more governing: ctx_why", lines.len().saturating_sub(named)));
+            assert!(text.is_empty() || named == lines.len() || counted, "{budget}: {text}");
         }
-        let (all, forms) = governing_block(header, &lines, 10_000, false);
+        let (all, forms) = governing_block(header, &lines, 10_000);
         assert!(forms.iter().all(|f| *f == Form::Full) && !all.contains("also governing"));
-        let (ids, _) = governing_block(header, &lines, 60, false);
-        assert!(ids.contains("- also governing: [entry-number-0]") && ids.contains("more"), "{ids}");
+        // Too many even by id: lines an agent can read, closest first, then how to see the rest.
+        let (some, forms) = governing_block(header, &lines, 60);
+        assert!(some.contains("- [entry-number-0] A title") && some.contains("more governing: ctx_why"), "{some}");
+        assert!(forms[0] == Form::Compact && !some.contains("also governing"), "{some}");
     }
 
     #[test]
